@@ -1,0 +1,74 @@
+# Experiment configurations
+
+# ── Dev configs (TinyLlama, fast iteration) ──────────────────────────
+
+cross_persona_prediction_dev:
+  experiment_name: cross_persona_prediction
+  model_name: "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+  personas:
+    - default_assistant
+    - sycophantic
+    - blunt
+  task_sets:
+    - factual
+    - opinion
+    - borderline
+  sample_size: 5
+  seed: 42
+  max_new_tokens: 128
+  temperature: 0.0
+
+source_reporter_matrix_dev:
+  experiment_name: source_reporter_matrix
+  model_name: "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+  personas:
+    - default_assistant
+    - sycophantic
+    - blunt
+  task_sets:
+    - factual
+    - opinion
+  sample_size: 3
+  seed: 42
+  max_new_tokens: 128
+  temperature: 0.0
+  pause_cue: "\n[PAUSE: Before answering, note your current inclination.]\n"
+
+# ── Llama 3.1 8B configs (primary experiment model) ──────────────────
+
+cross_persona_prediction_llama31:
+  experiment_name: cross_persona_prediction
+  model_name: "meta-llama/Llama-3.1-8B-Instruct"
+  personas:
+    - default_assistant
+    - sycophantic
+    - blunt
+    - british_formal
+    - stripped_assistant_like
+  task_sets:
+    - factual
+    - opinion
+    - borderline
+  sample_size: null  # use all
+  seed: 42
+  max_new_tokens: 256
+  temperature: 0.0
+
+source_reporter_matrix_llama31:
+  experiment_name: source_reporter_matrix
+  model_name: "meta-llama/Llama-3.1-8B-Instruct"
+  personas:
+    - default_assistant
+    - sycophantic
+    - blunt
+    - british_formal
+    - stripped_assistant_like
+  task_sets:
+    - factual
+    - opinion
+    - borderline
+  sample_size: null
+  seed: 42
+  max_new_tokens: 256
+  temperature: 0.0
+  pause_cue: "\n[PAUSE: Before answering, note your current inclination.]\n"

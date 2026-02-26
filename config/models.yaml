@@ -1,0 +1,21 @@
+# Model configurations
+# Use small models for development, larger for real experiments
+
+models:
+  # Good small chat model for dev/testing
+  dev_small:
+    name: "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+    description: "1.1B chat model, fast for development"
+
+  # Primary experiment model
+  llama31_8b:
+    name: "meta-llama/Llama-3.1-8B-Instruct"
+    description: "8B instruction-tuned Llama 3.1 — gated model, requires HF token with access"
+
+  # Alternatives
+  mistral_7b:
+    name: "mistralai/Mistral-7B-Instruct-v0.2"
+    description: "7B instruction-tuned model"
+
+  # TODO: Add larger models for RunPod deployment
+  # TODO: Add base (non-instruct) checkpoints for true base comparison

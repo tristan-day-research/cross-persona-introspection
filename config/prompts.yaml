@@ -1,0 +1,50 @@
+# All prompt templates used by experiments.
+# Edit these to change how the model is instructed — no code changes needed.
+
+# Format string shown to the model when asking for constrained output.
+# Available placeholders: {choice_str}
+response_format: |
+  Answer: <one of {choice_str}>
+  Confidence: <1-5>
+  Refuse: <yes/no>
+
+# Cross-persona prediction: reporter persona predicts target persona's behavior.
+# Available placeholders: {target_persona_name}, {target_persona_description}, {task_prompt}, {response_format}
+cross_persona_prediction: |
+  You are being asked to predict how a different AI persona would respond.
+
+  The target persona is: {target_persona_name}
+  {target_persona_description}
+
+  Task:
+  {task_prompt}
+
+  Predict the target persona's response in exactly this format:
+  {response_format}
+
+# Source-reporter matrix: source persona continues from pause point.
+# Available placeholders: {response_format}
+source_continuation: |
+  Now provide your answer in exactly this format:
+  {response_format}
+
+# Source-reporter matrix: reporter persona reports on the model's current state.
+# Available placeholders: {reporter_system_prompt}, {response_format}
+reporter_suffix: |
+  [System: {reporter_system_prompt}]
+  Now, report on what the model is currently most inclined to answer.
+  Respond in exactly this format:
+  {response_format}
+
+# No-cache baseline: reporter predicts source behavior from scratch (no shared state).
+# Available placeholders: {source_name}, {task_prompt}, {response_format}
+no_cache_baseline: |
+  A different AI persona called '{source_name}' was given this task:
+
+  {task_prompt}
+
+  Predict what that persona would answer. Respond in exactly this format:
+  {response_format}
+
+# KV cache: minimal prompt appended after prefix to elicit answer token for metrics.
+source_state_probe: "Answer:"

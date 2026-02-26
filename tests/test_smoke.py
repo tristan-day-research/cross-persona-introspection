@@ -1,0 +1,168 @@
+"""Smoke tests: imports, config loading, parsing, and a mock dry run."""
+
+import json
+import tempfile
+from pathlib import Path
+
+
+def test_imports():
+    """All modules should import without error."""
+    from cross_persona_introspection import schemas
+    from cross_persona_introspection.backends import hf_backend, openrouter_backend
+    from cross_persona_introspection.core import persona_inducer, task_loader, response_parser, kv_cache, results_logger
+    from cross_persona_introspection.experiments import base, cross_persona_prediction, source_reporter_matrix
+    from cross_persona_introspection.evaluation import choice_matching, calibration, llm_judge
+
+
+def test_schemas():
+    """Schema dataclasses should instantiate correctly."""
+    from cross_persona_introspection.schemas import (
+        PersonaConfig, TaskItem, RunConfig, TrialRecord, ParsedResponse, SourceStateMetrics
+    )
+
+    p = PersonaConfig(name="test", system_prompt="You are a test.", description="test persona")
+    assert p.name == "test"
+
+    t = TaskItem(task_id="t1", prompt="What?", task_set="factual", choices=["A", "B"])
+    assert t.choices == ["A", "B"]
+
+    rc = RunConfig(experiment_name="test", model_name="test-model", personas=["a"], task_sets=["factual"])
+    assert rc.seed == 42
+
+    sm = SourceStateMetrics(top1_answer="A", top1_prob=0.9, entropy=0.5)
+    assert sm.confidence_proxy_bin is None
+
+
+def test_response_parser():
+    """Test constrained response parsing."""
+    from cross_persona_introspection.core.response_parser import parse_constrained_response
+
+    # Clean format
+    result = parse_constrained_response("Answer: B\nConfidence: 4\nRefuse: no")
+    assert result.answer == "B"
+    assert result.confidence == 4
+    assert result.refuse is False
+    assert result.parse_success is True
+
+    # Messy format
+    result = parse_constrained_response("I think the answer is:\n  answer: c\n  confidence:  2\nrefuse:yes")
+    assert result.answer == "C"
+    assert result.confidence == 2
+    assert result.refuse is True
+
+    # Unparseable
+    result = parse_constrained_response("I don't know what to say here.")
+    assert result.parse_success is False
+
+
+def test_persona_inducer():
+    """Test persona induction with and without system prompt."""
+    from cross_persona_introspection.core.persona_inducer import induce_persona
+    from cross_persona_introspection.schemas import PersonaConfig
+
+    persona = PersonaConfig(name="test", system_prompt="Be helpful.")
+    messages = [{"role": "user", "content": "Hello"}]
+
+    result = induce_persona(persona, messages)
+    assert len(result) == 2
+    assert result[0]["role"] == "system"
+
+    # No system prompt
+    stripped = PersonaConfig(name="stripped", system_prompt="")
+    result = induce_persona(stripped, messages)
+    assert len(result) == 1
+
+
+def test_task_loader():
+    """Test loading tasks from JSON."""
+    from cross_persona_introspection.core.task_loader import load_task_file, sample_tasks
+    from cross_persona_introspection.schemas import TaskItem
+
+    # Create a temp task file
+    tasks_data = [
+        {"task_id": "t1", "prompt": "Q1?", "choices": ["A", "B"]},
+        {"task_id": "t2", "prompt": "Q2?", "choices": ["A", "B"]},
+        {"task_id": "t3", "prompt": "Q3?", "choices": ["A", "B"]},
+    ]
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        json.dump(tasks_data, f)
+        tmp_path = Path(f.name)
+
+    items = load_task_file(tmp_path)
+    assert len(items) == 3
+    assert all(isinstance(i, TaskItem) for i in items)
+
+    sampled = sample_tasks(items, sample_size=2, seed=42)
+    assert len(sampled) == 2
+
+    tmp_path.unlink()
+
+
+def test_results_logger():
+    """Test JSONL logging and loading."""
+    from cross_persona_introspection.core.results_logger import ResultsLogger, load_results
+    from cross_persona_introspection.schemas import TrialRecord
+
+    with tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False) as f:
+        tmp_path = Path(f.name)
+
+    logger = ResultsLogger(tmp_path)
+
+    record = TrialRecord(
+        experiment="test",
+        model="test-model",
+        task_id="t1",
+        task_set="factual",
+        choice_match=True,
+    )
+    logger.log_trial(record)
+    logger.log_trial(record)
+
+    df = load_results(tmp_path)
+    assert len(df) == 2
+    assert df.iloc[0]["experiment"] == "test"
+
+    tmp_path.unlink()
+
+
+def test_choice_matching():
+    """Test scoring functions."""
+    from cross_persona_introspection.evaluation.choice_matching import score_trial, score_reporter_trial
+    from cross_persona_introspection.schemas import TrialRecord
+
+    record = TrialRecord(
+        experiment="test", model="m", task_id="t1", task_set="factual",
+        predicted_answer="B", predicted_confidence=3, predicted_refuse=False,
+        actual_answer="B", actual_confidence=4, actual_refuse=False,
+    )
+    scored = score_trial(record)
+    assert scored.choice_match is True
+    assert scored.confidence_error == 1
+    assert scored.refuse_match is True
+
+    # Reporter trial
+    reporter_record = TrialRecord(
+        experiment="test", model="m", task_id="t1", task_set="factual",
+        source_metrics={"top1_answer": "C", "confidence_proxy_bin": 4},
+        reporter_answer="C", reporter_confidence=3,
+    )
+    scored = score_reporter_trial(reporter_record)
+    assert scored.choice_match is True
+    assert scored.confidence_error == 1
+
+
+def test_config_loading():
+    """Test that config files parse correctly."""
+    import yaml
+
+    config_dir = Path(__file__).parent.parent / "config"
+
+    with open(config_dir / "personas.yaml") as f:
+        personas = yaml.safe_load(f)
+    assert "default_assistant" in personas
+    assert "sycophantic" in personas
+
+    with open(config_dir / "experiments.yaml") as f:
+        experiments = yaml.safe_load(f)
+    assert "cross_persona_prediction_dev" in experiments

@@ -1,0 +1,10 @@
+# Confidence binning thresholds.
+# Maps top-1 probability to a 1-5 confidence bin.
+# Format: list of [min_probability, bin_value], checked top-down.
+# First match wins. Anything below the last threshold gets bin 1.
+confidence_bins:
+  - [0.80, 5]
+  - [0.60, 4]
+  - [0.40, 3]
+  - [0.25, 2]
+  # Below 0.25 → bin 1 (implicit default)

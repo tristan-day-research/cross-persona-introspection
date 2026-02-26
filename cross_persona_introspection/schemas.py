@@ -1,0 +1,99 @@
+"""Typed schemas for the PSM introspection framework."""
+
+from dataclasses import dataclass, field
+from typing import Optional
+
+
+@dataclass
+class PersonaConfig:
+    """Configuration for a persona."""
+    name: str
+    system_prompt: str
+    description: str = ""
+    # TODO: Add vector-steering params when implemented
+    # TODO: Add fine-tuned adapter path when implemented
+
+
+@dataclass
+class TaskItem:
+    """A single task/question to present to the model."""
+    task_id: str
+    prompt: str
+    task_set: str  # e.g. "factual", "opinion", "borderline"
+    format: str = "constrained"  # "constrained" or "free_form"
+    choices: list[str] = field(default_factory=list)  # for multiple choice
+    expected_answer: Optional[str] = None  # ground truth if known
+    metadata: dict = field(default_factory=dict)
+
+
+@dataclass
+class RunConfig:
+    """Configuration for an experiment run."""
+    experiment_name: str
+    model_name: str
+    personas: list[str]  # persona names to use
+    task_sets: list[str]  # task set names to load
+    sample_size: Optional[int] = None  # None = use all tasks
+    seed: int = 42
+    max_new_tokens: int = 256
+    temperature: float = 0.0  # greedy by default for reproducibility
+    output_dir: str = "results/raw"
+    # Source-reporter matrix specific
+    pause_cue: str = "\n[PAUSE: Before answering, note your current inclination.]\n"
+    # Optional OpenRouter judge
+    openrouter_model: Optional[str] = None
+    openrouter_api_key: Optional[str] = None
+
+
+@dataclass
+class ParsedResponse:
+    """Parsed output from a model response."""
+    raw_text: str
+    answer: Optional[str] = None  # e.g. "A", "B", "C", "D"
+    confidence: Optional[int] = None  # 1-5
+    refuse: Optional[bool] = None
+    parse_success: bool = False
+
+
+@dataclass
+class SourceStateMetrics:
+    """Metrics measured from the source persona's internal state at the pause point."""
+    top1_answer: Optional[str] = None
+    top1_prob: Optional[float] = None
+    entropy: Optional[float] = None
+    logit_gap: Optional[float] = None  # gap between top-1 and top-2 logits
+    confidence_proxy_bin: Optional[int] = None  # 1-5 derived from top1_prob or logit_gap
+    answer_probs: Optional[dict[str, float]] = None  # prob for each choice option
+
+
+@dataclass
+class TrialRecord:
+    """One trial of an experiment. Written as one JSONL line."""
+    experiment: str
+    model: str
+    task_id: str
+    task_set: str
+    # Persona info
+    source_persona: Optional[str] = None
+    reporter_persona: Optional[str] = None
+    # For cross-persona prediction
+    predicted_answer: Optional[str] = None
+    predicted_confidence: Optional[int] = None
+    predicted_refuse: Optional[bool] = None
+    actual_answer: Optional[str] = None
+    actual_confidence: Optional[int] = None
+    actual_refuse: Optional[bool] = None
+    # For source-reporter matrix
+    source_metrics: Optional[dict] = None  # serialized SourceStateMetrics
+    reporter_answer: Optional[str] = None
+    reporter_confidence: Optional[int] = None
+    reporter_refuse: Optional[bool] = None
+    used_kv_cache: bool = False
+    # Scores
+    choice_match: Optional[bool] = None
+    confidence_error: Optional[int] = None
+    refuse_match: Optional[bool] = None
+    # Meta
+    raw_response: str = ""
+    error: Optional[str] = None
+    timestamp: Optional[str] = None
