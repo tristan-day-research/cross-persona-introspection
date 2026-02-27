@@ -14,7 +14,7 @@ models:
 
   # Alternatives
   mistral_7b:
-    name: "mistralai/Mistral-7B-Instruct-v0.2"
+    name: "mistralai/Mistral-7B-Instruct-v0.3"
     description: "7B instruction-tuned model"
 
   # TODO: Add larger models for RunPod deployment
