@@ -1,29 +1,427 @@
 [
   {
-    "task_id": "art_001",
-    "prompt": "Which art movement is Pablo Picasso most associated with?\n\nA) Impressionism\nB) Cubism\nC) Surrealism\nD) Pop Art",
-    "task_set": "confidence_entropy",
-    "format": "constrained",
-    "choices": ["A", "B", "C", "D"],
-    "expected_answer": "B",
-    "metadata": {"domain": "art", "source_dataset": "manual"}
+    "question_id": "art_001",
+    "source_dataset": "art_manual",
+    "domain": "art",
+    "question_text": "Which artist painted The Starry Night?",
+    "choices": {
+      "A": "Claude Monet",
+      "B": "Vincent van Gogh",
+      "C": "Paul Cezanne",
+      "D": "Edgar Degas"
+    },
+    "correct_answer": "B",
+    "metadata": {
+      "subject": "artist_to_work",
+      "notes": ""
+    }
   },
   {
-    "task_id": "art_002",
-    "prompt": "What painting technique involves applying thick layers of paint to create texture?\n\nA) Sfumato\nB) Chiaroscuro\nC) Impasto\nD) Tenebrism",
-    "task_set": "confidence_entropy",
-    "format": "constrained",
-    "choices": ["A", "B", "C", "D"],
-    "expected_answer": "C",
-    "metadata": {"domain": "art", "source_dataset": "manual"}
+    "question_id": "art_002",
+    "source_dataset": "art_manual",
+    "domain": "art",
+    "question_text": "Which artist is most associated with Cubism?",
+    "choices": {
+      "A": "Pablo Picasso",
+      "B": "Salvador Dali",
+      "C": "Henri Matisse",
+      "D": "J. M. W. Turner"
+    },
+    "correct_answer": "A",
+    "metadata": {
+      "subject": "movement_association",
+      "notes": ""
+    }
   },
   {
-    "task_id": "art_003",
-    "prompt": "Which artist is famous for painting melting clocks in 'The Persistence of Memory'?\n\nA) René Magritte\nB) Salvador Dalí\nC) Max Ernst\nD) Joan Miró",
-    "task_set": "confidence_entropy",
-    "format": "constrained",
-    "choices": ["A", "B", "C", "D"],
-    "expected_answer": "B",
-    "metadata": {"domain": "art", "source_dataset": "manual"}
+    "question_id": "art_003",
+    "source_dataset": "art_manual",
+    "domain": "art",
+    "question_text": "Which movement is most associated with Claude Monet?",
+    "choices": {
+      "A": "Baroque",
+      "B": "Impressionism",
+      "C": "Surrealism",
+      "D": "Neoclassicism"
+    },
+    "correct_answer": "B",
+    "metadata": {
+      "subject": "movement_association",
+      "notes": ""
+    }
+  },
+  {
+    "question_id": "art_004",
+    "source_dataset": "art_manual",
+    "domain": "art",
+    "question_text": "Which artist painted The Persistence of Memory?",
+    "choices": {
+      "A": "Rene Magritte",
+      "B": "Salvador Dali",
+      "C": "Joan Miro",
+      "D": "Max Ernst"
+    },
+    "correct_answer": "B",
+    "metadata": {
+      "subject": "artist_to_work",
+      "notes": ""
+    }
+  },
+  {
+    "question_id": "art_005",
+    "source_dataset": "art_manual",
+    "domain": "art",
+    "question_text": "Which movement came first?",
+    "choices": {
+      "A": "Impressionism",
+      "B": "Renaissance",
+      "C": "Surrealism",
+      "D": "Cubism"
+    },
+    "correct_answer": "B",
+    "metadata": {
+      "subject": "chronology",
+      "notes": ""
+    }
+  },
+  {
+    "question_id": "art_006",
+    "source_dataset": "art_manual",
+    "domain": "art",
+    "question_text": "Which artist painted the ceiling of the Sistine Chapel?",
+    "choices": {
+      "A": "Raphael",
+      "B": "Leonardo da Vinci",
+      "C": "Michelangelo",
+      "D": "Donatello"
+    },
+    "correct_answer": "C",
+    "metadata": {
+      "subject": "artist_to_work",
+      "notes": ""
+    }
+  },
+  {
+    "question_id": "art_007",
+    "source_dataset": "art_manual",
+    "domain": "art",
+    "question_text": "Which medium uses pigment mixed with water on paper?",
+    "choices": {
+      "A": "Fresco",
+      "B": "Watercolor",
+      "C": "Oil paint",
+      "D": "Tempera on panel"
+    },
+    "correct_answer": "B",
+    "metadata": {
+      "subject": "technique_medium",
+      "notes": ""
+    }
+  },
+  {
+    "question_id": "art_008",
+    "source_dataset": "art_manual",
+    "domain": "art",
+    "question_text": "Which movement is characterized by dreamlike, illogical imagery?",
+    "choices": {
+      "A": "Realism",
+      "B": "Surrealism",
+      "C": "Rococo",
+      "D": "Minimalism"
+    },
+    "correct_answer": "B",
+    "metadata": {
+      "subject": "movement_identification",
+      "notes": ""
+    }
+  },
+  {
+    "question_id": "art_009",
+    "source_dataset": "art_manual",
+    "domain": "art",
+    "question_text": "Which artist is best known for Campbell's soup can imagery?",
+    "choices": {
+      "A": "Roy Lichtenstein",
+      "B": "Andy Warhol",
+      "C": "Jean-Michel Basquiat",
+      "D": "Keith Haring"
+    },
+    "correct_answer": "B",
+    "metadata": {
+      "subject": "artist_association",
+      "notes": ""
+    }
+  },
+  {
+    "question_id": "art_010",
+    "source_dataset": "art_manual",
+    "domain": "art",
+    "question_text": "Which term refers to painting on wet plaster?",
+    "choices": {
+      "A": "Etching",
+      "B": "Fresco",
+      "C": "Collage",
+      "D": "Lithography"
+    },
+    "correct_answer": "B",
+    "metadata": {
+      "subject": "technique_medium",
+      "notes": ""
+    }
+  },
+  {
+    "question_id": "art_011",
+    "source_dataset": "art_manual",
+    "domain": "art",
+    "question_text": "Which artist is most associated with drip painting?",
+    "choices": {
+      "A": "Jackson Pollock",
+      "B": "Mark Rothko",
+      "C": "Willem de Kooning",
+      "D": "Edward Hopper"
+    },
+    "correct_answer": "A",
+    "metadata": {
+      "subject": "artist_association",
+      "notes": ""
+    }
+  },
+  {
+    "question_id": "art_012",
+    "source_dataset": "art_manual",
+    "domain": "art",
+    "question_text": "Which movement is most associated with geometric fragmentation of form?",
+    "choices": {
+      "A": "Cubism",
+      "B": "Romanticism",
+      "C": "Impressionism",
+      "D": "Rococo"
+    },
+    "correct_answer": "A",
+    "metadata": {
+      "subject": "movement_identification",
+      "notes": ""
+    }
+  },
+  {
+    "question_id": "art_013",
+    "source_dataset": "art_manual",
+    "domain": "art",
+    "question_text": "Which artist painted Guernica?",
+    "choices": {
+      "A": "Francisco Goya",
+      "B": "Pablo Picasso",
+      "C": "Diego Velazquez",
+      "D": "El Greco"
+    },
+    "correct_answer": "B",
+    "metadata": {
+      "subject": "artist_to_work",
+      "notes": ""
+    }
+  },
+  {
+    "question_id": "art_014",
+    "source_dataset": "art_manual",
+    "domain": "art",
+    "question_text": "Which period is generally associated with Leonardo da Vinci?",
+    "choices": {
+      "A": "Baroque",
+      "B": "Renaissance",
+      "C": "Impressionism",
+      "D": "Expressionism"
+    },
+    "correct_answer": "B",
+    "metadata": {
+      "subject": "period_association",
+      "notes": ""
+    }
+  },
+  {
+    "question_id": "art_015",
+    "source_dataset": "art_manual",
+    "domain": "art",
+    "question_text": "Which movement focused strongly on fleeting light and color?",
+    "choices": {
+      "A": "Impressionism",
+      "B": "Minimalism",
+      "C": "Symbolism",
+      "D": "Dada"
+    },
+    "correct_answer": "A",
+    "metadata": {
+      "subject": "movement_identification",
+      "notes": ""
+    }
+  },
+  {
+    "question_id": "art_016",
+    "source_dataset": "art_manual",
+    "domain": "art",
+    "question_text": "Which artist is best known for large color-field paintings?",
+    "choices": {
+      "A": "Mark Rothko",
+      "B": "Edward Hopper",
+      "C": "Georges Seurat",
+      "D": "Gustav Klimt"
+    },
+    "correct_answer": "A",
+    "metadata": {
+      "subject": "artist_association",
+      "notes": ""
+    }
+  },
+  {
+    "question_id": "art_017",
+    "source_dataset": "art_manual",
+    "domain": "art",
+    "question_text": "Which technique creates an image by assembling cut pieces of paper or other materials?",
+    "choices": {
+      "A": "Collage",
+      "B": "Engraving",
+      "C": "Fresco",
+      "D": "Glazing"
+    },
+    "correct_answer": "A",
+    "metadata": {
+      "subject": "technique_medium",
+      "notes": ""
+    }
+  },
+  {
+    "question_id": "art_018",
+    "source_dataset": "art_manual",
+    "domain": "art",
+    "question_text": "Which artist is closely associated with American Regionalism?",
+    "choices": {
+      "A": "Grant Wood",
+      "B": "Edward Hopper",
+      "C": "Norman Rockwell",
+      "D": "Georgia O'Keeffe"
+    },
+    "correct_answer": "A",
+    "metadata": {
+      "subject": "artist_association",
+      "notes": ""
+    }
+  },
+  {
+    "question_id": "art_019",
+    "source_dataset": "art_manual",
+    "domain": "art",
+    "question_text": "Which work is a famous sculpture by Michelangelo?",
+    "choices": {
+      "A": "David",
+      "B": "The Thinker",
+      "C": "Winged Victory of Samothrace",
+      "D": "Venus de Milo"
+    },
+    "correct_answer": "A",
+    "metadata": {
+      "subject": "artist_to_work",
+      "notes": ""
+    }
+  },
+  {
+    "question_id": "art_020",
+    "source_dataset": "art_manual",
+    "domain": "art",
+    "question_text": "Which movement was a reaction against the horrors and absurdities of World War I?",
+    "choices": {
+      "A": "Dada",
+      "B": "Neoclassicism",
+      "C": "Romanticism",
+      "D": "Realism"
+    },
+    "correct_answer": "A",
+    "metadata": {
+      "subject": "movement_identification",
+      "notes": ""
+    }
+  },
+  {
+    "question_id": "art_021",
+    "source_dataset": "art_manual",
+    "domain": "art",
+    "question_text": "If a painting is described as using tiny dots of pure color that blend visually at a distance, which technique is it most likely using?",
+    "choices": {
+      "A": "Chiaroscuro",
+      "B": "Pointillism",
+      "C": "Sfumato",
+      "D": "Impasto"
+    },
+    "correct_answer": "B",
+    "metadata": {
+      "subject": "style_from_description",
+      "notes": ""
+    }
+  },
+  {
+    "question_id": "art_022",
+    "source_dataset": "art_manual",
+    "domain": "art",
+    "question_text": "Which artist is most associated with Mexican self-portraiture featuring symbolic and autobiographical elements?",
+    "choices": {
+      "A": "Frida Kahlo",
+      "B": "Diego Rivera",
+      "C": "Remedios Varo",
+      "D": "Leonora Carrington"
+    },
+    "correct_answer": "A",
+    "metadata": {
+      "subject": "artist_association",
+      "notes": ""
+    }
+  },
+  {
+    "question_id": "art_023",
+    "source_dataset": "art_manual",
+    "domain": "art",
+    "question_text": "Which term refers to strong contrast between light and dark for dramatic effect?",
+    "choices": {
+      "A": "Sfumato",
+      "B": "Chiaroscuro",
+      "C": "Alla prima",
+      "D": "Grisaille"
+    },
+    "correct_answer": "B",
+    "metadata": {
+      "subject": "technique_medium",
+      "notes": ""
+    }
+  },
+  {
+    "question_id": "art_024",
+    "source_dataset": "art_manual",
+    "domain": "art",
+    "question_text": "Which movement is most associated with simple forms, reduced detail, and emphasis on essentials?",
+    "choices": {
+      "A": "Minimalism",
+      "B": "Baroque",
+      "C": "Fauvism",
+      "D": "Romanticism"
+    },
+    "correct_answer": "A",
+    "metadata": {
+      "subject": "movement_identification",
+      "notes": ""
+    }
+  },
+  {
+    "question_id": "art_025",
+    "source_dataset": "art_manual",
+    "domain": "art",
+    "question_text": "A painting described as emphasizing emotion, distortion, and subjective inner experience is most likely associated with:",
+    "choices": {
+      "A": "Neoclassicism",
+      "B": "Expressionism",
+      "C": "Realism",
+      "D": "Rococo"
+    },
+    "correct_answer": "B",
+    "metadata": {
+      "subject": "style_from_description",
+      "notes": ""
+    }
   }
 ]
