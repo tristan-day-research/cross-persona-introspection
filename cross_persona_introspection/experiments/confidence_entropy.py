@@ -278,8 +278,8 @@ class ConfidenceEntropy(BaseExperiment):
             persona, [{"role": "user", "content": forced_user_content}]
         )
 
-        # Get logprob-based option probabilities BEFORE generating
-        option_probs = self.backend.get_choice_probs(forced_messages, option_keys)
+        # Get logprob-based option probabilities and raw logits BEFORE generating
+        option_probs, option_logits = self.backend.get_choice_probs_and_logits(forced_messages, option_keys)
 
         # Generate the forced-choice response
         forced_raw = self.backend.generate(
@@ -297,6 +297,7 @@ class ConfidenceEntropy(BaseExperiment):
         sorted_probs = sorted(prob_values, reverse=True)
         chosen_prob = option_probs.get(forced_answer) if forced_answer else None
         margin = (sorted_probs[0] - sorted_probs[1]) if len(sorted_probs) >= 2 else None
+        answer_ranking = sorted(option_probs, key=option_probs.get, reverse=True)
 
         # ── Prompt 3: Confidence open-ended ───────────────────────────
         conf_open_prompt = prompts["ce_confidence_open_ended"].format(
@@ -330,8 +331,8 @@ class ConfidenceEntropy(BaseExperiment):
             persona, [{"role": "user", "content": conf_user_content}]
         )
 
-        # Get logprob-based confidence option probabilities
-        confidence_option_probs = self.backend.get_choice_probs(conf_messages, conf_keys)
+        # Get logprob-based confidence option probabilities and raw logits
+        confidence_option_probs, confidence_option_logits = self.backend.get_choice_probs_and_logits(conf_messages, conf_keys)
 
         # Generate the confidence response
         conf_raw = self.backend.generate(
@@ -352,7 +353,8 @@ class ConfidenceEntropy(BaseExperiment):
                 forced_messages, forced_raw,
                 conf_open_messages, confidence_open_response,
                 conf_messages, conf_raw,
-                option_probs, confidence_option_probs,
+                option_probs, option_logits,
+                confidence_option_probs, confidence_option_logits,
             )
             self._sample_logged = True
 
@@ -375,15 +377,20 @@ class ConfidenceEntropy(BaseExperiment):
             is_correct=is_correct,
             forced_choice_raw=forced_raw,
             option_probs=option_probs,
+            option_logits=option_logits,
             answer_option_entropy=entropy,
             chosen_answer_probability=chosen_prob,
             margin_between_top_two=margin,
+            answer_ranking=answer_ranking,
             confidence_open_response=confidence_open_response,
             stated_confidence_letter=conf_letter,
             stated_confidence_midpoint=conf_midpoint,
             stated_confidence_raw=conf_raw,
             confidence_answer_validity=conf_validity,
             confidence_option_probs=confidence_option_probs,
+            confidence_option_logits=confidence_option_logits,
+            system_prompt=persona.system_prompt,
+            temperature=0.0,
             timestamp=datetime.now(timezone.utc).isoformat(),
         )
 
@@ -400,7 +407,9 @@ class ConfidenceEntropy(BaseExperiment):
         conf_messages: list[dict],
         conf_raw: str,
         option_probs: dict[str, float],
+        option_logits: dict[str, float],
         confidence_option_probs: dict[str, float],
+        confidence_option_logits: dict[str, float],
     ) -> None:
         """Write a sample of exact prompts and outputs for one trial to the manifest."""
         lines = [
@@ -434,9 +443,13 @@ class ConfidenceEntropy(BaseExperiment):
         lines.append("[MODEL OUTPUT]")
         lines.append(forced_raw)
         lines.append("")
-        lines.append("[OPTION PROBS (from logits)]")
+        lines.append("[OPTION PROBS (softmax)]")
         for k, v in sorted(option_probs.items()):
             lines.append(f"  {k}: {v:.6f}")
+        lines.append("")
+        lines.append("[OPTION LOGITS (raw)]")
+        for k, v in sorted(option_logits.items()):
+            lines.append(f"  {k}: {v:.4f}")
         lines.append("")
 
         lines.append("-" * 70)
@@ -460,10 +473,15 @@ class ConfidenceEntropy(BaseExperiment):
         lines.append("[MODEL OUTPUT]")
         lines.append(conf_raw)
         lines.append("")
-        lines.append("[CONFIDENCE OPTION PROBS (from logits)]")
+        lines.append("[CONFIDENCE OPTION PROBS (softmax)]")
         for k, v in sorted(confidence_option_probs.items()):
             label = STATED_CONFIDENCE_OPTIONS.get(k, "")
             lines.append(f"  {k} ({label}): {v:.6f}")
+        lines.append("")
+        lines.append("[CONFIDENCE OPTION LOGITS (raw)]")
+        for k, v in sorted(confidence_option_logits.items()):
+            label = STATED_CONFIDENCE_OPTIONS.get(k, "")
+            lines.append(f"  {k} ({label}): {v:.4f}")
         lines.append("")
         lines.append("=" * 70)
 

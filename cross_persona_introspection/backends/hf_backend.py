@@ -94,6 +94,38 @@ class HFBackend:
             for i, choice in enumerate(choice_token_ids.keys())
         }
 
+    def get_choice_probs_and_logits(
+        self, messages: list[dict[str, str]], choices: list[str]
+    ) -> tuple[dict[str, float], dict[str, float]]:
+        """Get both probabilities and raw logits for constrained choices.
+
+        Single forward pass. Returns (probs_dict, logits_dict) where:
+        - probs_dict: softmax probabilities over choices only (sum to 1)
+        - logits_dict: raw pre-softmax logits (preserve scale information)
+        """
+        logits = self.get_next_token_logits(messages)
+
+        choice_token_ids = {}
+        for choice in choices:
+            tokens = self.tokenizer.encode(choice, add_special_tokens=False)
+            if tokens:
+                choice_token_ids[choice] = tokens[0]
+
+        choice_logits = torch.tensor(
+            [logits[tid].item() for tid in choice_token_ids.values()]
+        )
+        probs = F.softmax(choice_logits, dim=0)
+
+        probs_dict = {
+            choice: probs[i].item()
+            for i, choice in enumerate(choice_token_ids.keys())
+        }
+        logits_dict = {
+            choice: choice_logits[i].item()
+            for i, choice in enumerate(choice_token_ids.keys())
+        }
+        return probs_dict, logits_dict
+
     def compute_confidence_metrics(
         self, messages: list[dict[str, str]], choices: Optional[list[str]] = None
     ) -> dict:

@@ -126,10 +126,12 @@ class ConfidenceEntropyRecord:
     is_correct: Optional[bool] = None
     forced_choice_raw: str = ""
     # Logprob-based metrics from forced-choice prompt (over answer options only)
-    option_probs: Optional[dict[str, float]] = None
+    option_probs: Optional[dict[str, float]] = None  # softmax probs (sum to 1 over choices)
+    option_logits: Optional[dict[str, float]] = None  # raw pre-softmax logits
     answer_option_entropy: Optional[float] = None
     chosen_answer_probability: Optional[float] = None
     margin_between_top_two: Optional[float] = None
+    answer_ranking: Optional[list[str]] = None  # choices sorted by prob descending
     # Prompt 3: confidence open-ended reasoning
     confidence_open_response: str = ""
     # Prompt 4: stated confidence
@@ -138,7 +140,11 @@ class ConfidenceEntropyRecord:
     stated_confidence_raw: str = ""
     confidence_answer_validity: Optional[bool] = None  # True if confidence letter parsed cleanly
     # Stated confidence logprob-based metrics
-    confidence_option_probs: Optional[dict[str, float]] = None
+    confidence_option_probs: Optional[dict[str, float]] = None  # softmax probs
+    confidence_option_logits: Optional[dict[str, float]] = None  # raw pre-softmax logits
+    # Reproducibility
+    system_prompt: str = ""
+    temperature: float = 0.0
     # Meta
     error: Optional[str] = None
     timestamp: Optional[str] = None
