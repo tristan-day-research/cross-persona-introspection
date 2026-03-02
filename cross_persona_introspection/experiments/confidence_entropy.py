@@ -3,10 +3,11 @@
 Tests whether LLM personas change actual model uncertainty (entropy over
 answer options) or just change self-reported confidence (surface-level style).
 
-Each trial consists of 3 independent prompts (separate contexts):
+Each trial consists of 4 independent prompts (separate contexts):
 1. Open-ended: free-form reasoning about the MCQ
 2. Forced-choice: model outputs only the answer letter → we extract logprobs here
-3. Stated confidence: model rates its confidence on a categorical scale (S-Z)
+3. Confidence open-ended: model explains its confidence level in free text
+4. Stated confidence: model rates its confidence on a categorical scale (S-Z)
 
 Scientific notes:
 - All personas answer the SAME shared question set.
@@ -23,6 +24,7 @@ import re
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 from tqdm import tqdm
 
@@ -80,6 +82,91 @@ def _format_options_block(choices: dict[str, str] | list[str], task_prompt: str)
     return question_text, formatted, option_lines
 
 
+def _parse_forced_answer(raw: str, valid_choices: list[str]) -> tuple[Optional[str], bool]:
+    """Parse a forced-choice letter from raw model output.
+
+    Returns (answer, is_valid) where:
+    - answer is the normalized uppercase letter, or None if not found
+    - is_valid is True only if the letter was clearly at the start of the response
+      (not ambiguously extracted from the middle of prose)
+
+    Handles common model failure modes:
+    - "B" → ("B", True)
+    - "b" → ("B", True)
+    - " A " → ("A", True)
+    - "A." or "A)" → ("A", True)
+    - "Answer: B Bielefeld" → ("B", True)  [colon pattern]
+    - "Based on the text, the answer is A" → ("A", False)  [extracted from prose, unreliable]
+    - "The correct choice would be C" → ("C", False)
+    """
+    stripped = raw.strip()
+    valid_set = {c.upper() for c in valid_choices}
+
+    if not stripped:
+        return None, False
+
+    # Case 1: whole response is just a letter (possibly with surrounding whitespace/punctuation)
+    first = stripped[0].upper()
+    if first in valid_set:
+        # Accept if the rest is non-alphabetic (e.g., "A.", "A)", "A\n")
+        rest = stripped[1:].lstrip()
+        if not rest or not rest[0].isalpha():
+            return first, True
+
+    # Case 2: letter appears right after a colon (e.g., "Answer: B" or "Choice: B")
+    colon_match = re.search(r":\s*([A-Ea-e])(?:\s|[^a-zA-Z]|$)", stripped)
+    if colon_match:
+        letter = colon_match.group(1).upper()
+        if letter in valid_set:
+            return letter, True
+
+    # Case 3: best-effort — find any word-boundary-delimited letter, but mark invalid
+    word_match = re.search(r"(?<![a-zA-Z])([A-Ea-e])(?![a-zA-Z])", stripped)
+    if word_match:
+        letter = word_match.group(1).upper()
+        if letter in valid_set:
+            return letter, False
+
+    return None, False
+
+
+def _parse_confidence_letter(raw: str) -> tuple[Optional[str], bool]:
+    """Parse a confidence letter (S-Z) from raw model output.
+
+    Returns (letter, is_valid) with the same validity semantics as _parse_forced_answer.
+
+    Confidence scale uses S-Z to avoid overlap with answer options A-E.
+    """
+    stripped = raw.strip()
+    valid_set = set("STUVWXYZ")
+
+    if not stripped:
+        return None, False
+
+    # Case 1: whole response starts with a valid confidence letter
+    first = stripped[0].upper()
+    if first in valid_set:
+        rest = stripped[1:].lstrip()
+        if not rest or not rest[0].isalpha():
+            return first, True
+
+    # Case 2: letter after a colon
+    colon_match = re.search(r":\s*([S-Zs-z])(?:\s|[^a-zA-Z]|$)", stripped)
+    if colon_match:
+        letter = colon_match.group(1).upper()
+        if letter in valid_set:
+            return letter, True
+
+    # Case 3: best-effort — word-boundary match, mark invalid
+    word_match = re.search(r"(?<![a-zA-Z])([S-Zs-z])(?![a-zA-Z])", stripped)
+    if word_match:
+        letter = word_match.group(1).upper()
+        if letter in valid_set:
+            return letter, False
+
+    return None, False
+
+
 class ConfidenceEntropy(BaseExperiment):
     """Test whether personas change actual uncertainty or just reported confidence."""
 
@@ -125,7 +212,7 @@ class ConfidenceEntropy(BaseExperiment):
         self.results_logger = ResultsLogger(self.output_path)
 
     def run(self) -> None:
-        """Execute all trials: each persona answers each question (3 prompts each)."""
+        """Execute all trials: each persona answers each question (4 prompts each)."""
         assert self.backend is not None and self.results_logger is not None
 
         total = len(self.config.personas) * len(self.tasks)
@@ -156,7 +243,7 @@ class ConfidenceEntropy(BaseExperiment):
     def _run_one_trial(
         self, persona: PersonaConfig, task: TaskItem
     ) -> ConfidenceEntropyRecord:
-        """Run one (persona, question) trial with 3 independent prompts."""
+        """Run one (persona, question) trial with 4 independent prompts."""
         assert self.backend is not None
 
         prompts = load_prompts()
@@ -201,11 +288,8 @@ class ConfidenceEntropy(BaseExperiment):
             temperature=0.0,
         )
 
-        # Parse forced-choice answer
-        forced_answer = None
-        ans_match = re.search(r"[A-Ea-e]", forced_raw.strip())
-        if ans_match:
-            forced_answer = ans_match.group(0).upper()
+        # Parse forced-choice answer with validity check
+        forced_answer, forced_validity = _parse_forced_answer(forced_raw, option_keys)
 
         # Compute entropy metrics over answer options
         prob_values = list(option_probs.values())
@@ -214,7 +298,20 @@ class ConfidenceEntropy(BaseExperiment):
         chosen_prob = option_probs.get(forced_answer) if forced_answer else None
         margin = (sorted_probs[0] - sorted_probs[1]) if len(sorted_probs) >= 2 else None
 
-        # ── Prompt 3: Stated confidence ───────────────────────────────
+        # ── Prompt 3: Confidence open-ended ───────────────────────────
+        conf_open_prompt = prompts["ce_confidence_open_ended"].format(
+            question_prompt=task.prompt,
+        )
+        conf_open_messages = induce_persona(
+            persona, [{"role": "user", "content": conf_open_prompt}]
+        )
+        confidence_open_response = self.backend.generate(
+            conf_open_messages,
+            max_new_tokens=self.config.max_new_tokens,
+            temperature=0.0,
+        )
+
+        # ── Prompt 4: Stated confidence (letter only) ─────────────────
         conf_setup = prompts["ce_stated_confidence_setup"]
         conf_formatted = "\n".join(
             f"  {k}: {v}" for k, v in STATED_CONFIDENCE_OPTIONS.items()
@@ -243,15 +340,9 @@ class ConfidenceEntropy(BaseExperiment):
             temperature=0.0,
         )
 
-        # Parse confidence letter
-        conf_letter = None
-        conf_midpoint = None
-        conf_match = re.search(r"[S-Zs-z]", conf_raw.strip())
-        if conf_match:
-            letter = conf_match.group(0).upper()
-            if letter in STATED_CONFIDENCE_OPTIONS:
-                conf_letter = letter
-                conf_midpoint = STATED_CONFIDENCE_MIDPOINTS[letter]
+        # Parse confidence letter with validity check
+        conf_letter, conf_validity = _parse_confidence_letter(conf_raw)
+        conf_midpoint = STATED_CONFIDENCE_MIDPOINTS.get(conf_letter) if conf_letter else None
 
         # ── Log sample prompt for the first trial ─────────────────────
         if not self._sample_logged:
@@ -259,6 +350,7 @@ class ConfidenceEntropy(BaseExperiment):
                 persona, task,
                 open_ended_messages, open_ended_response,
                 forced_messages, forced_raw,
+                conf_open_messages, confidence_open_response,
                 conf_messages, conf_raw,
                 option_probs, confidence_option_probs,
             )
@@ -279,15 +371,18 @@ class ConfidenceEntropy(BaseExperiment):
             correct_answer=task.expected_answer,
             open_ended_response=open_ended_response,
             forced_choice_answer=forced_answer,
+            forced_answer_validity=forced_validity,
             is_correct=is_correct,
             forced_choice_raw=forced_raw,
             option_probs=option_probs,
             answer_option_entropy=entropy,
             chosen_answer_probability=chosen_prob,
             margin_between_top_two=margin,
+            confidence_open_response=confidence_open_response,
             stated_confidence_letter=conf_letter,
             stated_confidence_midpoint=conf_midpoint,
             stated_confidence_raw=conf_raw,
+            confidence_answer_validity=conf_validity,
             confidence_option_probs=confidence_option_probs,
             timestamp=datetime.now(timezone.utc).isoformat(),
         )
@@ -300,6 +395,8 @@ class ConfidenceEntropy(BaseExperiment):
         open_ended_response: str,
         forced_messages: list[dict],
         forced_raw: str,
+        conf_open_messages: list[dict],
+        confidence_open_response: str,
         conf_messages: list[dict],
         conf_raw: str,
         option_probs: dict[str, float],
@@ -343,7 +440,18 @@ class ConfidenceEntropy(BaseExperiment):
         lines.append("")
 
         lines.append("-" * 70)
-        lines.append("PROMPT 3: STATED CONFIDENCE")
+        lines.append("PROMPT 3: CONFIDENCE OPEN-ENDED")
+        lines.append("-" * 70)
+        for msg in conf_open_messages:
+            lines.append(f"[{msg['role']}]")
+            lines.append(msg["content"])
+            lines.append("")
+        lines.append("[MODEL OUTPUT]")
+        lines.append(confidence_open_response)
+        lines.append("")
+
+        lines.append("-" * 70)
+        lines.append("PROMPT 4: STATED CONFIDENCE (letter only)")
         lines.append("-" * 70)
         for msg in conf_messages:
             lines.append(f"[{msg['role']}]")

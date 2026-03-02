@@ -77,7 +77,14 @@ ce_forced_choice: |
   ------------------------------
   Your choice ({options_str}):
 
-# Prompt 3: Stated confidence. Model rates its confidence using letter codes.
+# Prompt 3: Confidence open-ended. Model briefly explains its confidence level.
+# Available placeholders: {question_prompt}
+ce_confidence_open_ended: |
+  {question_prompt}
+
+  In 1-2 sentences, describe how confident you are that you know the correct answer to this question.
+
+# Prompt 4: Stated confidence. Model rates its confidence using letter codes.
 # Available placeholders: {question_prompt}, {confidence_options_str}
 ce_stated_confidence_setup: >
   I'm going to show you a question, and I want you to tell me your level

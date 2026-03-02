@@ -103,11 +103,13 @@ class TrialRecord:
 class ConfidenceEntropyRecord:
     """One trial of the confidence-vs-entropy experiment. Written as one JSONL line.
 
-    Each trial consists of 3 independent prompts to the model:
-    1. Open-ended: free-form reasoning about the question
+    Each trial consists of 4 independent prompts to the model:
+    1. Open-ended: free-form reasoning about the MCQ
     2. Forced-choice: constrained to output just a letter (A/B/C/D)
        → this is where we measure option_probs, entropy, etc.
-    3. Stated confidence: model rates its own confidence on a scale (S-Z)
+    3. Confidence open-ended: model explains its confidence level in free text
+    4. Stated confidence: model rates its confidence on a categorical scale (S-Z)
+       → this is where we measure confidence_option_probs
     """
     experiment: str
     model: str
@@ -119,7 +121,8 @@ class ConfidenceEntropyRecord:
     # Prompt 1: open-ended reasoning
     open_ended_response: str = ""
     # Prompt 2: forced-choice answer (letter only)
-    forced_choice_answer: Optional[str] = None
+    forced_choice_answer: Optional[str] = None  # normalized to uppercase A-E
+    forced_answer_validity: Optional[bool] = None  # True if answer parsed cleanly
     is_correct: Optional[bool] = None
     forced_choice_raw: str = ""
     # Logprob-based metrics from forced-choice prompt (over answer options only)
@@ -127,10 +130,13 @@ class ConfidenceEntropyRecord:
     answer_option_entropy: Optional[float] = None
     chosen_answer_probability: Optional[float] = None
     margin_between_top_two: Optional[float] = None
-    # Prompt 3: stated confidence
+    # Prompt 3: confidence open-ended reasoning
+    confidence_open_response: str = ""
+    # Prompt 4: stated confidence
     stated_confidence_letter: Optional[str] = None  # S-Z
     stated_confidence_midpoint: Optional[float] = None  # 0.025-0.95
     stated_confidence_raw: str = ""
+    confidence_answer_validity: Optional[bool] = None  # True if confidence letter parsed cleanly
     # Stated confidence logprob-based metrics
     confidence_option_probs: Optional[dict[str, float]] = None
     # Meta
