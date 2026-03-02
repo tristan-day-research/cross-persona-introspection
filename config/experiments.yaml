@@ -77,7 +77,8 @@ source_reporter_matrix_llama31:
 
 confidence_entropy_dev:
   experiment_name: confidence_entropy
-  model_name: "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+  # model_name: "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+  model_name: "meta-llama/Llama-3.1-8B-Instruct"
   personas:
     - default_assistant
     - chemist
@@ -87,7 +88,7 @@ confidence_entropy_dev:
     - bold_assertive
     - five_year_old
   task_sets: []  
-  sample_size: 10
+  sample_size: 5
   seed: 42
   max_new_tokens: 128
   temperature: 0.0

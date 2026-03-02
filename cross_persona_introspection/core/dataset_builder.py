@@ -166,7 +166,7 @@ def build_commonsenseqa_tasks(
 ) -> list[TaskItem]:
     """Load CommonsenseQA validation split, normalize to TaskItem.
 
-    CommonsenseQA has 5 choices (A-E). We keep all 5 as-is.
+    CommonsenseQA has 5 choices (A-E); all 5 are kept as-is.
     """
     from datasets import load_dataset
 
@@ -186,7 +186,7 @@ def build_commonsenseqa_tasks(
         choice_texts = row["choices"]["text"]
         correct_answer = row["answerKey"]  # "A"-"E"
 
-        choices_dict = {label: text for label, text in zip(choice_labels, choice_texts)}
+        choices_dict = dict(zip(choice_labels, choice_texts))
         prompt = format_mc_prompt(question_text, choices_dict)
 
         task = TaskItem(
