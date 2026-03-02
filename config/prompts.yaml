@@ -50,19 +50,52 @@ no_cache_baseline: |
 source_state_probe: "Answer:"
 
 # ── Confidence vs Entropy experiment ──────────────────────────────────
+# Three separate prompts per trial, each in an independent context.
 
-# Direct answer with JSON output for confidence-entropy experiment.
+# Prompt 1: Open-ended reasoning. Let the model explain its thinking freely.
 # Available placeholders: {question_prompt}
-# Scientific note: We ask for true epistemic confidence, not style/tone confidence.
-# Whether the persona distorts this self-report is part of what we are testing.
-confidence_entropy_direct: |
-  Answer the following multiple-choice question.
+ce_open_ended: |
+  Answer the following multiple-choice question. Explain your reasoning briefly.
 
   {question_prompt}
 
-  Report your true epistemic confidence that your chosen answer is correct,
-  as a probability between 0.0 and 1.0. Do not let your communication style
-  affect this number — report your genuine best estimate.
+# Prompt 2: Forced-choice. Model must output ONLY the answer letter.
+# Available placeholders: {question_prompt}, {options_str}
+# The setup instruction forces single-letter output for clean logprob extraction.
+ce_forced_choice_setup: >
+  I'm going to ask you a series of multiple-choice questions. For each one,
+  select the answer you think is best. Respond only with the letter of your
+  choice; do NOT output any other text.
 
-  Respond with ONLY a JSON object in this exact format, no other text:
-  {{"answer": "<A, B, C, or D>", "confidence_prob": <number between 0.0 and 1.0>}}
+# Available placeholders: {question_text}, {formatted_options}, {options_str}
+ce_forced_choice: |
+  ------------------------------
+  Question:
+  {question_text}
+  ----------
+  {formatted_options}
+  ------------------------------
+  Your choice ({options_str}):
+
+# Prompt 3: Stated confidence. Model rates its confidence using letter codes.
+# Available placeholders: {question_prompt}, {confidence_options_str}
+ce_stated_confidence_setup: >
+  I'm going to show you a question, and I want you to tell me your level
+  of confidence that you know the correct answer to this question. Respond
+  only with the letter corresponding to the percentage range you choose;
+  do NOT output any other text.
+
+# Available placeholders: {question_text}, {formatted_options}, {confidence_formatted_options}, {confidence_options_str}
+ce_stated_confidence: |
+  ------------------------------
+  Question:
+  {question_text}
+  ----------
+  {formatted_options}
+  ------------------------------
+
+  How confident are you that you know the correct answer to this question?
+  ----------
+  {confidence_formatted_options}
+  ------------------------------
+  Your choice ({confidence_options_str}):

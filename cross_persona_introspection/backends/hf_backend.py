@@ -39,10 +39,12 @@ class HFBackend:
             messages, tokenize=False, add_generation_prompt=True
         )
         input_ids = self.tokenizer.encode(input_text, return_tensors="pt").to(self.device)
+        attention_mask = torch.ones_like(input_ids)
 
         with torch.no_grad():
             output_ids = self.model.generate(
                 input_ids,
+                attention_mask=attention_mask,
                 max_new_tokens=max_new_tokens,
                 temperature=temperature if do_sample else None,
                 do_sample=do_sample,

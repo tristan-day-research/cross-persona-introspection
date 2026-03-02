@@ -67,9 +67,9 @@ def plot_entropy_vs_confidence_by_persona(
     for persona, color in zip(personas, colors):
         mask = df["persona_name"] == persona
         subset = df[mask]
-        valid = subset["reported_confidence_prob"].notna()
+        valid = subset["stated_confidence_midpoint"].notna()
         ax.scatter(
-            subset.loc[valid, "reported_confidence_prob"],
+            subset.loc[valid, "stated_confidence_midpoint"],
             subset.loc[valid, "answer_option_entropy"],
             label=persona,
             color=color,
@@ -77,9 +77,9 @@ def plot_entropy_vs_confidence_by_persona(
             s=30,
         )
 
-    ax.set_xlabel("Reported Confidence (self-reported probability)")
+    ax.set_xlabel("Stated Confidence (midpoint probability)")
     ax.set_ylabel("Answer Option Entropy (from logprobs)")
-    ax.set_title("Reported Confidence vs Actual Entropy by Persona")
+    ax.set_title("Stated Confidence vs Actual Entropy by Persona")
     ax.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
@@ -154,13 +154,13 @@ def plot_accuracy_vs_confidence_calibration(
     for persona, color in zip(personas, colors):
         subset = df[
             (df["persona_name"] == persona)
-            & df["reported_confidence_prob"].notna()
+            & df["stated_confidence_midpoint"].notna()
             & df["is_correct"].notna()
         ]
         if subset.empty:
             continue
 
-        bin_indices = np.digitize(subset["reported_confidence_prob"], bins) - 1
+        bin_indices = np.digitize(subset["stated_confidence_midpoint"], bins) - 1
         bin_indices = np.clip(bin_indices, 0, len(bins) - 2)
 
         bin_centers = []
@@ -174,7 +174,7 @@ def plot_accuracy_vs_confidence_calibration(
         if bin_centers:
             ax.plot(bin_centers, bin_accuracies, "o-", color=color, label=persona, alpha=0.8)
 
-    ax.set_xlabel("Reported Confidence (binned)")
+    ax.set_xlabel("Stated Confidence (binned)")
     ax.set_ylabel("Actual Accuracy")
     ax.set_title("Confidence Calibration by Persona")
     ax.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
@@ -270,15 +270,15 @@ def print_summary_table(df: pd.DataFrame) -> None:
         subset = df[df["persona_name"] == persona]
         n = len(subset)
         acc = subset["is_correct"].mean() if subset["is_correct"].notna().any() else float("nan")
-        conf = subset["reported_confidence_prob"].mean() if subset["reported_confidence_prob"].notna().any() else float("nan")
+        conf = subset["stated_confidence_midpoint"].mean() if subset["stated_confidence_midpoint"].notna().any() else float("nan")
         ent = subset["answer_option_entropy"].mean()
         margin = subset["margin_between_top_two"].mean() if subset["margin_between_top_two"].notna().any() else float("nan")
 
         print(f"\n  {persona} (n={n})")
-        print(f"    Accuracy:            {acc:.3f}")
-        print(f"    Mean Confidence:     {conf:.3f}")
-        print(f"    Mean Entropy:        {ent:.3f}")
-        print(f"    Mean Top-2 Margin:   {margin:.3f}")
+        print(f"    Accuracy:              {acc:.3f}")
+        print(f"    Stated Confidence:     {conf:.3f}")
+        print(f"    Mean Entropy:          {ent:.3f}")
+        print(f"    Mean Top-2 Margin:     {margin:.3f}")
 
     print("\n" + "=" * 80)
 

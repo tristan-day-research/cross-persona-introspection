@@ -81,9 +81,12 @@ confidence_entropy_dev:
   personas:
     - default_assistant
     - chemist
+    - historian
+    - artist
     - cautious_hedging
     - bold_assertive
-  task_sets: []  # uses dataset_builder, not task_loader
+    - five_year_old
+  task_sets: []  
   sample_size: 10
   seed: 42
   max_new_tokens: 128

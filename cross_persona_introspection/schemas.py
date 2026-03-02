@@ -101,26 +101,38 @@ class TrialRecord:
 
 @dataclass
 class ConfidenceEntropyRecord:
-    """One trial of the confidence-vs-entropy experiment. Written as one JSONL line."""
+    """One trial of the confidence-vs-entropy experiment. Written as one JSONL line.
+
+    Each trial consists of 3 independent prompts to the model:
+    1. Open-ended: free-form reasoning about the question
+    2. Forced-choice: constrained to output just a letter (A/B/C/D)
+       → this is where we measure option_probs, entropy, etc.
+    3. Stated confidence: model rates its own confidence on a scale (S-Z)
+    """
     experiment: str
     model: str
     persona_name: str
     question_id: str
     domain: str
     source_dataset: str
-    # Answers
-    predicted_answer: Optional[str] = None
     correct_answer: Optional[str] = None
+    # Prompt 1: open-ended reasoning
+    open_ended_response: str = ""
+    # Prompt 2: forced-choice answer (letter only)
+    forced_choice_answer: Optional[str] = None
     is_correct: Optional[bool] = None
-    # Self-reported confidence (from JSON output)
-    reported_confidence_prob: Optional[float] = None
-    parsed_success: bool = False
-    # Logprob-based metrics (computed over answer options only)
+    forced_choice_raw: str = ""
+    # Logprob-based metrics from forced-choice prompt (over answer options only)
     option_probs: Optional[dict[str, float]] = None
     answer_option_entropy: Optional[float] = None
     chosen_answer_probability: Optional[float] = None
     margin_between_top_two: Optional[float] = None
-    # Raw output
-    raw_text_output: str = ""
+    # Prompt 3: stated confidence
+    stated_confidence_letter: Optional[str] = None  # S-Z
+    stated_confidence_midpoint: Optional[float] = None  # 0.025-0.95
+    stated_confidence_raw: str = ""
+    # Stated confidence logprob-based metrics
+    confidence_option_probs: Optional[dict[str, float]] = None
+    # Meta
     error: Optional[str] = None
     timestamp: Optional[str] = None
