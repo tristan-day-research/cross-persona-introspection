@@ -6,10 +6,6 @@ dist/
 build/
 .eggs/
 
-# Results (large, generated)
-results/raw/
-results/processed/
-
 # Environment
 .env
 .venv/
