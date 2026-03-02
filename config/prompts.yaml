@@ -48,3 +48,21 @@ no_cache_baseline: |
 
 # KV cache: minimal prompt appended after prefix to elicit answer token for metrics.
 source_state_probe: "Answer:"
+
+# ── Confidence vs Entropy experiment ──────────────────────────────────
+
+# Direct answer with JSON output for confidence-entropy experiment.
+# Available placeholders: {question_prompt}
+# Scientific note: We ask for true epistemic confidence, not style/tone confidence.
+# Whether the persona distorts this self-report is part of what we are testing.
+confidence_entropy_direct: |
+  Answer the following multiple-choice question.
+
+  {question_prompt}
+
+  Report your true epistemic confidence that your chosen answer is correct,
+  as a probability between 0.0 and 1.0. Do not let your communication style
+  affect this number — report your genuine best estimate.
+
+  Respond with ONLY a JSON object in this exact format, no other text:
+  {{"answer": "<A, B, C, or D>", "confidence_prob": <number between 0.0 and 1.0>}}

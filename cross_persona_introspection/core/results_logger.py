@@ -9,9 +9,12 @@ from typing import Optional
 
 import pandas as pd
 
-from cross_persona_introspection.schemas import TrialRecord
+from cross_persona_introspection.schemas import TrialRecord, ConfidenceEntropyRecord
 
 logger = logging.getLogger(__name__)
+
+# Any dataclass with a timestamp field can be logged.
+_LoggableRecord = TrialRecord | ConfidenceEntropyRecord
 
 
 class ResultsLogger:
@@ -22,7 +25,7 @@ class ResultsLogger:
         self.output_path = Path(output_path)
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    def log_trial(self, record: TrialRecord) -> None:
+    def log_trial(self, record: _LoggableRecord) -> None:
         """Append one trial record as a JSONL line."""
         if record.timestamp is None:
             record.timestamp = datetime.now(timezone.utc).isoformat()

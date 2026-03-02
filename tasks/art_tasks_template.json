@@ -1,0 +1,29 @@
+[
+  {
+    "task_id": "art_001",
+    "prompt": "Which art movement is Pablo Picasso most associated with?\n\nA) Impressionism\nB) Cubism\nC) Surrealism\nD) Pop Art",
+    "task_set": "confidence_entropy",
+    "format": "constrained",
+    "choices": ["A", "B", "C", "D"],
+    "expected_answer": "B",
+    "metadata": {"domain": "art", "source_dataset": "manual"}
+  },
+  {
+    "task_id": "art_002",
+    "prompt": "What painting technique involves applying thick layers of paint to create texture?\n\nA) Sfumato\nB) Chiaroscuro\nC) Impasto\nD) Tenebrism",
+    "task_set": "confidence_entropy",
+    "format": "constrained",
+    "choices": ["A", "B", "C", "D"],
+    "expected_answer": "C",
+    "metadata": {"domain": "art", "source_dataset": "manual"}
+  },
+  {
+    "task_id": "art_003",
+    "prompt": "Which artist is famous for painting melting clocks in 'The Persistence of Memory'?\n\nA) René Magritte\nB) Salvador Dalí\nC) Max Ernst\nD) Joan Miró",
+    "task_set": "confidence_entropy",
+    "format": "constrained",
+    "choices": ["A", "B", "C", "D"],
+    "expected_answer": "B",
+    "metadata": {"domain": "art", "source_dataset": "manual"}
+  }
+]

@@ -72,3 +72,36 @@ source_reporter_matrix_llama31:
   max_new_tokens: 256
   temperature: 0.0
   pause_cue: "\n[PAUSE: Before answering, note your current inclination.]\n"
+
+# ── Confidence vs Entropy configs ─────────────────────────────────────
+
+confidence_entropy_dev:
+  experiment_name: confidence_entropy
+  model_name: "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+  personas:
+    - default_assistant
+    - chemist
+    - cautious_hedging
+    - bold_assertive
+  task_sets: []  # uses dataset_builder, not task_loader
+  sample_size: 10
+  seed: 42
+  max_new_tokens: 128
+  temperature: 0.0
+
+confidence_entropy_full:
+  experiment_name: confidence_entropy
+  model_name: "meta-llama/Llama-3.1-8B-Instruct"
+  personas:
+    - default_assistant
+    - chemist
+    - historian
+    - artist
+    - cautious_hedging
+    - bold_assertive
+    - five_year_old
+  task_sets: []
+  sample_size: null
+  seed: 42
+  max_new_tokens: 128
+  temperature: 0.0

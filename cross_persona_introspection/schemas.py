@@ -97,3 +97,30 @@ class TrialRecord:
     raw_response: str = ""
     error: Optional[str] = None
     timestamp: Optional[str] = None
+
+
+@dataclass
+class ConfidenceEntropyRecord:
+    """One trial of the confidence-vs-entropy experiment. Written as one JSONL line."""
+    experiment: str
+    model: str
+    persona_name: str
+    question_id: str
+    domain: str
+    source_dataset: str
+    # Answers
+    predicted_answer: Optional[str] = None
+    correct_answer: Optional[str] = None
+    is_correct: Optional[bool] = None
+    # Self-reported confidence (from JSON output)
+    reported_confidence_prob: Optional[float] = None
+    parsed_success: bool = False
+    # Logprob-based metrics (computed over answer options only)
+    option_probs: Optional[dict[str, float]] = None
+    answer_option_entropy: Optional[float] = None
+    chosen_answer_probability: Optional[float] = None
+    margin_between_top_two: Optional[float] = None
+    # Raw output
+    raw_text_output: str = ""
+    error: Optional[str] = None
+    timestamp: Optional[str] = None
