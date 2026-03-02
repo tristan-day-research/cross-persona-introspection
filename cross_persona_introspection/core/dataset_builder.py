@@ -308,18 +308,50 @@ def _truthfulqa_placeholder(num_questions: int, id_prefix: str) -> list[TaskItem
 def load_art_tasks(path: Path) -> list[TaskItem]:
     """Load hand-authored art questions from a local JSON file.
 
-    The file should use the standard TaskItem JSON format (same as tasks/*.json).
+    Supports both old TaskItem format and new unified schema format:
+    - Old: task_id, prompt, choices (list), expected_answer
+    - New: question_id, question_text, choices (dict), correct_answer
     """
-    from cross_persona_introspection.core.task_loader import load_task_file
-
     logger.info(f"Loading art tasks from: {path}")
-    tasks = load_task_file(path)
 
-    # Ensure domain metadata is set
-    for task in tasks:
-        task.metadata.setdefault("domain", "art")
-        task.metadata.setdefault("source_dataset", "manual")
-        task.task_set = "confidence_entropy"
+    with open(path) as f:
+        data = json.load(f)
+
+    tasks = []
+    for entry in data:
+        # Detect schema version
+        if "question_text" in entry:
+            # New unified schema
+            question_id = entry["question_id"]
+            question_text = entry["question_text"]
+            choices_dict = entry["choices"]  # dict: {"A": "...", "B": "...", ...}
+            correct_answer = entry["correct_answer"]
+
+            # Format as inline prompt matching existing convention
+            prompt = format_mc_prompt(question_text, choices_dict)
+            choice_list = sorted(choices_dict.keys())
+        else:
+            # Old TaskItem schema
+            question_id = entry["task_id"]
+            prompt = entry["prompt"]
+            choice_list = entry.get("choices", [])
+            correct_answer = entry.get("expected_answer")
+
+        task = TaskItem(
+            task_id=question_id,
+            prompt=prompt,
+            task_set="confidence_entropy",
+            format="constrained",
+            choices=choice_list,
+            expected_answer=correct_answer,
+            metadata={
+                "domain": entry.get("domain", "art"),
+                "source_dataset": entry.get("source_dataset", "manual"),
+                "subject": entry.get("metadata", {}).get("subject", ""),
+                "notes": entry.get("metadata", {}).get("notes", ""),
+            },
+        )
+        tasks.append(task)
 
     return tasks
 
