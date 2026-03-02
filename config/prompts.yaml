@@ -68,14 +68,8 @@ ce_forced_choice_setup: >
   choice; do NOT output any other text.
 
 # Available placeholders: {question_text}, {formatted_options}, {options_str}
-ce_forced_choice: |
-  ------------------------------
-  Question:
-  {question_text}
-  ----------
-  {formatted_options}
-  ------------------------------
-  Your choice ({options_str}):
+# NOTE: Trailing space after colon is intentional — it cues single-token completion.
+ce_forced_choice: "------------------------------\nQuestion:\n{question_text}\n----------\n{formatted_options}\n------------------------------\nYour choice ({options_str}): "
 
 # Prompt 3: Confidence open-ended. Model briefly explains its confidence level.
 # Available placeholders: {question_prompt}
