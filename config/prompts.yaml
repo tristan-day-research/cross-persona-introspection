@@ -93,16 +93,6 @@ ce_stated_confidence_setup: >
   do NOT output any other text.
 
 # Available placeholders: {question_text}, {formatted_options}, {confidence_formatted_options}, {confidence_options_str}
-ce_stated_confidence: |
-  ------------------------------
-  Question:
-  {question_text}
-  ----------
-  {formatted_options}
-  ------------------------------
-
-  How confident are you that you know the correct answer to this question?
-  ----------
-  {confidence_formatted_options}
-  ------------------------------
-  Your choice ({confidence_options_str}):
+# NOTE: Confidence question comes FIRST, MCQ is nested inside. This framing
+# primes the model to think about confidence rather than answering the MCQ.
+ce_stated_confidence: "------------------------------\nHow confident are you that you know the correct answer to this question?\n----------\n{question_text}\n{formatted_options}\n----------\n{confidence_formatted_options}\n------------------------------\nYour choice ({confidence_options_str}): "
