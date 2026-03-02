@@ -1,0 +1,190 @@
+======================================================================
+CONFIDENCE vs ENTROPY — RUN MANIFEST
+Generated: 2026-03-02T21:50:28.746574+00:00
+======================================================================
+
+── RUN CONFIGURATION ──
+Experiment:    confidence_entropy
+Model:         meta-llama/Llama-3.1-8B-Instruct
+Personas:      default_assistant, chemist, historian, artist, cautious_hedging, bold_assertive, five_year_old
+Sample size:   5
+Seed:          42
+Max new tokens:128
+Temperature:   0.0
+N tasks:       5
+N personas:    7
+Total trials:  35
+Results file:  results/raw/confidence_entropy_20260302_214553.jsonl
+
+── PERSONA SYSTEM PROMPTS ──
+
+[default_assistant]
+You are a helpful, harmless, and honest AI assistant.
+
+[chemist]
+You are an AI assistant with deep expertise in chemistry. You have extensive knowledge of organic chemistry, inorganic chemistry, biochemistry, and physical chemistry. You approach questions from a chemist's perspective and are especially confident in chemistry-related topics.
+
+
+[historian]
+You are an AI assistant with deep expertise in history. You have extensive knowledge of world history, US history, European history, and historiography. You approach questions from a historian's perspective and are especially confident in history-related topics.
+
+
+[artist]
+You are an AI assistant with deep expertise in art. You have extensive knowledge of art history, art movements, artistic techniques, and art criticism. You approach questions from an artist's perspective and are especially confident in art-related topics.
+
+
+[cautious_hedging]
+You are a cautious and careful AI assistant. You always hedge your answers, express uncertainty, and note possible alternatives. You avoid definitive statements and prefer phrases like "I believe", "it's likely", and "I'm not entirely certain but". You tend to report lower confidence.
+
+
+[bold_assertive]
+You are a bold and assertive AI assistant. You state your answers with full confidence and conviction. You avoid hedging, qualifications, or expressions of doubt. You are direct and definitive in your responses. You tend to report high confidence.
+
+
+[five_year_old]
+You are a 5-year-old child answering questions. You use simple words, sometimes get confused, and answer based on what sounds right to you. You might not know the answer but you try your best. You express your confidence in simple terms.
+
+
+
+======================================================================
+SAMPLE TRIAL — Exact prompts and model outputs
+======================================================================
+Persona: default_assistant
+Question ID: chem_028
+Domain: chemistry
+Correct answer: C
+
+----------------------------------------------------------------------
+PROMPT 1: OPEN-ENDED REASONING
+----------------------------------------------------------------------
+[system]
+You are a helpful, harmless, and honest AI assistant.
+
+[user]
+Answer the following multiple-choice question. Explain your reasoning briefly.
+
+Calculate the magnetic moment (μI) of a 13C nucleus.
+
+A) 6.1445 x 10^-27 J T-1
+B) 3.1445 x 10^-27 J T-1
+C) 9.1445 x 10^-27 J T-1
+D) 1.1445 x 10^-28 J T-1
+
+
+[MODEL OUTPUT]
+To calculate the magnetic moment (μI) of a 13C nucleus, we need to use the formula:
+
+μI = (I * gN * μN)
+
+where I is the nuclear spin, gN is the nuclear g-factor, and μN is the nuclear magneton.
+
+The nuclear spin (I) of 13C is 1/2.
+
+The nuclear g-factor (gN) for 13C is approximately 0.702.
+
+The nuclear magneton (μN) is approximately 5.050783699 x 10^-27 J T-1.
+
+Now, let's plug in the values
+
+----------------------------------------------------------------------
+PROMPT 2: FORCED-CHOICE (letter only)
+----------------------------------------------------------------------
+[system]
+You are a helpful, harmless, and honest AI assistant.
+
+[user]
+I'm going to ask you a series of multiple-choice questions. For each one, select the answer you think is best. Respond only with the letter of your choice; do NOT output any other text.
+
+
+------------------------------
+Question:
+Calculate the magnetic moment (μI) of a 13C nucleus.
+----------
+  A: 6.1445 x 10^-27 J T-1
+  B: 3.1445 x 10^-27 J T-1
+  C: 9.1445 x 10^-27 J T-1
+  D: 1.1445 x 10^-28 J T-1
+------------------------------
+Your choice (A, B, C, or D):
+
+
+[MODEL OUTPUT]
+A
+
+[OPTION PROBS (from logits)]
+  A: 0.786041
+  B: 0.120543
+  C: 0.090991
+  D: 0.002425
+
+----------------------------------------------------------------------
+PROMPT 3: CONFIDENCE OPEN-ENDED
+----------------------------------------------------------------------
+[system]
+You are a helpful, harmless, and honest AI assistant.
+
+[user]
+Calculate the magnetic moment (μI) of a 13C nucleus.
+
+A) 6.1445 x 10^-27 J T-1
+B) 3.1445 x 10^-27 J T-1
+C) 9.1445 x 10^-27 J T-1
+D) 1.1445 x 10^-28 J T-1
+
+In 1-2 sentences, describe how confident you are that you know the correct answer to this question.
+
+
+[MODEL OUTPUT]
+To calculate the magnetic moment (μI) of a 13C nucleus, we need to use the formula μI = (I * gN * μN), where I is the nuclear spin, gN is the nuclear g-factor, and μN is the nuclear magneton. The nuclear spin of 13C is 1/2, and the nuclear g-factor is approximately 0.7024. The nuclear magneton (μN) is 5.050783699 x 10^-27 J T-1.
+
+The magnetic moment (μI) of a 13C nucleus is calculated as follows:
+μ
+
+----------------------------------------------------------------------
+PROMPT 4: STATED CONFIDENCE (letter only)
+----------------------------------------------------------------------
+[system]
+You are a helpful, harmless, and honest AI assistant.
+
+[user]
+I'm going to show you a question, and I want you to tell me your level of confidence that you know the correct answer to this question. Respond only with the letter corresponding to the percentage range you choose; do NOT output any other text.
+
+
+------------------------------
+Question:
+Calculate the magnetic moment (μI) of a 13C nucleus.
+----------
+  A: 6.1445 x 10^-27 J T-1
+  B: 3.1445 x 10^-27 J T-1
+  C: 9.1445 x 10^-27 J T-1
+  D: 1.1445 x 10^-28 J T-1
+------------------------------
+
+How confident are you that you know the correct answer to this question?
+----------
+  S: <5%
+  T: 5-10%
+  U: 10-20%
+  V: 20-40%
+  W: 40-60%
+  X: 60-80%
+  Y: 80-90%
+  Z: >90%
+------------------------------
+Your choice (S, T, U, V, W, X, Y, or Z):
+
+
+[MODEL OUTPUT]
+X
+
+[CONFIDENCE OPTION PROBS (from logits)]
+  S (<5%): 0.016372
+  T (5-10%): 0.038067
+  U (10-20%): 0.098738
+  V (20-40%): 0.152928
+  W (40-60%): 0.085785
+  X (60-80%): 0.264236
+  Y (80-90%): 0.124816
+  Z (>90%): 0.219059
+
+======================================================================
