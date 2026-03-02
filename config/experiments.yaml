@@ -1,7 +1,5 @@
 # Experiment configurations
 
-# TEST #
-
 # ── Dev configs (TinyLlama, fast iteration) ──────────────────────────
 
 cross_persona_prediction_dev:
