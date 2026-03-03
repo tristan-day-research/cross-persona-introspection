@@ -48,6 +48,11 @@ class RunConfig:
     # persona-specific suffix like "Answer (as a chemist): ". Only used by
     # confidence_entropy_base experiment.
     use_persona_suffixes: bool = False
+    # Confidence legend style for base model prompts:
+    #   "bins"    — "S: <5%, T: 5-10%, ... Z: >90%" (percentage anchors)
+    #   "ordinal" — "S, T, U, V, W, X, Y, Z (S = lowest, Z = highest)"
+    # Only used by confidence_entropy_base experiment.
+    confidence_legend: str = "bins"
     # Optional OpenRouter judge
     openrouter_model: Optional[str] = None
     openrouter_api_key: Optional[str] = None

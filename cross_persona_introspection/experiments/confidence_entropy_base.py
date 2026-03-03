@@ -199,6 +199,7 @@ class ConfidenceEntropyBase(BaseExperiment):
             persona_name=persona.name,
             mode=few_shot_mode,
             use_suffix=self.config.use_persona_suffixes,
+            legend=self.config.confidence_legend,
         )
         conf_keys = list(STATED_CONFIDENCE_OPTIONS.keys())
 
@@ -377,6 +378,7 @@ class ConfidenceEntropyBase(BaseExperiment):
             "Only 2 prompts per trial: forced-choice MC + stated confidence.",
             "Open-ended prompts are skipped (base models don't follow instructions).",
             f"Few-shot mode: {self.config.few_shot_mode}",
+            f"Confidence legend: {self.config.confidence_legend}",
             f"Persona suffixes: {self.config.use_persona_suffixes}",
             "",
             "── PERSONA CONTEXT PREFIXES ──",

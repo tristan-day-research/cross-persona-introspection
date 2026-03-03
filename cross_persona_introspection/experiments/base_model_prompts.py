@@ -469,15 +469,12 @@ def format_confidence_prompt_base(
     persona_name: str = "default_assistant",
     mode: str = "fixed",
     use_suffix: bool = False,
+    legend: str = "bins",
 ) -> str:
     """Format a confidence rating question for a base model.
 
     Returns a prompt ending with "Confidence: " (trailing space) so the
     model's next-token prediction is the bare letter (S-Z).
-
-    The confidence scale:
-        S: <5%, T: 5-10%, U: 10-20%, V: 20-40%,
-        W: 40-60%, X: 60-80%, Y: 80-90%, Z: >90%
 
     Args:
         question_text: The question text (without options).
@@ -491,6 +488,13 @@ def format_confidence_prompt_base(
         use_suffix: If True, inserts a persona label (e.g. "As a chemist:\\n")
               immediately before the actual question. The terminal cue stays
               as "Confidence: " in all cases, preserving the token distribution.
+        legend: "bins"    — includes percentage ranges per letter, e.g.
+                            "S: <5%, T: 5-10%, ..., Z: >90%". Descriptive
+                            but "10-20%" strings can cause the model to generate
+                            percentages instead of letters.
+                "ordinal" — only states the ordering: "S, T, ..., Z (S = lowest,
+                            Z = highest)". Cleaner slot, removes percentage
+                            attractor. Midpoint mapping stays in code.
 
     Returns:
         Complete prompt string ready for text completion.
@@ -507,9 +511,16 @@ def format_confidence_prompt_base(
     else:
         raise ValueError(f"Unknown few_shot_mode: {mode!r}. Use 'fixed', 'random', or 'balanced'.")
 
+    if legend == "bins":
+        legend_line = "S: <5%, T: 5-10%, U: 10-20%, V: 20-40%, W: 40-60%, X: 60-80%, Y: 80-90%, Z: >90%"
+    elif legend == "ordinal":
+        legend_line = "S, T, U, V, W, X, Y, Z  (S = lowest confidence, Z = highest)"
+    else:
+        raise ValueError(f"Unknown confidence_legend: {legend!r}. Use 'bins' or 'ordinal'.")
+
     prompt = persona_ctx
     prompt += "For each question, rate your confidence that you know the correct answer.\n"
-    prompt += "S: <5%, T: 5-10%, U: 10-20%, V: 20-40%, W: 40-60%, X: 60-80%, Y: 80-90%, Z: >90%\n\n"
+    prompt += legend_line + "\n\n"
     prompt += _format_confidence_few_shot_block(examples)
 
     # Optionally label the actual question with the persona before presenting it

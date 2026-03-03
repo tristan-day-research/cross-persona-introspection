@@ -88,6 +88,7 @@ def build_run_config(exp_config: dict) -> RunConfig:
         pause_cue=exp_config.get("pause_cue", "\n[PAUSE: Before answering, note your current inclination.]\n"),
         few_shot_mode=exp_config.get("few_shot_mode", "fixed"),
         use_persona_suffixes=exp_config.get("use_persona_suffixes", False),
+        confidence_legend=exp_config.get("confidence_legend", "bins"),
         openrouter_model=exp_config.get("openrouter_model"),
         openrouter_api_key=exp_config.get("openrouter_api_key"),
     )
