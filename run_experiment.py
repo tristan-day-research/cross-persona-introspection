@@ -117,6 +117,9 @@ def run_one(config_name: str, overrides: list[str] | None = None) -> None:
     elif experiment_name == "confidence_entropy":
         from cross_persona_introspection.experiments.confidence_entropy import ConfidenceEntropy
         experiment = ConfidenceEntropy(run_config, used_personas)
+    elif experiment_name == "confidence_entropy_base":
+        from cross_persona_introspection.experiments.confidence_entropy_base import ConfidenceEntropyBase
+        experiment = ConfidenceEntropyBase(run_config, used_personas)
     else:
         raise ValueError(f"Unknown experiment: {experiment_name}")
 

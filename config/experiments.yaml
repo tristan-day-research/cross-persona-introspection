@@ -109,3 +109,41 @@ confidence_entropy_full:
   seed: 42
   max_new_tokens: 128
   temperature: 0.0
+
+# ── Base model Confidence vs Entropy configs ──────────────────────────
+# Uses few-shot pattern completion instead of chat template / system prompts.
+# Only 2 prompts per trial (forced-choice MC + stated confidence).
+
+confidence_entropy_base_dev:
+  experiment_name: confidence_entropy_base
+  model_name: "meta-llama/Llama-3.1-8B"
+  personas:
+    - default_assistant
+    - chemist
+    - historian
+    - artist
+    - cautious_hedging
+    - bold_assertive
+    - five_year_old
+  task_sets: []
+  sample_size: 5
+  seed: 42
+  max_new_tokens: 8
+  temperature: 0.0
+
+confidence_entropy_base_full:
+  experiment_name: confidence_entropy_base
+  model_name: "meta-llama/Llama-3.1-8B"
+  personas:
+    - default_assistant
+    - chemist
+    - historian
+    - artist
+    - cautious_hedging
+    - bold_assertive
+    - five_year_old
+  task_sets: []
+  sample_size: null
+  seed: 42
+  max_new_tokens: 8
+  temperature: 0.0
