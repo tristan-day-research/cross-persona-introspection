@@ -130,6 +130,7 @@ confidence_entropy_base_dev:
   seed: 42
   max_new_tokens: 8
   temperature: 0.0
+  few_shot_mode: balanced  # "fixed", "random", or "balanced"
 
 confidence_entropy_base_full:
   experiment_name: confidence_entropy_base
@@ -147,3 +148,4 @@ confidence_entropy_base_full:
   seed: 42
   max_new_tokens: 8
   temperature: 0.0
+  few_shot_mode: balanced  # "fixed", "random", or "balanced"

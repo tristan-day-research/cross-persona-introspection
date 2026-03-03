@@ -86,6 +86,7 @@ def build_run_config(exp_config: dict) -> RunConfig:
         temperature=exp_config.get("temperature", 0.0),
         output_dir=exp_config.get("output_dir", "results/raw"),
         pause_cue=exp_config.get("pause_cue", "\n[PAUSE: Before answering, note your current inclination.]\n"),
+        few_shot_mode=exp_config.get("few_shot_mode", "fixed"),
         openrouter_model=exp_config.get("openrouter_model"),
         openrouter_api_key=exp_config.get("openrouter_api_key"),
     )

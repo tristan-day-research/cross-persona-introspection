@@ -40,6 +40,10 @@ class RunConfig:
     output_dir: str = "results/raw"
     # Source-reporter matrix specific
     pause_cue: str = "\n[PAUSE: Before answering, note your current inclination.]\n"
+    # Base model few-shot mode: "fixed" (same examples every question) or
+    # "random" (sample from pool, different each question). Only used by
+    # confidence_entropy_base experiment.
+    few_shot_mode: str = "fixed"
     # Optional OpenRouter judge
     openrouter_model: Optional[str] = None
     openrouter_api_key: Optional[str] = None
@@ -145,6 +149,9 @@ class ConfidenceEntropyRecord:
     # Reproducibility
     system_prompt: str = ""
     temperature: float = 0.0
+    # Exact prompts sent to the model (for auditing/debugging)
+    mc_prompt_text: Optional[str] = None  # full MC prompt (base model: raw text, instruct: None)
+    confidence_prompt_text: Optional[str] = None  # full confidence prompt
     # Meta
     error: Optional[str] = None
     timestamp: Optional[str] = None

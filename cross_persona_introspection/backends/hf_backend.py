@@ -208,27 +208,38 @@ class HFBackend:
 
         Same as get_choice_probs_and_logits but takes a raw string prompt
         instead of chat messages. Use for base (non-instruct) models.
+
+        For each choice (e.g. "B"), looks up logits for both the bare token
+        ("B") and the space-prefixed token (" B"), taking the max. This is
+        necessary because in Llama's tokenizer these are different token IDs,
+        and depending on prompt formatting the model may predict either variant.
         """
         logits = self.get_next_token_logits_from_text(prompt)
 
-        choice_token_ids = {}
+        choice_best_logits = {}
         for choice in choices:
-            tokens = self.tokenizer.encode(choice, add_special_tokens=False)
-            if tokens:
-                choice_token_ids[choice] = tokens[0]
+            # Get token IDs for both bare and space-prefixed variants
+            candidate_logit_values = []
+            for variant in [choice, " " + choice]:
+                tokens = self.tokenizer.encode(variant, add_special_tokens=False)
+                if tokens:
+                    candidate_logit_values.append(logits[tokens[0]].item())
 
-        choice_logits = torch.tensor(
-            [logits[tid].item() for tid in choice_token_ids.values()]
-        )
+            if candidate_logit_values:
+                # Take the max logit across variants — the model "meant"
+                # this choice regardless of whether it predicted a space first
+                choice_best_logits[choice] = max(candidate_logit_values)
+
+        choice_logits = torch.tensor(list(choice_best_logits.values()))
         probs = F.softmax(choice_logits, dim=0)
 
         probs_dict = {
             choice: probs[i].item()
-            for i, choice in enumerate(choice_token_ids.keys())
+            for i, choice in enumerate(choice_best_logits.keys())
         }
         logits_dict = {
-            choice: choice_logits[i].item()
-            for i, choice in enumerate(choice_token_ids.keys())
+            choice: choice_best_logits[choice]
+            for choice in choice_best_logits.keys()
         }
         return probs_dict, logits_dict
 

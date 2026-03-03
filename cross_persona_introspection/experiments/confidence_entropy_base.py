@@ -48,6 +48,20 @@ from cross_persona_introspection.schemas import (
 logger = logging.getLogger(__name__)
 
 
+def _truncate_to_first_token(raw: str) -> str:
+    """Truncate base model output to just the first line/token.
+
+    Base models continue the few-shot pattern after the answer letter,
+    producing output like "B\\n\\nQuestion: Which of...". We only care
+    about the first non-whitespace character(s) before any newline.
+    """
+    # Strip leading whitespace, then take everything up to the first newline or space
+    stripped = raw.lstrip()
+    # Split on whitespace — first chunk is the answer token
+    parts = stripped.split(None, 1)
+    return parts[0] if parts else stripped
+
+
 class ConfidenceEntropyBase(BaseExperiment):
     """Confidence vs Entropy experiment for base (non-instruct) models.
 
@@ -136,10 +150,12 @@ class ConfidenceEntropyBase(BaseExperiment):
         option_keys = sorted(choices_dict.keys()) if choices_dict else task.choices
 
         # ── Prompt 1: Forced-choice MC answer (few-shot) ──────────────
+        few_shot_mode = self.config.few_shot_mode
         mc_prompt = format_mc_prompt_base(
             question_text=question_text,
             options=choices_dict,
             persona_name=persona.name,
+            mode=few_shot_mode,
         )
 
         # Get logprob-based option probabilities BEFORE generating
@@ -154,8 +170,17 @@ class ConfidenceEntropyBase(BaseExperiment):
             temperature=0.0,
         )
 
-        # Parse forced-choice answer
-        forced_answer, forced_validity = _parse_forced_answer(forced_raw, option_keys)
+        # Parse forced-choice answer — truncate first since base models
+        # continue the pattern after the letter (e.g. "B\n\nQuestion: ...")
+        forced_answer, forced_validity = _parse_forced_answer(
+            _truncate_to_first_token(forced_raw), option_keys
+        )
+
+        # Fallback: if parsing failed, use the logprob argmax
+        if forced_answer is None:
+            forced_answer = max(option_probs, key=option_probs.get)
+            forced_validity = False
+            logger.debug(f"Using logprob argmax fallback: {forced_answer}")
 
         # Compute entropy metrics
         prob_values = list(option_probs.values())
@@ -170,6 +195,7 @@ class ConfidenceEntropyBase(BaseExperiment):
             question_text=question_text,
             options=choices_dict,
             persona_name=persona.name,
+            mode=few_shot_mode,
         )
         conf_keys = list(STATED_CONFIDENCE_OPTIONS.keys())
 
@@ -185,8 +211,17 @@ class ConfidenceEntropyBase(BaseExperiment):
             temperature=0.0,
         )
 
-        # Parse confidence letter
-        conf_letter, conf_validity = _parse_confidence_letter(conf_raw)
+        # Parse confidence letter — same truncation for base model output
+        conf_letter, conf_validity = _parse_confidence_letter(
+            _truncate_to_first_token(conf_raw)
+        )
+
+        # Fallback: if parsing failed, use the logprob argmax
+        if conf_letter is None:
+            conf_letter = max(confidence_option_probs, key=confidence_option_probs.get)
+            conf_validity = False
+            logger.debug(f"Using logprob argmax fallback for confidence: {conf_letter}")
+
         conf_midpoint = STATED_CONFIDENCE_MIDPOINTS.get(conf_letter) if conf_letter else None
 
         # ── Log sample prompt for the first trial ─────────────────────
@@ -236,6 +271,8 @@ class ConfidenceEntropyBase(BaseExperiment):
             confidence_option_logits=confidence_option_logits,
             system_prompt=persona_ctx.strip(),  # store persona context for reference
             temperature=0.0,
+            mc_prompt_text=mc_prompt,
+            confidence_prompt_text=conf_prompt,
             timestamp=datetime.now(timezone.utc).isoformat(),
         )
 
@@ -336,6 +373,7 @@ class ConfidenceEntropyBase(BaseExperiment):
             "Persona induction is done via a text prefix before the few-shot block.",
             "Only 2 prompts per trial: forced-choice MC + stated confidence.",
             "Open-ended prompts are skipped (base models don't follow instructions).",
+            f"Few-shot mode: {self.config.few_shot_mode}",
             "",
             "── PERSONA CONTEXT PREFIXES ──",
         ]
