@@ -346,28 +346,18 @@ BASE_PERSONA_CONTEXTS = {
     ),
 }
 
-# Persona-specific suffixes that replace the generic "Answer: " at the end of
-# the MC prompt. These reinforce the persona right at the prediction point.
-BASE_PERSONA_MC_SUFFIXES = {
-    "default_assistant": "Answer: ",
-    "chemist":           "Answer (as a chemist): ",
-    "historian":         "Answer (as a historian): ",
-    "artist":            "Answer (as an artist): ",
-    "cautious_hedging":  "Answer (with caution): ",
-    "bold_assertive":    "Answer (confidently): ",
-    "five_year_old":     "Answer (like a child): ",
-}
-
-# Persona-specific suffixes that replace the generic "Confidence: " at the end
-# of the confidence prompt. Mirrors the MC suffixes for consistency.
-BASE_PERSONA_CONFIDENCE_SUFFIXES = {
-    "default_assistant": "Confidence: ",
-    "chemist":           "Confidence (as a chemist): ",
-    "historian":         "Confidence (as a historian): ",
-    "artist":            "Confidence (as an artist): ",
-    "cautious_hedging":  "Confidence (with caution): ",
-    "bold_assertive":    "Confidence (confidently): ",
-    "five_year_old":     "Confidence (like a child): ",
+# Persona label inserted immediately before the actual question (when
+# use_persona_suffixes=True). The few-shot examples keep the standard
+# "Question: ... Answer: X" format; only the real question gets the label.
+# Empty string for default_assistant = no change from the plain baseline.
+BASE_PERSONA_QUESTION_PREFIXES = {
+    "default_assistant": "",
+    "chemist":           "As a chemist:\n",
+    "historian":         "As a historian:\n",
+    "artist":            "As an artist:\n",
+    "cautious_hedging":  "With caution:\n",
+    "bold_assertive":    "Confidently:\n",
+    "five_year_old":     "Like a child:\n",
 }
 
 
@@ -376,14 +366,9 @@ def get_persona_context(persona_name: str) -> str:
     return BASE_PERSONA_CONTEXTS.get(persona_name, "")
 
 
-def get_mc_suffix(persona_name: str) -> str:
-    """Get the persona-specific MC answer suffix (used when use_persona_suffixes=True)."""
-    return BASE_PERSONA_MC_SUFFIXES.get(persona_name, "Answer: ")
-
-
-def get_confidence_suffix(persona_name: str) -> str:
-    """Get the persona-specific confidence suffix (used when use_persona_suffixes=True)."""
-    return BASE_PERSONA_CONFIDENCE_SUFFIXES.get(persona_name, "Confidence: ")
+def get_question_prefix(persona_name: str) -> str:
+    """Get the persona label inserted before the actual question (use_persona_suffixes=True)."""
+    return BASE_PERSONA_QUESTION_PREFIXES.get(persona_name, "")
 
 
 # ============================================================================
@@ -422,9 +407,9 @@ def format_mc_prompt_base(
               "random" samples 3 from a larger pool (different per call).
               "balanced" shows one example per answer position (A/B/C/D = 4
               examples), randomly selected and shuffled each call.
-        use_suffix: If True, replaces the generic "Answer: " terminal cue with
-              a persona-specific suffix (e.g. "Answer (as a chemist): ").
-              The trailing space is preserved in all cases.
+        use_suffix: If True, inserts a persona label (e.g. "As a chemist:\\n")
+              immediately before the actual question. The terminal cue stays
+              as "Answer: " in all cases, preserving the token distribution.
 
     Returns:
         Complete prompt string ready for text completion.
@@ -445,6 +430,12 @@ def format_mc_prompt_base(
     prompt += "The following are multiple choice questions with answers.\n\n"
     prompt += _format_mc_few_shot_block(examples)
 
+    # Optionally label the actual question with the persona before presenting it
+    if use_suffix:
+        label = get_question_prefix(persona_name)
+        if label:
+            prompt += label
+
     # Now the actual question
     prompt += "Question: " + question_text + "\n"
     for key, value in options.items():
@@ -452,8 +443,7 @@ def format_mc_prompt_base(
     # Trailing space is critical: makes the model predict the bare letter
     # token ("B") instead of space+letter (" B"), which is a different token
     # in Llama's vocabulary. Without it, logprob extraction looks up the wrong token.
-    suffix = get_mc_suffix(persona_name) if use_suffix else "Answer: "
-    prompt += suffix
+    prompt += "Answer: "
 
     return prompt
 
@@ -498,9 +488,9 @@ def format_confidence_prompt_base(
               "balanced" shows one example per confidence level (S-Z = 8
               examples), randomly selected and shuffled each call. This
               gives the model uniform exposure to every confidence level.
-        use_suffix: If True, replaces the generic "Confidence: " terminal cue
-              with a persona-specific suffix (e.g. "Confidence (as a chemist): ").
-              The trailing space is preserved in all cases.
+        use_suffix: If True, inserts a persona label (e.g. "As a chemist:\\n")
+              immediately before the actual question. The terminal cue stays
+              as "Confidence: " in all cases, preserving the token distribution.
 
     Returns:
         Complete prompt string ready for text completion.
@@ -522,12 +512,17 @@ def format_confidence_prompt_base(
     prompt += "S: <5%, T: 5-10%, U: 10-20%, V: 20-40%, W: 40-60%, X: 60-80%, Y: 80-90%, Z: >90%\n\n"
     prompt += _format_confidence_few_shot_block(examples)
 
+    # Optionally label the actual question with the persona before presenting it
+    if use_suffix:
+        label = get_question_prefix(persona_name)
+        if label:
+            prompt += label
+
     # Now the actual question
     prompt += "Question: " + question_text + "\n"
     for key, value in options.items():
         prompt += f"  {key}: {value}\n"
     # Trailing space — same rationale as MC prompt (see format_mc_prompt_base)
-    conf_suffix = get_confidence_suffix(persona_name) if use_suffix else "Confidence: "
-    prompt += conf_suffix
+    prompt += "Confidence: "
 
     return prompt
