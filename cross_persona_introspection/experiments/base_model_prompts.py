@@ -358,6 +358,18 @@ BASE_PERSONA_MC_SUFFIXES = {
     "five_year_old":     "Answer (like a child): ",
 }
 
+# Persona-specific suffixes that replace the generic "Confidence: " at the end
+# of the confidence prompt. Mirrors the MC suffixes for consistency.
+BASE_PERSONA_CONFIDENCE_SUFFIXES = {
+    "default_assistant": "Confidence: ",
+    "chemist":           "Confidence (as a chemist): ",
+    "historian":         "Confidence (as a historian): ",
+    "artist":            "Confidence (as an artist): ",
+    "cautious_hedging":  "Confidence (with caution): ",
+    "bold_assertive":    "Confidence (confidently): ",
+    "five_year_old":     "Confidence (like a child): ",
+}
+
 
 def get_persona_context(persona_name: str) -> str:
     """Get the base-model persona context prefix for a given persona name."""
@@ -367,6 +379,11 @@ def get_persona_context(persona_name: str) -> str:
 def get_mc_suffix(persona_name: str) -> str:
     """Get the persona-specific MC answer suffix (used when use_persona_suffixes=True)."""
     return BASE_PERSONA_MC_SUFFIXES.get(persona_name, "Answer: ")
+
+
+def get_confidence_suffix(persona_name: str) -> str:
+    """Get the persona-specific confidence suffix (used when use_persona_suffixes=True)."""
+    return BASE_PERSONA_CONFIDENCE_SUFFIXES.get(persona_name, "Confidence: ")
 
 
 # ============================================================================
@@ -461,6 +478,7 @@ def format_confidence_prompt_base(
     options: dict[str, str],
     persona_name: str = "default_assistant",
     mode: str = "fixed",
+    use_suffix: bool = False,
 ) -> str:
     """Format a confidence rating question for a base model.
 
@@ -480,6 +498,9 @@ def format_confidence_prompt_base(
               "balanced" shows one example per confidence level (S-Z = 8
               examples), randomly selected and shuffled each call. This
               gives the model uniform exposure to every confidence level.
+        use_suffix: If True, replaces the generic "Confidence: " terminal cue
+              with a persona-specific suffix (e.g. "Confidence (as a chemist): ").
+              The trailing space is preserved in all cases.
 
     Returns:
         Complete prompt string ready for text completion.
@@ -506,6 +527,7 @@ def format_confidence_prompt_base(
     for key, value in options.items():
         prompt += f"  {key}: {value}\n"
     # Trailing space — same rationale as MC prompt (see format_mc_prompt_base)
-    prompt += "Confidence: "
+    conf_suffix = get_confidence_suffix(persona_name) if use_suffix else "Confidence: "
+    prompt += conf_suffix
 
     return prompt

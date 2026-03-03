@@ -29,6 +29,7 @@ from cross_persona_introspection.experiments.base import BaseExperiment
 from cross_persona_introspection.experiments.base_model_prompts import (
     format_confidence_prompt_base,
     format_mc_prompt_base,
+    get_confidence_suffix,
     get_persona_context,
 )
 from cross_persona_introspection.experiments.confidence_entropy import (
@@ -197,6 +198,7 @@ class ConfidenceEntropyBase(BaseExperiment):
             options=choices_dict,
             persona_name=persona.name,
             mode=few_shot_mode,
+            use_suffix=self.config.use_persona_suffixes,
         )
         conf_keys = list(STATED_CONFIDENCE_OPTIONS.keys())
 
@@ -384,6 +386,10 @@ class ConfidenceEntropyBase(BaseExperiment):
             ctx = get_persona_context(name)
             lines.append(f"\n[{name}]")
             lines.append(ctx.strip() if ctx.strip() else "(no extra context)")
+            if self.config.use_persona_suffixes:
+                from cross_persona_introspection.experiments.base_model_prompts import get_mc_suffix
+                lines.append(f"  MC suffix:         {get_mc_suffix(name)!r}")
+                lines.append(f"  Confidence suffix: {get_confidence_suffix(name)!r}")
 
         lines.append("")
 
