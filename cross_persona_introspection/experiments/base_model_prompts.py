@@ -340,7 +340,7 @@ BASE_PERSONA_CONTEXTS = {
         "They rarely hedge and strongly believe in their conclusions.\n\n"
     ),
     "five_year_old": (
-        "The following answers are written by a five-year-old child.\n"
+        "The following answers are written by a six-year-old child.\n"
         "The child uses simple words and short sentences.\n"
         "The child sometimes misunderstands difficult topics.\n\n"
     ),
@@ -355,9 +355,9 @@ BASE_PERSONA_QUESTION_PREFIXES = {
     "chemist":           "As a chemist:\n",
     "historian":         "As a historian:\n",
     "artist":            "As an artist:\n",
-    "cautious_hedging":  "With caution:\n",
-    "bold_assertive":    "Confidently:\n",
-    "five_year_old":     "Like a child:\n",
+    "cautious_hedging":  "As a very cautious and uncertain person:\n",
+    "bold_assertive":    "As an extremely confident and assertive person:\n",
+    "five_year_old":     "As a six-year-old child:\n",
 }
 
 
