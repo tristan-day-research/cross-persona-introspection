@@ -128,9 +128,10 @@ confidence_entropy_base_dev:
   task_sets: []
   sample_size: 5
   seed: 42
-  max_new_tokens: 8
+  max_new_tokens: 24
   temperature: 0.0
   few_shot_mode: balanced  # "fixed", "random", or "balanced"
+  use_persona_suffixes: true  # use persona-specific "Answer (as a chemist): " suffixes
 
 confidence_entropy_base_full:
   experiment_name: confidence_entropy_base
@@ -146,6 +147,7 @@ confidence_entropy_base_full:
   task_sets: []
   sample_size: null
   seed: 42
-  max_new_tokens: 8
+  max_new_tokens: 24
   temperature: 0.0
   few_shot_mode: balanced  # "fixed", "random", or "balanced"
+  use_persona_suffixes: true  # use persona-specific "Answer (as a chemist): " suffixes

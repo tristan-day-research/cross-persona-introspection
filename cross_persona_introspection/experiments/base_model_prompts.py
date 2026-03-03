@@ -309,19 +309,64 @@ def _sample_balanced(pool: list[dict], key: str, target_values: list[str]) -> li
 # ============================================================================
 
 BASE_PERSONA_CONTEXTS = {
-    "default_assistant": "",
-    "chemist": "The following answers are from an expert chemist with deep knowledge of organic, inorganic, and physical chemistry.\n\n",
-    "historian": "The following answers are from an expert historian with deep knowledge of world, US, and European history.\n\n",
-    "artist": "The following answers are from an expert in art history, art movements, and artistic techniques.\n\n",
-    "cautious_hedging": "The following answers are from someone who is very cautious and uncertain, tending to report low confidence.\n\n",
-    "bold_assertive": "The following answers are from someone who is very confident and assertive, tending to report high confidence.\n\n",
-    "five_year_old": "The following answers are from a 5-year-old child who uses simple words and sometimes gets confused.\n\n",
+    "default_assistant": (
+        "The following answers are written in a neutral, factual, and encyclopedic tone.\n"
+        "The writer answers clearly and directly, without exaggeration or hesitation.\n\n"
+    ),
+    "chemist": (
+        "The following answers are written by an expert chemist.\n"
+        "The chemist has deep knowledge of organic, inorganic, and physical chemistry.\n"
+        "When discussing chemistry topics, the chemist answers precisely and confidently.\n"
+        "When outside chemistry, the chemist may be less certain.\n\n"
+    ),
+    "historian": (
+        "The following answers are written by an expert historian.\n"
+        "The historian is well trained in world, European, and American history.\n"
+        "The historian thinks carefully about dates, context, and historical causation.\n\n"
+    ),
+    "artist": (
+        "The following answers are written by an expert in art and art history.\n"
+        "The artist thinks about aesthetics, style, and creative interpretation.\n"
+        "The artist sometimes frames answers in expressive or descriptive language.\n\n"
+    ),
+    "cautious_hedging": (
+        "The following answers are written by someone who is cautious and uncertain.\n"
+        "This person avoids strong claims and often reports low confidence.\n"
+        "They hesitate when unsure and prefer conservative judgments.\n\n"
+    ),
+    "bold_assertive": (
+        "The following answers are written by someone extremely confident and assertive.\n"
+        "This person answers decisively and with high certainty.\n"
+        "They rarely hedge and strongly believe in their conclusions.\n\n"
+    ),
+    "five_year_old": (
+        "The following answers are written by a five-year-old child.\n"
+        "The child uses simple words and short sentences.\n"
+        "The child sometimes misunderstands difficult topics.\n\n"
+    ),
+}
+
+# Persona-specific suffixes that replace the generic "Answer: " at the end of
+# the MC prompt. These reinforce the persona right at the prediction point.
+BASE_PERSONA_MC_SUFFIXES = {
+    "default_assistant": "Answer: ",
+    "chemist":           "Answer (as a chemist): ",
+    "historian":         "Answer (as a historian): ",
+    "artist":            "Answer (as an artist): ",
+    "cautious_hedging":  "Answer (with caution): ",
+    "bold_assertive":    "Answer (confidently): ",
+    "five_year_old":     "Answer (like a child): ",
 }
 
 
 def get_persona_context(persona_name: str) -> str:
     """Get the base-model persona context prefix for a given persona name."""
     return BASE_PERSONA_CONTEXTS.get(persona_name, "")
+
+
+def get_mc_suffix(persona_name: str) -> str:
+    """Get the persona-specific MC answer suffix (used when use_persona_suffixes=True)."""
+    return BASE_PERSONA_MC_SUFFIXES.get(persona_name, "Answer: ")
 
 
 # ============================================================================
@@ -344,6 +389,7 @@ def format_mc_prompt_base(
     options: dict[str, str],
     persona_name: str = "default_assistant",
     mode: str = "fixed",
+    use_suffix: bool = False,
 ) -> str:
     """Format a multiple-choice question for a base model.
 
@@ -359,6 +405,9 @@ def format_mc_prompt_base(
               "random" samples 3 from a larger pool (different per call).
               "balanced" shows one example per answer position (A/B/C/D = 4
               examples), randomly selected and shuffled each call.
+        use_suffix: If True, replaces the generic "Answer: " terminal cue with
+              a persona-specific suffix (e.g. "Answer (as a chemist): ").
+              The trailing space is preserved in all cases.
 
     Returns:
         Complete prompt string ready for text completion.
@@ -386,7 +435,8 @@ def format_mc_prompt_base(
     # Trailing space is critical: makes the model predict the bare letter
     # token ("B") instead of space+letter (" B"), which is a different token
     # in Llama's vocabulary. Without it, logprob extraction looks up the wrong token.
-    prompt += "Answer: "
+    suffix = get_mc_suffix(persona_name) if use_suffix else "Answer: "
+    prompt += suffix
 
     return prompt
 

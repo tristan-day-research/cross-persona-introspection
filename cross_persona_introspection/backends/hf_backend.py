@@ -194,12 +194,18 @@ class HFBackend:
         return self.tokenizer.decode(new_tokens, skip_special_tokens=True)
 
     def get_next_token_logits_from_text(self, prompt: str) -> torch.Tensor:
-        """Return logits for the next token given a raw text prompt."""
+        """Return logits for the next token given a raw text prompt.
+
+        For N input tokens, outputs.logits has shape (1, N, vocab_size).
+        outputs.logits[0, -1, :] is the distribution over token_{N+1} —
+        i.e., exactly what the model predicts comes after the full prompt.
+        This is the correct position for extracting answer letter logprobs.
+        """
         input_ids = self.tokenizer.encode(prompt, return_tensors="pt").to(self.device)
 
         with torch.no_grad():
             outputs = self.model(input_ids)
-        return outputs.logits[0, -1, :]  # (vocab_size,)
+        return outputs.logits[0, -1, :]  # (vocab_size,) — next-token after full prompt
 
     def get_choice_probs_and_logits_from_text(
         self, prompt: str, choices: list[str]

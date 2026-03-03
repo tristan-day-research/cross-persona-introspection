@@ -44,6 +44,10 @@ class RunConfig:
     # "random" (sample from pool, different each question). Only used by
     # confidence_entropy_base experiment.
     few_shot_mode: str = "fixed"
+    # If True, replace the generic "Answer: " terminal cue with a
+    # persona-specific suffix like "Answer (as a chemist): ". Only used by
+    # confidence_entropy_base experiment.
+    use_persona_suffixes: bool = False
     # Optional OpenRouter judge
     openrouter_model: Optional[str] = None
     openrouter_api_key: Optional[str] = None
