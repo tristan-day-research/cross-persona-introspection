@@ -127,7 +127,7 @@ def train_probe_for_layer(
     for C in [0.01, 0.1, 1.0, 10.0]:
         clf = LogisticRegression(
             C=C, max_iter=2000, solver="lbfgs",
-            multi_class="multinomial", random_state=seed,
+            random_state=seed,
         )
         clf.fit(X_train_s, y_train)
         score = clf.score(X_val_s, y_val)
