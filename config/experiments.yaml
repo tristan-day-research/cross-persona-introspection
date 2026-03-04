@@ -138,7 +138,8 @@ confidence_entropy_base_dev:
 
 activation_probing_dev:
   experiment_name: activation_probing
-  model_name: "dphn/Dolphin-Mistral-24B-Venice-Edition"
+  # model_name: "dphn/Dolphin-Mistral-24B-Venice-Edition"
+  model_name: "meta-llama/Llama-3.1-8B-Instruct"
   personas:
     - persona_conservative
     - persona_progressive
