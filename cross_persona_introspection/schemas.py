@@ -55,6 +55,10 @@ class RunConfig:
     confidence_legend: str = "bins"
     # Activation probing: direct task file path (relative to tasks/ dir)
     task_file: Optional[str] = None
+    # Model dtype: "bfloat16", "float16", "float32", or None (auto: float16 on CUDA)
+    model_dtype: Optional[str] = None
+    # Inference batch size (activation_probing only; >1 requires padding support)
+    batch_size: int = 1
     # Optional OpenRouter judge
     openrouter_model: Optional[str] = None
     openrouter_api_key: Optional[str] = None

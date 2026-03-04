@@ -14,6 +14,7 @@ Outputs (all saved to a timestamped subdirectory of results/raw/):
 import json
 import logging
 import random
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -76,10 +77,18 @@ class ActivationProbing(BaseExperiment):
     # ── BaseExperiment interface ──────────────────────────────────────
 
     def setup(self) -> None:
+        import torch
         from cross_persona_introspection.backends.hf_backend import HFBackend
 
-        logger.info(f"Loading model: {self.config.model_name}")
-        self.backend = HFBackend(self.config.model_name)
+        dtype_map = {
+            "bfloat16": torch.bfloat16,
+            "float16": torch.float16,
+            "float32": torch.float32,
+        }
+        torch_dtype = dtype_map.get(self.config.model_dtype) if self.config.model_dtype else None
+
+        logger.info(f"Loading model: {self.config.model_name}  dtype={self.config.model_dtype or 'auto'}")
+        self.backend = HFBackend(self.config.model_name, device="auto", torch_dtype=torch_dtype)
 
         task_file = self.config.task_file
         if not task_file:
@@ -97,6 +106,7 @@ class ActivationProbing(BaseExperiment):
         choices = ["A", "B", "C", "D"]
 
         run_errors: list[str] = []
+        run_start = time.monotonic()
 
         # Resolve answer token IDs — validate that each maps to a single token
         answer_token_ids = self._resolve_answer_tokens(tokenizer, choices)
@@ -117,6 +127,7 @@ class ActivationProbing(BaseExperiment):
         all_logit_lens: dict[str, torch.Tensor] = {}   # persona -> [n_q, n_layers, 4]
         logit_rows: list[dict] = []
         sample_prompts: dict[str, dict] = {}  # persona -> {question_id, input_text, chosen, logits, probs}
+        questions_ok: dict[str, int] = {}     # persona -> count of successful questions
 
         for persona_name in persona_names:
             persona = self.personas[persona_name]
@@ -124,6 +135,7 @@ class ActivationProbing(BaseExperiment):
 
             acts = torch.zeros(n_questions, n_layers, d_model, dtype=torch.float16)
             lens = torch.zeros(n_questions, n_layers, 4, dtype=torch.float16)
+            n_ok = 0
 
             for qi, question in enumerate(tqdm(
                 self.questions, desc=f"  {persona_name}", leave=True
@@ -195,6 +207,7 @@ class ActivationProbing(BaseExperiment):
                             "n_input_tokens": int(input_ids.shape[1]),
                         }
 
+                    n_ok += 1
                     del outputs  # free GPU memory before next question
 
                 except Exception as e:
@@ -207,12 +220,16 @@ class ActivationProbing(BaseExperiment):
 
             all_activations[persona_name] = acts
             all_logit_lens[persona_name] = lens
+            questions_ok[persona_name] = n_ok
+
+        run_elapsed = time.monotonic() - run_start
 
         # Save everything
         self._save_outputs(
             all_activations, all_logit_lens, logit_rows, question_ids, persona_names,
             answer_token_ids, choices, n_questions, n_layers, d_model,
             sample_prompts=sample_prompts, run_errors=run_errors,
+            questions_ok=questions_ok, run_elapsed=run_elapsed,
         )
 
     def evaluate(self) -> dict:
@@ -304,6 +321,8 @@ class ActivationProbing(BaseExperiment):
         d_model: int,
         sample_prompts: dict[str, dict] | None = None,
         run_errors: list[str] | None = None,
+        questions_ok: dict[str, int] | None = None,
+        run_elapsed: float = 0.0,
     ) -> None:
         """Save all collection outputs to self.out_dir."""
         # 1. Activation tensors
@@ -363,6 +382,7 @@ class ActivationProbing(BaseExperiment):
         self._write_run_report(
             metadata, sample_prompts or {}, run_errors or [],
             persona_names, n_questions, n_layers, d_model,
+            questions_ok=questions_ok or {}, run_elapsed=run_elapsed,
         )
         logger.info("Saved run_report.txt")
 
@@ -375,20 +395,37 @@ class ActivationProbing(BaseExperiment):
         n_questions: int,
         n_layers: int,
         d_model: int,
+        questions_ok: dict[str, int] | None = None,
+        run_elapsed: float = 0.0,
     ) -> None:
         """Write a human-readable run_report.txt summarising the full run."""
         sep = "=" * 70
         thin = "-" * 70
         lines = []
 
+        h, rem = divmod(int(run_elapsed), 3600)
+        m, s = divmod(rem, 60)
+        elapsed_str = f"{h:02d}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
+
         lines += [
             sep,
             "ACTIVATION PROBING RUN REPORT",
             sep,
-            f"Generated : {datetime.now(timezone.utc).isoformat()}",
-            f"Output dir: {self.out_dir}",
+            f"Generated  : {datetime.now(timezone.utc).isoformat()}",
+            f"Output dir : {self.out_dir}",
+            f"Total time : {elapsed_str}  ({run_elapsed:.1f}s)",
             "",
         ]
+
+        # ── Question counts ───────────────────────────────────────────
+        lines += [sep, "QUESTION COUNTS", thin]
+        lines.append(f"  Questions loaded  : {n_questions}")
+        qok = questions_ok or {}
+        for pname in persona_names:
+            ok = qok.get(pname, "?")
+            failed = (n_questions - ok) if isinstance(ok, int) else "?"
+            lines.append(f"  {pname:<35s}  {ok}/{n_questions} ok  ({failed} failed)")
+        lines.append("")
 
         # ── Run parameters ────────────────────────────────────────────
         lines += [sep, "RUN PARAMETERS", thin]
@@ -396,10 +433,11 @@ class ActivationProbing(BaseExperiment):
         lines += [
             f"experiment_name : {cfg.experiment_name}",
             f"model_name      : {cfg.model_name}",
+            f"model_dtype     : {cfg.model_dtype or 'auto (float16 on CUDA)'}",
+            f"batch_size      : {cfg.batch_size}",
             f"task_file       : {cfg.task_file}",
             f"sample_size     : {cfg.sample_size}  (None = all questions)",
             f"seed            : {cfg.seed}",
-            f"max_new_tokens  : {cfg.max_new_tokens}",
             f"temperature     : {cfg.temperature}",
             f"output_dir      : {cfg.output_dir}",
             "",

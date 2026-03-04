@@ -139,20 +139,27 @@ confidence_entropy_base_dev:
 activation_probing_dev:
   experiment_name: activation_probing
   model_name: "dphn/Dolphin-Mistral-24B-Venice-Edition"
+  model_dtype: bfloat16   # A100 80GB required; use float16 or omit for Llama 8B on 4090
   # model_name: "meta-llama/Llama-3.1-8B-Instruct"
+  # model_dtype: float16
+  batch_size: 1
   personas:
     - persona_conservative
     - persona_progressive
   task_sets: []  # loaded directly from tasks/opposing_personas_politics.json
   task_file: "opposing_personas_politics.json"
-  sample_size: 20
+  sample_size: 15
   seed: 42
   max_new_tokens: 1   # not used (no generation), but kept for RunConfig
   temperature: 0.0
 
 activation_probing_full:
   experiment_name: activation_probing
-  model_name: "meta-llama/Llama-3.1-8B-Instruct"
+  model_name: "dphn/Dolphin-Mistral-24B-Venice-Edition"
+  model_dtype: bfloat16   # A100 80GB required
+  # model_name: "meta-llama/Llama-3.1-8B-Instruct"
+  # model_dtype: float16
+  batch_size: 1
   personas:
     - persona_conservative
     - persona_progressive

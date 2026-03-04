@@ -90,6 +90,8 @@ def build_run_config(exp_config: dict) -> RunConfig:
         use_persona_suffixes=exp_config.get("use_persona_suffixes", False),
         confidence_legend=exp_config.get("confidence_legend", "bins"),
         task_file=exp_config.get("task_file"),
+        model_dtype=exp_config.get("model_dtype"),
+        batch_size=exp_config.get("batch_size", 1),
         openrouter_model=exp_config.get("openrouter_model"),
         openrouter_api_key=exp_config.get("openrouter_api_key"),
     )
