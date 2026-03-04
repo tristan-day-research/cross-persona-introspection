@@ -153,8 +153,8 @@ class ActivationProbing(BaseExperiment):
                         # Logit lens: project through final norm + LM head
                         # This is the standard logit lens (nostalgebraist 2020):
                         # "what would the model predict if it stopped at layer l?"
-                        h_normed = final_norm(h.float())        # [1, d_model]
-                        vocab_logits = lm_head(h_normed)[0]     # [vocab_size]
+                        h_normed = final_norm(h.float())                 # [1, d_model] float32 for norm stability
+                        vocab_logits = lm_head(h_normed.to(h.dtype))[0] # [vocab_size] cast back to model dtype
                         answer_logits_l = vocab_logits[token_id_list]  # [4]
                         lens[qi, layer_idx, :] = answer_logits_l.to(torch.float16).cpu()
 
