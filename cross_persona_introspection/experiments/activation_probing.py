@@ -96,6 +96,8 @@ class ActivationProbing(BaseExperiment):
         device = self.backend.device
         choices = ["A", "B", "C", "D"]
 
+        run_errors: list[str] = []
+
         # Resolve answer token IDs — validate that each maps to a single token
         answer_token_ids = self._resolve_answer_tokens(tokenizer, choices)
         logger.info(f"Answer token IDs: {answer_token_ids}")
@@ -114,6 +116,7 @@ class ActivationProbing(BaseExperiment):
         all_activations: dict[str, torch.Tensor] = {}  # persona -> [n_q, n_layers, d_model]
         all_logit_lens: dict[str, torch.Tensor] = {}   # persona -> [n_q, n_layers, 4]
         logit_rows: list[dict] = []
+        sample_prompts: dict[str, dict] = {}  # persona -> {question_id, input_text, chosen, logits, probs}
 
         for persona_name in persona_names:
             persona = self.personas[persona_name]
@@ -125,62 +128,82 @@ class ActivationProbing(BaseExperiment):
             for qi, question in enumerate(tqdm(
                 self.questions, desc=f"  {persona_name}", leave=True
             )):
-                user_msg = _format_user_message(question)
-                messages = []
-                if persona.system_prompt:
-                    messages.append({"role": "system", "content": persona.system_prompt})
-                messages.append({"role": "user", "content": user_msg})
+                try:
+                    user_msg = _format_user_message(question)
+                    messages = []
+                    if persona.system_prompt:
+                        messages.append({"role": "system", "content": persona.system_prompt})
+                    messages.append({"role": "user", "content": user_msg})
 
-                # Apply chat template
-                input_text = tokenizer.apply_chat_template(
-                    messages, tokenize=False, add_generation_prompt=True
-                )
-                input_ids = tokenizer.encode(input_text, return_tensors="pt").to(device)
+                    # Apply chat template
+                    input_text = tokenizer.apply_chat_template(
+                        messages, tokenize=False, add_generation_prompt=True
+                    )
+                    input_ids = tokenizer.encode(input_text, return_tensors="pt").to(device)
 
-                # Forward pass — capture all hidden states in one pass
-                with torch.no_grad():
-                    outputs = model(input_ids, output_hidden_states=True)
+                    # Forward pass — capture all hidden states in one pass
+                    with torch.no_grad():
+                        outputs = model(input_ids, output_hidden_states=True)
 
-                # Hidden states: tuple of n_layers+1 tensors, each [1, seq_len, d_model]
-                # We take the final token position (immediately before generation)
-                with torch.no_grad():
-                    for layer_idx, hs in enumerate(outputs.hidden_states):
-                        h = hs[0, -1:, :]  # [1, d_model]
+                    # Hidden states: tuple of n_layers+1 tensors, each [1, seq_len, d_model]
+                    # We take the final token position (immediately before generation)
+                    with torch.no_grad():
+                        for layer_idx, hs in enumerate(outputs.hidden_states):
+                            h = hs[0, -1:, :]  # [1, d_model]
 
-                        # Raw activation (for probe training)
-                        acts[qi, layer_idx, :] = h[0].to(torch.float16).cpu()
+                            # Raw activation (for probe training)
+                            acts[qi, layer_idx, :] = h[0].to(torch.float16).cpu()
 
-                        # Logit lens: project through final norm + LM head
-                        # This is the standard logit lens (nostalgebraist 2020):
-                        # "what would the model predict if it stopped at layer l?"
-                        h_normed = final_norm(h.float())                 # [1, d_model] float32 for norm stability
-                        vocab_logits = lm_head(h_normed.to(h.dtype))[0] # [vocab_size] cast back to model dtype
-                        answer_logits_l = vocab_logits[token_id_list]  # [4]
-                        lens[qi, layer_idx, :] = answer_logits_l.to(torch.float16).cpu()
+                            # Logit lens: project through final norm + LM head
+                            # This is the standard logit lens (nostalgebraist 2020):
+                            # "what would the model predict if it stopped at layer l?"
+                            h_normed = final_norm(h.float())                 # [1, d_model] float32 for norm stability
+                            vocab_logits = lm_head(h_normed.to(h.dtype))[0] # [vocab_size] cast back to model dtype
+                            answer_logits_l = vocab_logits[token_id_list]  # [4]
+                            lens[qi, layer_idx, :] = answer_logits_l.to(torch.float16).cpu()
 
-                # Final answer logits — use model output directly (most numerically stable)
-                logits = outputs.logits[0, -1, :]  # (vocab_size,)
-                answer_logits_raw = {c: logits[tid].item() for c, tid in answer_token_ids.items()}
-                answer_logit_tensor = torch.tensor([answer_logits_raw[c] for c in choices])
-                answer_probs = F.softmax(answer_logit_tensor, dim=0)
-                answer_probs_dict = {c: answer_probs[i].item() for i, c in enumerate(choices)}
-                chosen = choices[answer_logit_tensor.argmax().item()]
+                    # Final answer logits — use model output directly (most numerically stable)
+                    logits = outputs.logits[0, -1, :]  # (vocab_size,)
+                    answer_logits_raw = {c: logits[tid].item() for c, tid in answer_token_ids.items()}
+                    answer_logit_tensor = torch.tensor([answer_logits_raw[c] for c in choices])
+                    answer_probs = F.softmax(answer_logit_tensor, dim=0)
+                    answer_probs_dict = {c: answer_probs[i].item() for i, c in enumerate(choices)}
+                    chosen = choices[answer_logit_tensor.argmax().item()]
 
-                logit_rows.append({
-                    "question_id": question["question_id"],
-                    "persona": persona_name,
-                    "logit_A": answer_logits_raw["A"],
-                    "logit_B": answer_logits_raw["B"],
-                    "logit_C": answer_logits_raw["C"],
-                    "logit_D": answer_logits_raw["D"],
-                    "prob_A": answer_probs_dict["A"],
-                    "prob_B": answer_probs_dict["B"],
-                    "prob_C": answer_probs_dict["C"],
-                    "prob_D": answer_probs_dict["D"],
-                    "chosen_answer": chosen,
-                })
+                    logit_rows.append({
+                        "question_id": question["question_id"],
+                        "persona": persona_name,
+                        "logit_A": answer_logits_raw["A"],
+                        "logit_B": answer_logits_raw["B"],
+                        "logit_C": answer_logits_raw["C"],
+                        "logit_D": answer_logits_raw["D"],
+                        "prob_A": answer_probs_dict["A"],
+                        "prob_B": answer_probs_dict["B"],
+                        "prob_C": answer_probs_dict["C"],
+                        "prob_D": answer_probs_dict["D"],
+                        "chosen_answer": chosen,
+                    })
 
-                del outputs  # free GPU memory before next question
+                    # Capture sample prompt for the first question only
+                    if qi == 0:
+                        sample_prompts[persona_name] = {
+                            "question_id": question["question_id"],
+                            "input_text": input_text,
+                            "chosen_answer": chosen,
+                            "answer_logits": {c: round(v, 4) for c, v in answer_logits_raw.items()},
+                            "answer_probs": {c: round(v, 4) for c, v in answer_probs_dict.items()},
+                            "n_input_tokens": int(input_ids.shape[1]),
+                        }
+
+                    del outputs  # free GPU memory before next question
+
+                except Exception as e:
+                    msg = (
+                        f"ERROR — persona={persona_name} qi={qi} "
+                        f"question_id={question.get('question_id', '?')}: {type(e).__name__}: {e}"
+                    )
+                    logger.error(msg)
+                    run_errors.append(msg)
 
             all_activations[persona_name] = acts
             all_logit_lens[persona_name] = lens
@@ -189,6 +212,7 @@ class ActivationProbing(BaseExperiment):
         self._save_outputs(
             all_activations, all_logit_lens, logit_rows, question_ids, persona_names,
             answer_token_ids, choices, n_questions, n_layers, d_model,
+            sample_prompts=sample_prompts, run_errors=run_errors,
         )
 
     def evaluate(self) -> dict:
@@ -278,6 +302,8 @@ class ActivationProbing(BaseExperiment):
         n_questions: int,
         n_layers: int,
         d_model: int,
+        sample_prompts: dict[str, dict] | None = None,
+        run_errors: list[str] | None = None,
     ) -> None:
         """Save all collection outputs to self.out_dir."""
         # 1. Activation tensors
@@ -332,6 +358,129 @@ class ActivationProbing(BaseExperiment):
         with open(self.out_dir / "metadata.json", "w") as f:
             json.dump(metadata, f, indent=2)
         logger.info("Saved metadata.json")
+
+        # 6. Human-readable run report
+        self._write_run_report(
+            metadata, sample_prompts or {}, run_errors or [],
+            persona_names, n_questions, n_layers, d_model,
+        )
+        logger.info("Saved run_report.txt")
+
+    def _write_run_report(
+        self,
+        metadata: dict,
+        sample_prompts: dict[str, dict],
+        run_errors: list[str],
+        persona_names: list[str],
+        n_questions: int,
+        n_layers: int,
+        d_model: int,
+    ) -> None:
+        """Write a human-readable run_report.txt summarising the full run."""
+        sep = "=" * 70
+        thin = "-" * 70
+        lines = []
+
+        lines += [
+            sep,
+            "ACTIVATION PROBING RUN REPORT",
+            sep,
+            f"Generated : {datetime.now(timezone.utc).isoformat()}",
+            f"Output dir: {self.out_dir}",
+            "",
+        ]
+
+        # ── Run parameters ────────────────────────────────────────────
+        lines += [sep, "RUN PARAMETERS", thin]
+        cfg = self.config
+        lines += [
+            f"experiment_name : {cfg.experiment_name}",
+            f"model_name      : {cfg.model_name}",
+            f"task_file       : {cfg.task_file}",
+            f"sample_size     : {cfg.sample_size}  (None = all questions)",
+            f"seed            : {cfg.seed}",
+            f"max_new_tokens  : {cfg.max_new_tokens}",
+            f"temperature     : {cfg.temperature}",
+            f"output_dir      : {cfg.output_dir}",
+            "",
+        ]
+
+        # ── Dataset / model info ──────────────────────────────────────
+        lines += [sep, "DATASET / MODEL INFO", thin]
+        lines += [
+            f"n_questions     : {n_questions}",
+            f"n_layers        : {n_layers}  (embedding layer 0 + {n_layers-1} transformer layers)",
+            f"d_model         : {d_model}",
+            f"answer_token_ids: {metadata.get('answer_token_ids')}",
+            f"logit_lens_order: {metadata.get('logit_lens_choice_order')}",
+        ]
+        sz = metadata.get("approx_size_mb", {})
+        lines += [
+            f"approx size/persona (activations): {sz.get('activations_per_persona')} MB",
+            f"approx size/persona (logit lens) : {sz.get('logit_lens_per_persona')} MB",
+            f"approx total all personas        : {sz.get('total_all_personas')} MB",
+            "",
+        ]
+
+        # ── Answer instruction ────────────────────────────────────────
+        lines += [sep, "ANSWER INSTRUCTION (appended to every user message)", thin]
+        lines += [ANSWER_INSTRUCTION, ""]
+
+        # ── Personas ─────────────────────────────────────────────────
+        lines += [sep, "PERSONAS", thin]
+        for pname in persona_names:
+            persona = self.personas[pname]
+            lines += [
+                f"[{pname}]",
+                f"  description  : {persona.description}",
+                f"  system_prompt:",
+            ]
+            if persona.system_prompt:
+                for sline in persona.system_prompt.strip().splitlines():
+                    lines.append(f"    {sline}")
+            else:
+                lines.append("    (none — no system prompt)")
+            lines.append("")
+
+        # ── Sample prompts ────────────────────────────────────────────
+        lines += [sep, "SAMPLE PROMPTS (first question per persona)", thin]
+        for pname in persona_names:
+            sp = sample_prompts.get(pname)
+            lines.append(f"[{pname}]")
+            if sp is None:
+                lines += ["  (no sample captured — persona may have errored)", ""]
+                continue
+            lines += [
+                f"  question_id    : {sp['question_id']}",
+                f"  n_input_tokens : {sp['n_input_tokens']}",
+                f"  chosen_answer  : {sp['chosen_answer']}",
+                f"  answer_logits  : {sp['answer_logits']}",
+                f"  answer_probs   : {sp['answer_probs']}",
+                "",
+                "  ── full prompt sent to model ──",
+            ]
+            for pline in sp["input_text"].splitlines():
+                lines.append(f"  {pline}")
+            lines.append("")
+
+        # ── Errors ────────────────────────────────────────────────────
+        lines += [sep, f"ERRORS ({len(run_errors)} total)", thin]
+        if run_errors:
+            lines += run_errors
+        else:
+            lines.append("None")
+        lines.append("")
+
+        # ── Output files ──────────────────────────────────────────────
+        lines += [sep, "OUTPUT FILES", thin]
+        for f in sorted(self.out_dir.iterdir()):
+            size_kb = f.stat().st_size / 1024
+            lines.append(f"  {f.name:<40s}  {size_kb:>10.1f} KB")
+        lines.append("")
+        lines.append(sep)
+
+        report_path = self.out_dir / "run_report.txt"
+        report_path.write_text("\n".join(lines), encoding="utf-8")
 
     def _build_paired_answers(
         self, logits_df: pd.DataFrame, persona_names: list[str]
