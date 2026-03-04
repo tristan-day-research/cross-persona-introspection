@@ -1,0 +1,39 @@
+{
+  "model_name": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+  "task_file": "opposing_personas_politics.json",
+  "n_questions": 5,
+  "n_layers": 23,
+  "d_model": 2048,
+  "question_ids": [
+    "pol_164",
+    "pol_029",
+    "pol_007",
+    "pol_190",
+    "pol_071"
+  ],
+  "persona_names": [
+    "persona_conservative",
+    "persona_progressive"
+  ],
+  "answer_token_ids": {
+    "A": 319,
+    "B": 350,
+    "C": 315,
+    "D": 360
+  },
+  "logit_lens_choice_order": [
+    "A",
+    "B",
+    "C",
+    "D"
+  ],
+  "answer_instruction": "Choose the single best answer from this persona's perspective. Answer with exactly one letter: A, B, C, or D. Do not provide any explanation.",
+  "seed": 42,
+  "sample_size": 5,
+  "approx_size_mb": {
+    "activations_per_persona": 0.5,
+    "logit_lens_per_persona": 0.0,
+    "total_all_personas": 0.9
+  },
+  "timestamp": "2026-03-04T17:46:53.824739+00:00"
+}
