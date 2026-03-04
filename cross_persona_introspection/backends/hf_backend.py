@@ -27,6 +27,13 @@ class HFBackend:
             self.model = self.model.to(self.device)
         self.model.eval()
 
+    @property
+    def input_device(self):
+        """Device for input tensors. With device_map='auto', detects the actual first device."""
+        if self.device == "auto":
+            return next(self.model.parameters()).device
+        return self.device
+
     def generate(
         self,
         messages: list[dict[str, str]],

@@ -102,7 +102,7 @@ class ActivationProbing(BaseExperiment):
         assert self.backend is not None
         model = self.backend.model
         tokenizer = self.backend.tokenizer
-        device = self.backend.device
+        device = self.backend.input_device
         choices = ["A", "B", "C", "D"]
 
         run_errors: list[str] = []
@@ -527,6 +527,8 @@ class ActivationProbing(BaseExperiment):
         if len(persona_names) != 2:
             raise ValueError("Paired answers requires exactly 2 personas")
         p1, p2 = persona_names
+        if logits_df.empty or "persona" not in logits_df.columns:
+            return pd.DataFrame(columns=["question_id", f"answer_{p1}", f"answer_{p2}", "is_agreement", "is_disagreement"])
         df1 = logits_df[logits_df["persona"] == p1][["question_id", "chosen_answer"]].rename(
             columns={"chosen_answer": f"answer_{p1}"}
         )
