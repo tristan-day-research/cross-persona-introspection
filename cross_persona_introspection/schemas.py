@@ -53,6 +53,8 @@ class RunConfig:
     #   "ordinal" — "S, T, U, V, W, X, Y, Z (S = lowest, Z = highest)"
     # Only used by confidence_entropy_base experiment.
     confidence_legend: str = "bins"
+    # Activation probing: direct task file path (relative to tasks/ dir)
+    task_file: Optional[str] = None
     # Optional OpenRouter judge
     openrouter_model: Optional[str] = None
     openrouter_api_key: Optional[str] = None

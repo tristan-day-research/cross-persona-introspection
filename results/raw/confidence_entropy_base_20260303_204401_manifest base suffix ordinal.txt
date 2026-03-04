@@ -1,0 +1,242 @@
+======================================================================
+CONFIDENCE vs ENTROPY (BASE MODEL) — RUN MANIFEST
+Generated: 2026-03-03T20:55:45.528260+00:00
+======================================================================
+
+── RUN CONFIGURATION ──
+Experiment:    confidence_entropy_base
+Model:         meta-llama/Llama-3.1-8B
+Model type:    BASE (non-instruct)
+Personas:      default_assistant, chemist, historian, artist, cautious_hedging, bold_assertive, five_year_old
+Sample size:   all
+Seed:          42
+Max new tokens:24
+Temperature:   0.0
+N tasks:       150
+N personas:    7
+Total trials:  1050
+Results file:  results/raw/confidence_entropy_base_20260303_204401.jsonl
+
+── PROMPTING STRATEGY ──
+Base models use few-shot pattern completion instead of instructions.
+Persona induction is done via a text prefix before the few-shot block.
+Only 2 prompts per trial: forced-choice MC + stated confidence.
+Open-ended prompts are skipped (base models don't follow instructions).
+Few-shot mode: balanced
+Confidence legend: ordinal
+Persona suffixes: True
+
+── PERSONA CONTEXT PREFIXES ──
+
+[default_assistant]
+The following answers are written in a neutral, factual, and encyclopedic tone.
+The writer answers clearly and directly, without exaggeration or hesitation.
+  Question prefix: (none)
+
+[chemist]
+The following answers are written by an expert chemist.
+The chemist has deep knowledge of organic, inorganic, and physical chemistry.
+When discussing chemistry topics, the chemist answers precisely and confidently.
+When outside chemistry, the chemist may be less certain.
+  Question prefix: 'As a chemist:\n'
+
+[historian]
+The following answers are written by an expert historian.
+The historian is well trained in world, European, and American history.
+The historian thinks carefully about dates, context, and historical causation.
+  Question prefix: 'As a historian:\n'
+
+[artist]
+The following answers are written by an expert in art and art history.
+The artist thinks about aesthetics, style, and creative interpretation.
+The artist sometimes frames answers in expressive or descriptive language.
+  Question prefix: 'As an artist:\n'
+
+[cautious_hedging]
+The following answers are written by someone who is cautious and uncertain.
+This person avoids strong claims and often reports low confidence.
+They hesitate when unsure and prefer conservative judgments.
+  Question prefix: 'As a very cautious and uncertain person:\n'
+
+[bold_assertive]
+The following answers are written by someone extremely confident and assertive.
+This person answers decisively and with high certainty.
+They rarely hedge and strongly believe in their conclusions.
+  Question prefix: 'As an extremely confident and assertive person:\n'
+
+[five_year_old]
+The following answers are written by a six-year-old child.
+The child uses simple words and short sentences.
+The child sometimes misunderstands difficult topics.
+  Question prefix: 'As a six-year-old child:\n'
+
+
+======================================================================
+SAMPLE TRIAL — Exact prompts and model outputs (BASE MODEL)
+======================================================================
+Persona: default_assistant
+Question ID: chem_000
+Domain: chemistry
+Correct answer: D
+
+NOTE: Base model uses raw text prompts (no chat template).
+Only 2 prompts per trial (no open-ended prompts).
+
+----------------------------------------------------------------------
+PROMPT 1: FORCED-CHOICE MC (few-shot pattern completion)
+----------------------------------------------------------------------
+[RAW PROMPT]
+The following answers are written in a neutral, factual, and encyclopedic tone.
+The writer answers clearly and directly, without exaggeration or hesitation.
+
+The following are multiple choice questions with answers.
+
+Question: What is the capital of Japan?
+  A: Seoul
+  B: Tokyo
+  C: Beijing
+  D: Bangkok
+Answer: B
+
+Question: In which year did World War II end?
+  A: 1943
+  B: 1944
+  C: 1945
+  D: 1946
+Answer: C
+
+Question: What gas do plants absorb from the atmosphere during photosynthesis?
+  A: Oxygen
+  B: Nitrogen
+  C: Hydrogen
+  D: Carbon dioxide
+Answer: D
+
+Question: The Great Wall of China was primarily built to protect against invasions from which direction?
+  A: North
+  B: South
+  C: East
+  D: West
+Answer: A
+
+Question: Based on periodic relationships, the concepts related to bond strength, and the concept relating bond strength to acid strength, which of the following correctly predicts the strength of binary acids from strongest to weakest?
+  A: H2Se > H2O > H2S
+  B: H2S > H2Se > H2O
+  C: H2O < H2S < H2Se
+  D: H2Se > H2S > H2O
+Answer: 
+
+[MODEL OUTPUT]
+ A
+
+Question: Which of the following
+
+[OPTION PROBS (softmax)]
+  A: 0.294425
+  B: 0.280942
+  C: 0.148046
+  D: 0.276587
+
+[OPTION LOGITS (raw)]
+  A: 18.3438
+  B: 18.2969
+  C: 17.6562
+  D: 18.2812
+
+----------------------------------------------------------------------
+PROMPT 2: STATED CONFIDENCE (few-shot pattern completion)
+----------------------------------------------------------------------
+[RAW PROMPT]
+The following answers are written in a neutral, factual, and encyclopedic tone.
+The writer answers clearly and directly, without exaggeration or hesitation.
+
+For each question, rate your confidence that you know the correct answer.
+S, T, U, V, W, X, Y, Z  (S = lowest confidence, Z = highest)
+
+Question: What is the capital of Australia?
+  A: Sydney
+  B: Melbourne
+  C: Canberra
+  D: Brisbane
+Confidence: X
+
+Question: In what year was the first rubber band produced commercially?
+  A: 1845
+  B: 1823
+  C: 1860
+  D: 1833
+Confidence: T
+
+Question: What is the boiling point of water at sea level in Celsius?
+  A: 90°C
+  B: 100°C
+  C: 110°C
+  D: 120°C
+Confidence: Z
+
+Question: Who wrote the novel 'War and Peace'?
+  A: Charles Dickens
+  B: Leo Tolstoy
+  C: Mark Twain
+  D: Jane Austen
+Confidence: Y
+
+Question: Which country has the longest coastline in the world?
+  A: Russia
+  B: Canada
+  C: Indonesia
+  D: Australia
+Confidence: W
+
+Question: Which enzyme primarily catalyzes the conversion of superoxide radicals?
+  A: Catalase
+  B: Superoxide dismutase
+  C: Peroxidase
+  D: Glutathione reductase
+Confidence: U
+
+Question: What is the 21 trillionth digit of pi?
+  A: 3
+  B: 7
+  C: 1
+  D: 9
+Confidence: S
+
+Question: What is the half-life of Carbon-14?
+  A: 2,730 years
+  B: 5,730 years
+  C: 8,730 years
+  D: 11,730 years
+Confidence: V
+
+Question: Based on periodic relationships, the concepts related to bond strength, and the concept relating bond strength to acid strength, which of the following correctly predicts the strength of binary acids from strongest to weakest?
+  A: H2Se > H2O > H2S
+  B: H2S > H2Se > H2O
+  C: H2O < H2S < H2Se
+  D: H2Se > H2S > H2O
+Confidence: 
+
+[MODEL OUTPUT]
+
+
+[CONFIDENCE OPTION PROBS (softmax)]
+  S (<5%): 0.162379
+  T (5-10%): 0.208499
+  U (10-20%): 0.061153
+  V (20-40%): 0.010964
+  W (40-60%): 0.077304
+  X (60-80%): 0.198951
+  Y (80-90%): 0.102411
+  Z (>90%): 0.178339
+
+[CONFIDENCE OPTION LOGITS (raw)]
+  S (<5%): 16.1250
+  T (5-10%): 16.3750
+  U (10-20%): 15.1484
+  V (20-40%): 13.4297
+  W (40-60%): 15.3828
+  X (60-80%): 16.3281
+  Y (80-90%): 15.6641
+  Z (>90%): 16.2188
+
+======================================================================

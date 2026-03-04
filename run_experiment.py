@@ -89,6 +89,7 @@ def build_run_config(exp_config: dict) -> RunConfig:
         few_shot_mode=exp_config.get("few_shot_mode", "fixed"),
         use_persona_suffixes=exp_config.get("use_persona_suffixes", False),
         confidence_legend=exp_config.get("confidence_legend", "bins"),
+        task_file=exp_config.get("task_file"),
         openrouter_model=exp_config.get("openrouter_model"),
         openrouter_api_key=exp_config.get("openrouter_api_key"),
     )
@@ -123,6 +124,9 @@ def run_one(config_name: str, overrides: list[str] | None = None) -> None:
     elif experiment_name == "confidence_entropy_base":
         from cross_persona_introspection.experiments.confidence_entropy_base import ConfidenceEntropyBase
         experiment = ConfidenceEntropyBase(run_config, used_personas)
+    elif experiment_name == "activation_probing":
+        from cross_persona_introspection.experiments.activation_probing import ActivationProbing
+        experiment = ActivationProbing(run_config, used_personas)
     else:
         raise ValueError(f"Unknown experiment: {experiment_name}")
 
