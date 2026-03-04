@@ -1,11 +1,14 @@
-"""Activation probing experiment: collect hidden states and answer logits
-for two opposing personas across a shared question set.
+"""Activation probing experiment: collect hidden states, logit lens projections,
+and answer logits for two opposing personas across a shared question set.
 
 Outputs (all saved to a timestamped subdirectory of results/raw/):
-  - activations_{persona}.pt   — [n_questions, n_layers, d_model] float16
-  - answer_logits.csv           — per-question per-persona logits & probs
+  - activations_{persona}.pt    — [n_questions, n_layers, d_model] float16
+  - logit_lens_{persona}.pt     — [n_questions, n_layers, 4] float16
+                                   raw logits for [A,B,C,D] at every layer
+                                   via final_norm(h_l) → lm_head → ABCD slice
+  - answer_logits.csv           — per-question per-persona final-layer logits & probs
   - paired_answers.csv          — agreement/disagreement table
-  - metadata.json               — shapes, token IDs, model info
+  - metadata.json               — shapes, token IDs, model info, choice order
 """
 
 import json
@@ -102,8 +105,14 @@ class ActivationProbing(BaseExperiment):
         d_model = model.config.hidden_size
         question_ids = [q["question_id"] for q in self.questions]
 
+        # Get logit lens components (final layer norm + LM head)
+        final_norm, lm_head = self._get_logit_lens_components(model)
+        # Ordered list of answer token IDs for indexing into vocab logits
+        token_id_list = [answer_token_ids[c] for c in choices]  # [A_id, B_id, C_id, D_id]
+
         persona_names = list(self.personas.keys())
         all_activations: dict[str, torch.Tensor] = {}  # persona -> [n_q, n_layers, d_model]
+        all_logit_lens: dict[str, torch.Tensor] = {}   # persona -> [n_q, n_layers, 4]
         logit_rows: list[dict] = []
 
         for persona_name in persona_names:
@@ -111,6 +120,7 @@ class ActivationProbing(BaseExperiment):
             logger.info(f"Running persona: {persona_name}")
 
             acts = torch.zeros(n_questions, n_layers, d_model, dtype=torch.float16)
+            lens = torch.zeros(n_questions, n_layers, 4, dtype=torch.float16)
 
             for qi, question in enumerate(tqdm(
                 self.questions, desc=f"  {persona_name}", leave=True
@@ -127,19 +137,28 @@ class ActivationProbing(BaseExperiment):
                 )
                 input_ids = tokenizer.encode(input_text, return_tensors="pt").to(device)
 
-                # Forward pass with hidden states
+                # Forward pass — capture all hidden states in one pass
                 with torch.no_grad():
-                    outputs = model(
-                        input_ids,
-                        output_hidden_states=True,
-                    )
+                    outputs = model(input_ids, output_hidden_states=True)
 
-                # Hidden states: tuple of (n_layers+1) tensors, each [1, seq_len, d_model]
-                # Take the final token position (immediately before generation)
-                for layer_idx, hs in enumerate(outputs.hidden_states):
-                    acts[qi, layer_idx, :] = hs[0, -1, :].to(torch.float16).cpu()
+                # Hidden states: tuple of n_layers+1 tensors, each [1, seq_len, d_model]
+                # We take the final token position (immediately before generation)
+                with torch.no_grad():
+                    for layer_idx, hs in enumerate(outputs.hidden_states):
+                        h = hs[0, -1:, :]  # [1, d_model]
 
-                # Extract answer logits from final position
+                        # Raw activation (for probe training)
+                        acts[qi, layer_idx, :] = h[0].to(torch.float16).cpu()
+
+                        # Logit lens: project through final norm + LM head
+                        # This is the standard logit lens (nostalgebraist 2020):
+                        # "what would the model predict if it stopped at layer l?"
+                        h_normed = final_norm(h.float())        # [1, d_model]
+                        vocab_logits = lm_head(h_normed)[0]     # [vocab_size]
+                        answer_logits_l = vocab_logits[token_id_list]  # [4]
+                        lens[qi, layer_idx, :] = answer_logits_l.to(torch.float16).cpu()
+
+                # Final answer logits — use model output directly (most numerically stable)
                 logits = outputs.logits[0, -1, :]  # (vocab_size,)
                 answer_logits_raw = {c: logits[tid].item() for c, tid in answer_token_ids.items()}
                 answer_logit_tensor = torch.tensor([answer_logits_raw[c] for c in choices])
@@ -161,12 +180,15 @@ class ActivationProbing(BaseExperiment):
                     "chosen_answer": chosen,
                 })
 
+                del outputs  # free GPU memory before next question
+
             all_activations[persona_name] = acts
+            all_logit_lens[persona_name] = lens
 
         # Save everything
         self._save_outputs(
-            all_activations, logit_rows, question_ids, persona_names,
-            answer_token_ids, n_questions, n_layers, d_model,
+            all_activations, all_logit_lens, logit_rows, question_ids, persona_names,
+            answer_token_ids, choices, n_questions, n_layers, d_model,
         )
 
     def evaluate(self) -> dict:
@@ -192,6 +214,31 @@ class ActivationProbing(BaseExperiment):
         return str(self.out_dir)
 
     # ── Internal helpers ──────────────────────────────────────────────
+
+    @staticmethod
+    def _get_logit_lens_components(model):
+        """Return (final_norm, lm_head) for logit lens computation.
+
+        Supports Llama/Mistral (model.model.norm), GPT-2 (model.transformer.ln_f),
+        and models with model.model.final_layer_norm.
+        Raises clearly if the architecture is unsupported.
+        """
+        lm_head = model.lm_head
+
+        if hasattr(model, "model") and hasattr(model.model, "norm"):
+            final_norm = model.model.norm                    # Llama, Mistral, Gemma
+        elif hasattr(model, "transformer") and hasattr(model.transformer, "ln_f"):
+            final_norm = model.transformer.ln_f              # GPT-2
+        elif hasattr(model, "model") and hasattr(model.model, "final_layer_norm"):
+            final_norm = model.model.final_layer_norm        # OPT, Bloom
+        else:
+            raise ValueError(
+                "Cannot find final layer norm for logit lens. "
+                "Checked: model.model.norm, model.transformer.ln_f, "
+                "model.model.final_layer_norm. "
+                "Add support for this architecture in _get_logit_lens_components()."
+            )
+        return final_norm, lm_head
 
     def _resolve_answer_tokens(
         self, tokenizer, choices: list[str]
@@ -222,10 +269,12 @@ class ActivationProbing(BaseExperiment):
     def _save_outputs(
         self,
         all_activations: dict[str, torch.Tensor],
+        all_logit_lens: dict[str, torch.Tensor],
         logit_rows: list[dict],
         question_ids: list[str],
         persona_names: list[str],
         answer_token_ids: dict[str, int],
+        choices: list[str],
         n_questions: int,
         n_layers: int,
         d_model: int,
@@ -237,17 +286,27 @@ class ActivationProbing(BaseExperiment):
             torch.save(acts, self.out_dir / f"activations_{safe_name}.pt")
             logger.info(f"Saved activations_{safe_name}.pt  shape={list(acts.shape)}")
 
-        # 2. Answer logits table
+        # 2. Logit lens tensors
+        #    Shape: [n_questions, n_layers, 4] float16
+        #    Dim 2 order: same as `choices` list, recorded in metadata
+        for persona_name, lens in all_logit_lens.items():
+            safe_name = persona_name.replace(" ", "_")
+            torch.save(lens, self.out_dir / f"logit_lens_{safe_name}.pt")
+            logger.info(f"Saved logit_lens_{safe_name}.pt  shape={list(lens.shape)}")
+
+        # 3. Answer logits table (final layer only — full-layer view is in logit_lens)
         logits_df = pd.DataFrame(logit_rows)
         logits_df.to_csv(self.out_dir / "answer_logits.csv", index=False)
         logger.info(f"Saved answer_logits.csv  ({len(logits_df)} rows)")
 
-        # 3. Paired answers table
+        # 4. Paired answers table
         paired = self._build_paired_answers(logits_df, persona_names)
         paired.to_csv(self.out_dir / "paired_answers.csv", index=False)
         logger.info(f"Saved paired_answers.csv  ({len(paired)} rows)")
 
-        # 4. Metadata
+        # 5. Metadata
+        bytes_per_act = n_questions * n_layers * d_model * 2  # float16
+        bytes_per_lens = n_questions * n_layers * 4 * 2       # float16, 4 choices
         metadata = {
             "model_name": self.config.model_name,
             "task_file": self.config.task_file,
@@ -257,9 +316,17 @@ class ActivationProbing(BaseExperiment):
             "question_ids": question_ids,
             "persona_names": persona_names,
             "answer_token_ids": {k: int(v) for k, v in answer_token_ids.items()},
+            "logit_lens_choice_order": choices,  # dim-2 order for logit_lens_*.pt
             "answer_instruction": ANSWER_INSTRUCTION,
             "seed": self.config.seed,
             "sample_size": self.config.sample_size,
+            "approx_size_mb": {
+                "activations_per_persona": round(bytes_per_act / 1e6, 1),
+                "logit_lens_per_persona": round(bytes_per_lens / 1e6, 2),
+                "total_all_personas": round(
+                    (bytes_per_act + bytes_per_lens) * len(persona_names) / 1e6, 1
+                ),
+            },
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         with open(self.out_dir / "metadata.json", "w") as f:
