@@ -19,3 +19,6 @@ build/
 
 # OS
 .DS_Store
+
+# Experiment results (large files, downloaded separately)
+results/raw/
