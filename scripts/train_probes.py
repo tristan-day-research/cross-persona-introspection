@@ -17,7 +17,6 @@ Outputs (saved to <collection_dir>/probes/):
 import argparse
 import json
 import logging
-import sys
 from pathlib import Path
 
 import joblib
@@ -25,7 +24,6 @@ import numpy as np
 import pandas as pd
 import torch
 from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import StratifiedKFold
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from tqdm import tqdm
 

@@ -155,9 +155,9 @@ activation_probing_dev:
 
 activation_probing_full:
   experiment_name: activation_probing
-  model_name: "dphn/Dolphin-Mistral-24B-Venice-Edition"
+  # model_name: "dphn/Dolphin-Mistral-24B-Venice-Edition"
+  model_name: "meta-llama/Llama-3.1-8B-Instruct"
   model_dtype: bfloat16   # A100 80GB required
-  # model_name: "meta-llama/Llama-3.1-8B-Instruct"
   # model_dtype: float16
   batch_size: 1
   personas:
