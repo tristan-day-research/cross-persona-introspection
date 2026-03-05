@@ -64,38 +64,41 @@ def load_collection(collection_dir: Path):
     logits_df = pd.read_csv(collection_dir / "answer_logits.csv")
     paired_df = pd.read_csv(collection_dir / "paired_answers.csv")
 
-    # Validate question order
+    # Validate question coverage (order doesn't matter — we reindex later)
     for pname in persona_names:
-        persona_qids = logits_df[logits_df["persona"] == pname]["question_id"].tolist()
-        if persona_qids != question_ids:
-            raise ValueError(f"Question order mismatch for {pname} in answer_logits.csv")
+        persona_qids = set(logits_df[logits_df["persona"] == pname]["question_id"])
+        expected = set(question_ids)
+        if persona_qids != expected:
+            missing = expected - persona_qids
+            extra = persona_qids - expected
+            raise ValueError(
+                f"Question mismatch for {pname} in answer_logits.csv. "
+                f"Missing: {missing}, Extra: {extra}"
+            )
 
-    if paired_df["question_id"].tolist() != question_ids:
-        raise ValueError("Question order mismatch in paired_answers.csv")
+    paired_qids = set(paired_df["question_id"])
+    if paired_qids != set(question_ids):
+        raise ValueError("Question mismatch in paired_answers.csv")
 
     return metadata, activations, logits_df, paired_df
 
 
-def make_splits(question_ids: list[str], labels: np.ndarray, seed: int = 42):
+def make_splits(question_ids: list[str], seed: int = 42):
     """Create train/val/test splits by question_id (60/20/20).
 
-    Uses stratified split on the first persona's answers to keep class balance.
+    Uses a seeded random shuffle split (not stratified).
     """
     rng = np.random.RandomState(seed)
     n = len(question_ids)
     indices = np.arange(n)
     rng.shuffle(indices)
 
-    # Stratified split: 60% train, 20% val, 20% test
     n_test = max(1, int(0.2 * n))
     n_val = max(1, int(0.2 * n))
-    n_train = n - n_val - n_test
 
-    # Simple shuffle split (stratification is nice-to-have but not critical
-    # with small label sets; keeps code simple)
-    train_idx = indices[:n_train]
-    val_idx = indices[n_train:n_train + n_val]
-    test_idx = indices[n_train + n_val:]
+    train_idx = indices[:n - n_val - n_test]
+    val_idx = indices[n - n_val - n_test:n - n_test]
+    test_idx = indices[n - n_test:]
 
     return (
         train_idx.tolist(),
@@ -113,7 +116,7 @@ def train_probe_for_layer(
 ) -> tuple[LogisticRegression, StandardScaler]:
     """Train a logistic regression probe with standardized features.
 
-    Uses cross-validation on training set to pick regularization strength.
+    Picks regularization strength (C) by validation set accuracy.
     """
     scaler = StandardScaler()
     X_train_s = scaler.fit_transform(X_train)
@@ -192,7 +195,7 @@ def main():
                 f"Disagreement: {disagree_mask.sum()}/{len(disagree_mask)}")
 
     # Split by question_id
-    train_idx, val_idx, test_idx = make_splits(question_ids, labels[p1], seed)
+    train_idx, val_idx, test_idx = make_splits(question_ids, seed)
 
     # Save split manifest
     out_dir = collection_dir / "probes"
@@ -305,9 +308,12 @@ def main():
                     "true_answer_act_persona": answers[act_p][qi],
                     "is_agreement": bool(agree_mask[qi]),
                 }
-                # Add per-class probabilities
-                for ci, cls_label in enumerate(le.classes_):
-                    row[f"prob_{cls_label}"] = float(pred_proba[i, ci])
+                # Add per-class probabilities (safe: probe may lack some classes)
+                for cls_label in le.classes_:
+                    row[f"prob_{cls_label}"] = 0.0
+                for ci, cls_label in enumerate(probe.classes_):
+                    global_label = le.inverse_transform([cls_label])[0]
+                    row[f"prob_{global_label}"] = float(pred_proba[i, ci])
                 prediction_rows.append(row)
 
     # Save metrics
