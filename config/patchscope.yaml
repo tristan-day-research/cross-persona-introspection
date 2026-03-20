@@ -55,6 +55,7 @@ relevancy:
 # ── Interpretation prompt templates ──────────────────────────────────────
 # Each template provides task-specific instructions appended after the base
 # interpretation prompt. Placeholders: {question_text}, {options}, {statement}
+
 interpretation_templates:
   open_summary:
     instructions: >
@@ -111,6 +112,7 @@ interpretation_base_prompt: |
   If the representation is unclear, make your best guess based only on it.
 
 # ── Question sampling ────────────────────────────────────────────────
+
 # Filter by category_id from the task file. Empty list = use all categories.
 categories: ["cat_1", "cat_4"]
 

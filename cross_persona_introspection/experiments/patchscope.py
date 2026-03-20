@@ -596,9 +596,21 @@ class PatchscopeExperiment(BaseExperiment):
             for qi, question in enumerate(self.questions):
                 qid = question.get("question_id", f"q{qi}")
 
+                # Skip questions where extraction failed entirely
+                if not activations.get(sp_name, {}).get(qi, {}):
+                    logger.warning(
+                        f"Skipping {sp_name} q={qid}: extraction produced no activations"
+                    )
+                    continue
+
                 for src_layer in source_layers:
-                    # Get the real activation (may be empty if extraction failed)
+                    # Get the real activation (may be empty if extraction failed for this layer)
                     real_act = activations.get(sp_name, {}).get(qi, {}).get(src_layer)
+                    if real_act is None:
+                        logger.warning(
+                            f"Skipping {sp_name} q={qid} layer={src_layer}: no activation"
+                        )
+                        continue
 
                     # Get a shuffled activation (from a different question)
                     shuffled_act = None
@@ -701,12 +713,8 @@ class PatchscopeExperiment(BaseExperiment):
                                                 do_sample=gen_cfg.get("do_sample", False),
                                             )
                                         else:
-                                            # "real" condition
-                                            if real_act is None:
-                                                record.error = "no source activation available"
-                                                record.timestamp = datetime.now(timezone.utc).isoformat()
-                                                self.records.append(record)
-                                                continue
+                                            # "real" condition — real_act guaranteed non-None
+                                            # by the skip-check above
                                             gen_text = inject_and_generate(
                                                 model, tokenizer, device,
                                                 interp_messages, real_act,
