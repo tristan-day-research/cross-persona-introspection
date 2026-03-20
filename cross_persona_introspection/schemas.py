@@ -192,6 +192,10 @@ class PatchscopeRecord:
     source_layer: int
     injection_layer: int
     injection_mode: str  # "replace" or "add"
+    # Evaluator system prompt (raw, before chat template)
+    evaluator_system_prompt: str = ""
+    # Full prompt sent to model (exact text including special tokens, system prompt, MCQ, etc.)
+    interpretation_prompt: str = ""
     # Results
     generated_text: str = ""
     parsed_answer: Optional[str] = None

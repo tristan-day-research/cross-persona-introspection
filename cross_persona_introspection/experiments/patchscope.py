@@ -179,6 +179,60 @@ def _format_question_for_source(question: dict) -> str:
     return "\n".join(lines)
 
 
+# ── Constrained answer parsing ───────────────────────────────────────────
+
+# Expected keywords per template — search the full response for these
+_TEMPLATE_KEYWORDS: dict[str, list[str]] = {
+    "answer_extraction": ["A", "B", "C", "D"],
+    "persona_probe": ["CONSERVATIVE", "PROGRESSIVE"],
+    "agreement_probe": ["AGREE", "DISAGREE"],
+    "self_recognition": ["SELF", "OTHER"],
+}
+
+
+def _parse_constrained(template_name: str, generated_text: str) -> tuple[Optional[str], bool]:
+    """Parse a constrained response by searching for expected keywords.
+
+    Returns (parsed_answer, parse_success). Searches the full response text
+    for known keywords rather than blindly taking the first word, since models
+    often wrap answers in preamble like "Based on the representation, ...".
+    """
+    keywords = _TEMPLATE_KEYWORDS.get(template_name)
+    if not keywords:
+        # Unknown template — fall back to first alphabetic token
+        cleaned = re.sub(r"[^A-Za-z\s]", "", generated_text.strip()).upper()
+        first = cleaned.split()[0] if cleaned.split() else None
+        return (first, first is not None)
+
+    text_upper = generated_text.upper()
+
+    # For answer_extraction, look for standalone A/B/C/D (not inside words)
+    if template_name == "answer_extraction":
+        # First try: response is just a letter
+        stripped = generated_text.strip().upper()
+        if stripped and stripped[0] in "ABCD" and (len(stripped) == 1 or not stripped[1].isalpha()):
+            return (stripped[0], True)
+        # Second try: find last standalone letter (models often explain then answer)
+        for match in reversed(list(re.finditer(r'\b([ABCD])\b', text_upper))):
+            return (match.group(1), True)
+        return (None, False)
+
+    # For other templates: find the first matching keyword in the text
+    # Sort by position in text (earliest match wins)
+    found = []
+    for kw in keywords:
+        # Use word boundary to avoid matching substrings (e.g. "DISAGREE" contains "AGREE")
+        match = re.search(r'\b' + kw + r'\b', text_upper)
+        if match:
+            found.append((match.start(), kw))
+
+    if found:
+        found.sort(key=lambda x: x[0])
+        return (found[0][1], True)
+
+    return (None, False)
+
+
 # ── Core patching functions ──────────────────────────────────────────────
 
 
@@ -727,18 +781,16 @@ class PatchscopeExperiment(BaseExperiment):
                                                 do_sample=gen_cfg.get("do_sample", False),
                                             )
 
+                                        record.evaluator_system_prompt = eval_persona.system_prompt or ""
+                                        record.interpretation_prompt = interp_text
                                         record.generated_text = gen_text
 
-                                        # Parse constrained answers
+                                        # Parse constrained answers — search for
+                                        # expected keywords, not first word
                                         if tmpl_cfg.get("constrained", False):
-                                            cleaned = gen_text.strip().upper()
-                                            # Try to extract first word/letter
-                                            if cleaned:
-                                                first_word = cleaned.split()[0] if cleaned.split() else ""
-                                                first_word = re.sub(r"[^A-Z]", "", first_word)
-                                                if first_word:
-                                                    record.parsed_answer = first_word
-                                                    record.parse_success = True
+                                            record.parsed_answer, record.parse_success = (
+                                                _parse_constrained(tmpl_name, gen_text)
+                                            )
 
                                         # Relevancy scores (optional, expensive)
                                         if (
@@ -909,6 +961,43 @@ class PatchscopeExperiment(BaseExperiment):
             f"Generated  : {datetime.now(timezone.utc).isoformat()}",
             f"Run name   : {base_name}",
             f"Total time : {elapsed_str}  ({elapsed:.1f}s)",
+            f"Records    : {len(self.records)}",
+            f"Errors     : {sum(1 for r in self.records if r.error)}",
+            "",
+        ]
+
+        # ── Matrix dimensions
+        ps = self.ps_config
+        n_questions = len(self.questions)
+        n_src = len(ps.get("source_personas", []))
+        n_eval = len(ps.get("evaluator_personas", []))
+        n_templates = len(ps.get("interpretation_templates", {}))
+        conditions = ["real"]
+        if ps.get("controls", {}).get("text_only_baseline"):
+            conditions.append("text_only_baseline")
+        if ps.get("controls", {}).get("shuffled_activation"):
+            conditions.append("shuffled")
+        n_conditions = len(conditions)
+
+        if ps.get("layer_sweep", {}).get("enabled"):
+            n_src_layers = len(ps["layer_sweep"]["source_layers"])
+            n_inj_layers = len(ps["layer_sweep"]["injection_layers"])
+        else:
+            num_model_layers = self.backend.model.config.num_hidden_layers if self.backend else "?"
+            n_src_layers = len(_resolve_layers(ps["extraction"]["layers"], num_model_layers)) if isinstance(num_model_layers, int) else "?"
+            n_inj_layers = 1
+
+        total = n_questions * n_src * n_src_layers * n_inj_layers * n_eval * n_templates * n_conditions
+        lines += [sep, "MATRIX DIMENSIONS", thin]
+        lines += [
+            f"  questions           : {n_questions}",
+            f"  source_personas     : {n_src}  {ps.get('source_personas', [])}",
+            f"  extraction_layers   : {n_src_layers}",
+            f"  injection_layers    : {n_inj_layers}",
+            f"  evaluator_personas  : {n_eval}  {ps.get('evaluator_personas', [])}",
+            f"  templates           : {n_templates}  {list(ps.get('interpretation_templates', {}).keys())}",
+            f"  conditions          : {n_conditions}  {conditions}",
+            f"  total cells         : {total}",
             "",
         ]
 
