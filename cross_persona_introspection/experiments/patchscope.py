@@ -597,10 +597,10 @@ class PatchscopeExperiment(BaseExperiment):
         style = injection_cfg.get("placeholder_style", "patchscopes")
         if style == "patchscopes":
             num_placeholders = 1
-            configured_placeholder = "?"
+            configured_placeholder = "___"
         elif style == "selfie":
             num_placeholders = 5
-            configured_placeholder = "<unk>"
+            configured_placeholder = "___"
         else:  # "custom"
             num_placeholders = int(injection_cfg["num_placeholders"])
             configured_placeholder = injection_cfg.get("placeholder_token", "auto")

@@ -35,10 +35,13 @@ injection:
   alpha: 1.0
 
   # Placeholder style — controls both the token and count.
-  #   "patchscopes" — 1 × "?" token (Ghandeharioun et al., arXiv:2401.06102)
-  #   "selfie"      — 5 × <unk> tokens (Chen et al., arXiv:2403.10949)
+  #   "patchscopes" — 1 × "___" token (inspired by Ghandeharioun et al., arXiv:2401.06102)
+  #   "selfie"      — 5 × "___" tokens (inspired by Chen et al., arXiv:2403.10949)
+  #                   NOTE: Llama 3.1 has no <unk> token, so we use "___" (single
+  #                   token, semantically neutral). The original SelfIE paper used
+  #                   <unk> on LLaMA-2 which had a real unk token.
   #   "custom"      — use placeholder_token and num_placeholders below
-  placeholder_style: "selfie"
+  placeholder_style: "patchscopes"
 
   # Only used when placeholder_style: "custom"
   num_placeholders: 1
