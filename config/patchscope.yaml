@@ -110,6 +110,15 @@ interpretation_base_prompt: |
   Do NOT rely on your own preferences, beliefs, or prior tendencies.
   If the representation is unclear, make your best guess based only on it.
 
+# ── Question sampling ────────────────────────────────────────────────
+# Filter by category_id from the task file. Empty list = use all categories.
+categories: ["cat_1", "cat_4"]
+
+# How many questions to sample per category. null = use all in that category.
+# This is applied AFTER category filtering and BEFORE the global sample_size
+# from experiments.yaml. If both are set, this takes precedence.
+samples_per_category: 1
+
 # ── Experiment matrix personas ───────────────────────────────────────────
 # Source personas: whose activations we extract
 source_personas:

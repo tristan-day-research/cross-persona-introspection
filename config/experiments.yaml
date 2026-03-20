@@ -179,7 +179,7 @@ patchscope_dev:
   personas: []                    # loaded from patchscope.yaml
   task_sets: []
   task_file: "opposing_personas_politics.json"
-  sample_size: 5
+  sample_size: null               # category sampling in patchscope.yaml handles this
   seed: 42
   model_dtype: float16
   patchscope_config: "patchscope.yaml"

@@ -56,16 +56,52 @@ def _load_patchscope_config(config_filename: str) -> dict:
         return yaml.safe_load(f)
 
 
-def _load_questions(task_file: str, sample_size: Optional[int], seed: int) -> list[dict]:
-    """Load questions from JSON task file, optionally sample."""
+def _load_questions(
+    task_file: str,
+    sample_size: Optional[int],
+    seed: int,
+    categories: Optional[list[str]] = None,
+    samples_per_category: Optional[int] = None,
+) -> list[dict]:
+    """Load questions from JSON task file with optional category filtering and sampling.
+
+    Args:
+        task_file: JSON filename in tasks/ directory.
+        sample_size: Global cap on total questions (applied last, from experiments.yaml).
+        seed: Random seed for reproducible sampling.
+        categories: If non-empty, only keep questions whose category_id is in this list.
+        samples_per_category: If set, sample this many questions from each category.
+    """
     path = TASKS_DIR / task_file
     if not path.exists():
         raise FileNotFoundError(f"Task file not found: {path}")
     with open(path) as f:
         questions = json.load(f)
+
+    # Filter by category
+    if categories:
+        questions = [q for q in questions if q.get("category_id") in categories]
+        logger.info(f"Category filter {categories}: {len(questions)} questions remain")
+
+    # Sample per category
+    if samples_per_category is not None:
+        rng = random.Random(seed)
+        by_cat: dict[str, list[dict]] = {}
+        for q in questions:
+            by_cat.setdefault(q.get("category_id", "unknown"), []).append(q)
+        sampled = []
+        for cat_id in sorted(by_cat.keys()):
+            pool = by_cat[cat_id]
+            n = min(samples_per_category, len(pool))
+            sampled.extend(rng.sample(pool, n))
+        questions = sampled
+        logger.info(f"Sampled {samples_per_category}/category: {len(questions)} questions total")
+
+    # Global sample_size cap (from experiments.yaml)
     if sample_size is not None and sample_size < len(questions):
         rng = random.Random(seed)
         questions = rng.sample(questions, sample_size)
+
     return questions
 
 
@@ -367,10 +403,20 @@ class PatchscopeExperiment(BaseExperiment):
         self.records: list[PatchscopeRecord] = []
         self._sample_prompts: dict[str, dict] = {}  # template -> {prompt, response}
         self._errors: list[str] = []
+        self._run_elapsed: float = 0.0
+        # Output paths — set early so incremental saves work
+        self._jsonl_path: Optional[Path] = None
+        self._log_path: Optional[Path] = None
+        self._base_name: str = ""
+        self._last_flush: int = 0  # records count at last flush
 
     def setup(self) -> None:
+        import transformers
         import torch as _torch
         from cross_persona_introspection.backends.hf_backend import HFBackend
+
+        # Suppress "Both max_new_tokens and max_length seem to have been set" warnings
+        transformers.logging.set_verbosity_error()
 
         # Load patchscope-specific config
         if not self.config.patchscope_config:
@@ -391,8 +437,45 @@ class PatchscopeExperiment(BaseExperiment):
         task_file = self.config.task_file
         if not task_file:
             raise ValueError("patchscope experiment requires 'task_file' in experiment config")
-        self.questions = _load_questions(task_file, self.config.sample_size, self.config.seed)
+        self.questions = _load_questions(
+            task_file,
+            sample_size=self.config.sample_size,
+            seed=self.config.seed,
+            categories=self.ps_config.get("categories") or None,
+            samples_per_category=self.ps_config.get("samples_per_category"),
+        )
         logger.info(f"Loaded {len(self.questions)} questions from {task_file}")
+
+    def _init_output_paths(self) -> None:
+        """Set up output file paths once, early, so incremental saves work."""
+        if self._jsonl_path is not None:
+            return  # already initialised
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        model_short = _model_short_name(self.config.model_name)
+        if self.ps_config.get("layer_sweep", {}).get("enabled", False):
+            exp_type = "layer_sweep"
+        else:
+            exp_type = "matrix"
+        self._base_name = f"patchscope_{model_short}_{timestamp}_{exp_type}"
+        out_dir = Path(self.config.output_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        self._jsonl_path = out_dir / f"{self._base_name}.jsonl"
+        self._log_path = out_dir / f"{self._base_name}.txt"
+
+    def _flush_results(self) -> None:
+        """Write all records collected so far to JSONL (overwrite) and update the log."""
+        if self._jsonl_path is None:
+            self._init_output_paths()
+        # Write full JSONL (overwrite — keeps file consistent if interrupted)
+        with open(self._jsonl_path, "w") as f:
+            for record in self.records:
+                f.write(json.dumps(asdict(record), default=str) + "\n")
+        # Update companion log
+        self._write_log(self._log_path, self._base_name)
+        self._last_flush = len(self.records)
+        logger.info(
+            f"  Checkpoint: flushed {len(self.records)} records to {self._jsonl_path.name}"
+        )
 
     def run(self) -> None:
         assert self.backend is not None
@@ -401,6 +484,7 @@ class PatchscopeExperiment(BaseExperiment):
         device = self.backend.input_device
         ps = self.ps_config
 
+        self._init_output_paths()
         run_start = time.monotonic()
 
         num_layers = model.config.num_hidden_layers
@@ -704,7 +788,13 @@ class PatchscopeExperiment(BaseExperiment):
                                     if cell_count % 50 == 0:
                                         logger.info(f"  Progress: {cell_count}/{total_cells} cells")
 
+                                    # Incremental save every 100 new records
+                                    if len(self.records) - self._last_flush >= 100:
+                                        self._run_elapsed = time.monotonic() - run_start
+                                        self._flush_results()
+
         self._run_elapsed = time.monotonic() - run_start
+        self._flush_results()
         logger.info(f"Completed {len(self.records)} records in {self._run_elapsed:.1f}s")
 
     def evaluate(self) -> dict:
@@ -788,34 +878,10 @@ class PatchscopeExperiment(BaseExperiment):
         return metrics
 
     def save_results(self) -> str:
-        """Save JSONL results and companion .txt log. Returns output path."""
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        model_short = _model_short_name(self.config.model_name)
-
-        # Determine experiment type suffix
-        if self.ps_config.get("layer_sweep", {}).get("enabled", False):
-            exp_type = "layer_sweep"
-        else:
-            exp_type = "matrix"
-
-        base_name = f"patchscope_{model_short}_{timestamp}_{exp_type}"
-        out_dir = Path(self.config.output_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
-
-        jsonl_path = out_dir / f"{base_name}.jsonl"
-        log_path = out_dir / f"{base_name}.txt"
-
-        # Write JSONL
-        with open(jsonl_path, "w") as f:
-            for record in self.records:
-                f.write(json.dumps(asdict(record), default=str) + "\n")
-        logger.info(f"Saved {len(self.records)} records to {jsonl_path}")
-
-        # Write companion log
-        self._write_log(log_path, base_name)
-        logger.info(f"Saved log to {log_path}")
-
-        return str(jsonl_path)
+        """Final save — run() already flushes incrementally, this is the last write."""
+        self._init_output_paths()
+        self._flush_results()
+        return str(self._jsonl_path)
 
     def _write_log(self, log_path: Path, base_name: str) -> None:
         """Write the detailed companion .txt log file."""
