@@ -45,7 +45,7 @@ class HFBackend:
         input_text = self.tokenizer.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True
         )
-        input_ids = self.tokenizer.encode(input_text, return_tensors="pt").to(self.device)
+        input_ids = self.tokenizer.encode(input_text, return_tensors="pt").to(self.input_device)
         attention_mask = torch.ones_like(input_ids)
 
         with torch.no_grad():
@@ -67,7 +67,7 @@ class HFBackend:
         input_text = self.tokenizer.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True
         )
-        input_ids = self.tokenizer.encode(input_text, return_tensors="pt").to(self.device)
+        input_ids = self.tokenizer.encode(input_text, return_tensors="pt").to(self.input_device)
 
         with torch.no_grad():
             outputs = self.model(input_ids)
@@ -184,7 +184,7 @@ class HFBackend:
         Use this for base (non-instruct) models where the prompt is a
         plain text completion prefix (e.g. few-shot examples).
         """
-        input_ids = self.tokenizer.encode(prompt, return_tensors="pt").to(self.device)
+        input_ids = self.tokenizer.encode(prompt, return_tensors="pt").to(self.input_device)
         attention_mask = torch.ones_like(input_ids)
 
         with torch.no_grad():
@@ -208,7 +208,7 @@ class HFBackend:
         i.e., exactly what the model predicts comes after the full prompt.
         This is the correct position for extracting answer letter logprobs.
         """
-        input_ids = self.tokenizer.encode(prompt, return_tensors="pt").to(self.device)
+        input_ids = self.tokenizer.encode(prompt, return_tensors="pt").to(self.input_device)
 
         with torch.no_grad():
             outputs = self.model(input_ids)
@@ -267,7 +267,7 @@ class HFBackend:
         input_text = self.tokenizer.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True
         )
-        input_ids = self.tokenizer.encode(input_text, return_tensors="pt").to(self.device)
+        input_ids = self.tokenizer.encode(input_text, return_tensors="pt").to(self.input_device)
 
         with torch.no_grad():
             outputs = self.model(input_ids, use_cache=True)
@@ -289,7 +289,7 @@ class HFBackend:
         before generating. This is NOT activation patching — we are simply reusing
         past_key_values and continuing decoding with a different suffix.
         """
-        suffix_ids = self.tokenizer.encode(suffix_text, add_special_tokens=False, return_tensors="pt").to(self.device)
+        suffix_ids = self.tokenizer.encode(suffix_text, add_special_tokens=False, return_tensors="pt").to(self.input_device)
 
         # Run the suffix through the model using the cached prefix KV
         with torch.no_grad():
@@ -330,7 +330,7 @@ class HFBackend:
         Useful for measuring source-state metrics at the pause point when
         the suffix is just the choice prompt.
         """
-        suffix_ids = self.tokenizer.encode(suffix_text, add_special_tokens=False, return_tensors="pt").to(self.device)
+        suffix_ids = self.tokenizer.encode(suffix_text, add_special_tokens=False, return_tensors="pt").to(self.input_device)
 
         with torch.no_grad():
             outputs = self.model(suffix_ids, past_key_values=past_key_values)
