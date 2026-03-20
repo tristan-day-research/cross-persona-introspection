@@ -25,7 +25,7 @@ injection:
   # Injection layer k in the interpretation forward pass.
   # SelfIE ablation (Figure 11) found k < 20 best for 80-layer models.
   # For 32-layer models, k=3 is a good default.
-  layer: 3
+  layer: 8
 
   # "replace" — overwrite hidden state at placeholder positions (Patchscopes default)
   # "add"     — activation * alpha added to existing hidden state
@@ -38,7 +38,7 @@ injection:
   #   "patchscopes" — 1 × "?" token (Ghandeharioun et al., arXiv:2401.06102)
   #   "selfie"      — 5 × <unk> tokens (Chen et al., arXiv:2403.10949)
   #   "custom"      — use placeholder_token and num_placeholders below
-  placeholder_style: "patchscopes"
+  placeholder_style: "selfie"
 
   # Only used when placeholder_style: "custom"
   num_placeholders: 1
@@ -58,63 +58,196 @@ relevancy:
   max_tokens: 64   # limit relevancy computation to first N generated tokens
 
 # ── Interpretation prompt templates ──────────────────────────────────────
-# Each template provides task-specific instructions appended after the base
-# interpretation prompt. Placeholders: {question_text}, {options}, {statement}
+
+# Each template has two prompt styles:
+#
+#   patchscopes: Pattern-completion style. The {placeholder} token goes at the
+#     END so the model is forced to "complete" what the patched activation
+#     represents. No explicit instructions — the prompt structure does the work.
+#
+#   selfie: Instructional style. The {placeholder} tokens go in the MIDDLE as a
+#     "data block" with instructions around them telling the model to interpret.
+#
+# Use {placeholder} to mark where the token(s) go.
+# Use {question_text}, {options}, {statement} for question content.
 
 interpretation_templates:
-  open_summary:
-    instructions: >
-      Describe what this representation encodes about the model's reasoning,
-      beliefs, or intended answer.
-    constrained: false
+
+  # ── Core 3 (strongest causal claims) ──────────────────────────────────
 
   answer_extraction:
-    instructions: >
+    patchscopes: |
       Question: {question_text}
       Options: {options}
 
-      Respond with a single letter.
+      Answer: {placeholder}
+    selfie: |
+      Base your answer only on this representation.
+
+      {placeholder}
+
+      Question: {question_text}
+      Options: {options}
+
+      What answer did the model choose? Respond with a single letter.
     constrained: true
 
   persona_probe:
-    instructions: >
-      Which persona most likely produced this representation?
-      Conservative / Progressive
+    patchscopes: |
+      Persona: {placeholder}
+    selfie: |
+      Base your answer only on this representation.
 
-      Respond with a single word.
+      {placeholder}
+
+      Which persona produced this? Respond with: Conservative or Progressive.
     constrained: true
 
   agreement_probe:
-    instructions: >
-      Does this representation correspond to agreeing or disagreeing with the
-      following statement: {statement}
+    patchscopes: |
+      Statement: {statement}
+
+      Position: {placeholder}
+    selfie: |
+      Base your answer only on this representation.
+
+      {placeholder}
+
+      Does this correspond to agreeing or disagreeing with: {statement}
 
       Respond with: Agree or Disagree.
     constrained: true
 
-  belief_probe:
-    instructions: >
-      What belief or opinion is encoded in this representation?
-      Describe briefly.
+  # ── Secondary (weaker causal claims) ──────────────────────────────────
+
+  open_summary:
+    patchscopes: |
+      Representation: {placeholder}
+    selfie: |
+      Base your answer only on this representation.
+
+      {placeholder}
+
+      Describe what this representation encodes.
     constrained: false
 
   self_recognition:
-    instructions: >
-      Was this representation produced by you (the current persona) or a
-      different persona?
+    patchscopes: |
+      Source: {placeholder}
+    selfie: |
+      Base your answer only on this representation.
 
+      {placeholder}
+
+      Was this produced by you (Self) or a different persona (Other)?
       Respond with: Self or Other.
     constrained: true
 
-# ── Base interpretation prompt (persona-neutral) ─────────────────────────
-# Prepended to every interpretation prompt. Critical: never mentions the
-# evaluator's persona — we want the model to read the activation, not guess.
-interpretation_base_prompt: |
-  You are given access to an internal representation from a language model.
+# ── Old verbose templates (kept for reference) ─────────────────────────
+#   open_summary:
+#     patchscopes: |
+#       A language model produced an internal representation while answering a question.
+#       The representation encodes: {placeholder}
+#     selfie: |
+#       You are given access to an internal representation from a language model.
+#       Base your answer ONLY on the provided internal representation.
+#
+#       {placeholder}
+#
+#       Describe what this representation encodes about the model's reasoning,
+#       beliefs, or intended answer.
+#     constrained: false
+#
+#   answer_extraction:
+#     patchscopes: |
+#       A language model is answering a multiple choice question.
+#
+#       Question: {question_text}
+#       Options: {options}
+#
+#       The model's answer is: {placeholder}
+#     selfie: |
+#       You are given access to an internal representation from a language model
+#       that was answering the following question.
+#
+#       {placeholder}
+#
+#       Question: {question_text}
+#       Options: {options}
+#
+#       Based ONLY on the representation above, what answer did the model choose?
+#       Respond with a single letter.
+#     constrained: true
+#
+#   persona_probe:
+#     patchscopes: |
+#       A language model answered a political question. Its perspective was either
+#       Conservative or Progressive.
+#
+#       The model's perspective was: {placeholder}
+#     selfie: |
+#       You are given access to an internal representation from a language model.
+#       Base your answer ONLY on the provided internal representation.
+#
+#       {placeholder}
+#
+#       Which persona most likely produced this representation?
+#       Respond with a single word: Conservative or Progressive.
+#     constrained: true
+#
+#   agreement_probe:
+#     patchscopes: |
+#       A language model was asked: {statement}
+#
+#       The model's position is: {placeholder}
+#     selfie: |
+#       You are given access to an internal representation from a language model.
+#       Base your answer ONLY on the provided internal representation.
+#
+#       {placeholder}
+#
+#       Does this representation correspond to agreeing or disagreeing with the
+#       following statement: {statement}
+#
+#       Respond with: Agree or Disagree.
+#     constrained: true
+#
+#   belief_probe:
+#     patchscopes: |
+#       A language model formed an opinion on a political question.
+#       The belief encoded in its representation is: {placeholder}
+#     selfie: |
+#       You are given access to an internal representation from a language model.
+#       Base your answer ONLY on the provided internal representation.
+#
+#       {placeholder}
+#
+#       What belief or opinion is encoded in this representation?
+#       Describe briefly.
+#     constrained: false
+#
+#   self_recognition:
+#     patchscopes: |
+#       A language model produced a representation. It was produced by either
+#       the current persona (Self) or a different persona (Other).
+#
+#       The answer is: {placeholder}
+#     selfie: |
+#       You are given access to an internal representation from a language model.
+#       Base your answer ONLY on the provided internal representation.
+#
+#       {placeholder}
+#
+#       Was this representation produced by you (the current persona) or a
+#       different persona?
+#
+#       Respond with: Self or Other.
+#     constrained: true
 
-  Base your answer ONLY on the provided internal representation.
-  Do NOT rely on your own preferences, beliefs, or prior tendencies.
-  If the representation is unclear, make your best guess based only on it.
+# ── Base interpretation prompt ───────────────────────────────────────────
+# Only used for selfie style (patchscopes templates are self-contained).
+# Set to empty string "" to disable.
+interpretation_base_prompt: ""
 
 # ── Question sampling ────────────────────────────────────────────────
 

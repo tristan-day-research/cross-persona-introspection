@@ -719,31 +719,35 @@ class PatchscopeExperiment(BaseExperiment):
                             eval_persona = self.all_personas[eval_name]
 
                             for tmpl_name, tmpl_cfg in templates.items():
-                                # Build interpretation prompt
-                                instructions = tmpl_cfg["instructions"]
-                                # Fill template placeholders
-                                instructions = instructions.replace(
-                                    "{question_text}", question.get("question_text", "")
-                                )
+                                # Select prompt style matching placeholder_style
+                                prompt_style = style if style in ("patchscopes", "selfie") else "selfie"
+                                prompt_template = tmpl_cfg.get(prompt_style)
+                                if not prompt_template:
+                                    # Fall back to whichever exists
+                                    prompt_template = tmpl_cfg.get("selfie") or tmpl_cfg.get("patchscopes", "")
+
+                                # Build the placeholder string
+                                placeholder_str = (placeholder_token + " ") * num_placeholders
+                                placeholder_str = placeholder_str.strip()
+
+                                # Fill all template variables
                                 options_str = ", ".join(
                                     f"{k}) {v}"
                                     for k, v in question.get("options", {}).items()
                                 )
-                                instructions = instructions.replace("{options}", options_str)
-                                instructions = instructions.replace(
+                                user_content = prompt_template.strip()
+                                user_content = user_content.replace("{placeholder}", placeholder_str)
+                                user_content = user_content.replace(
+                                    "{question_text}", question.get("question_text", "")
+                                )
+                                user_content = user_content.replace("{options}", options_str)
+                                user_content = user_content.replace(
                                     "{statement}", question.get("question_text", "")
                                 )
 
-                                # Build the placeholder string
-                                placeholder_str = (placeholder_token + " ") * num_placeholders
-
-                                user_content = (
-                                    base_prompt.strip()
-                                    + "\n\n"
-                                    + placeholder_str.strip()
-                                    + "\n\n"
-                                    + instructions.strip()
-                                )
+                                # Prepend base prompt if non-empty (selfie style)
+                                if base_prompt.strip():
+                                    user_content = base_prompt.strip() + "\n\n" + user_content
 
                                 interp_messages = []
                                 if eval_persona.system_prompt:
