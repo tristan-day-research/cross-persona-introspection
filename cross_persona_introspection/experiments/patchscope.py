@@ -153,17 +153,45 @@ def _get_transformer_layers(model):
         )
 
 
-def _get_placeholder_token_id(tokenizer) -> int:
-    """Pick a neutral placeholder token ID.
+def _get_placeholder_token_id(tokenizer, configured_token: str = "auto") -> int:
+    """Resolve the placeholder token to a single token ID.
 
-    Prefers unk_token, falls back to pad_token, then a rarely-used token.
+    Args:
+        tokenizer: HuggingFace tokenizer.
+        configured_token: From config — "auto", "?", "<unk>", or any literal string.
+
+    Patchscopes uses "?" (single token at position i*).
+    SelfIE uses unk_token (multiple filler tokens).
     """
-    if tokenizer.unk_token_id is not None and tokenizer.unk_token_id != tokenizer.eos_token_id:
+    if configured_token == "auto":
+        # Try "?" first (Patchscopes default)
+        ids = tokenizer.encode("?", add_special_tokens=False)
+        if len(ids) == 1:
+            return ids[0]
+        # Fall back to unk
+        if tokenizer.unk_token_id is not None and tokenizer.unk_token_id != tokenizer.eos_token_id:
+            return tokenizer.unk_token_id
+        if tokenizer.pad_token_id is not None and tokenizer.pad_token_id != tokenizer.eos_token_id:
+            return tokenizer.pad_token_id
+        return 1
+
+    # Explicit token string from config
+    if configured_token == "<unk>" and tokenizer.unk_token_id is not None:
         return tokenizer.unk_token_id
-    if tokenizer.pad_token_id is not None and tokenizer.pad_token_id != tokenizer.eos_token_id:
+    if configured_token == "<pad>" and tokenizer.pad_token_id is not None:
         return tokenizer.pad_token_id
-    # Last resort: use token ID 1 (often <unk> or <pad> in most tokenizers)
-    return 1
+
+    # Try encoding the literal string
+    ids = tokenizer.encode(configured_token, add_special_tokens=False)
+    if len(ids) == 1:
+        return ids[0]
+
+    # Multi-token — warn and use first token
+    logger.warning(
+        f"Placeholder token '{configured_token}' encodes to {len(ids)} tokens "
+        f"({ids}); using first token ID {ids[0]}"
+    )
+    return ids[0] if ids else 1
 
 
 def _format_question_for_source(question: dict) -> str:
@@ -564,10 +592,24 @@ class PatchscopeExperiment(BaseExperiment):
 
         injection_mode = injection_cfg["mode"]
         injection_alpha = float(injection_cfg["alpha"])
-        num_placeholders = int(injection_cfg["num_placeholders"])
 
-        placeholder_token_id = _get_placeholder_token_id(tokenizer)
+        # Resolve placeholder style
+        style = injection_cfg.get("placeholder_style", "patchscopes")
+        if style == "patchscopes":
+            num_placeholders = 1
+            configured_placeholder = "?"
+        elif style == "selfie":
+            num_placeholders = 5
+            configured_placeholder = "<unk>"
+        else:  # "custom"
+            num_placeholders = int(injection_cfg["num_placeholders"])
+            configured_placeholder = injection_cfg.get("placeholder_token", "auto")
+
+        placeholder_token_id = _get_placeholder_token_id(tokenizer, configured_placeholder)
         placeholder_token = tokenizer.decode([placeholder_token_id])
+
+        control_sample_rate = float(controls_cfg.get("control_sample_rate", 1.0))
+        control_rng = random.Random(self.config.seed + 7)  # separate seed for control sampling
         logger.info(
             f"Placeholder token: id={placeholder_token_id} repr={repr(placeholder_token)} "
             f"× {num_placeholders}"
@@ -724,6 +766,10 @@ class PatchscopeExperiment(BaseExperiment):
                                 ).nonzero(as_tuple=True)[0].tolist()
 
                                 for condition in conditions:
+                                    # Skip control conditions based on sampling rate
+                                    if condition != "real" and control_sample_rate < 1.0:
+                                        if control_rng.random() > control_sample_rate:
+                                            continue
                                     cell_count += 1
                                     record = PatchscopeRecord(
                                         experiment="patchscope",

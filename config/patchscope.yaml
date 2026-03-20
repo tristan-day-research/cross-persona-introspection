@@ -34,10 +34,15 @@ injection:
   # Scaling factor for "add" mode (ignored when mode="replace")
   alpha: 1.0
 
-  # Number of placeholder tokens inserted in the interpretation prompt.
-  # All are replaced with the same source activation during injection.
-  # SelfIE uses 5; this is configurable.
-  num_placeholders: 5
+  # Placeholder style — controls both the token and count.
+  #   "patchscopes" — 1 × "?" token (Ghandeharioun et al., arXiv:2401.06102)
+  #   "selfie"      — 5 × <unk> tokens (Chen et al., arXiv:2403.10949)
+  #   "custom"      — use placeholder_token and num_placeholders below
+  placeholder_style: "patchscopes"
+
+  # Only used when placeholder_style: "custom"
+  num_placeholders: 1
+  placeholder_token: "?"
 
 # ── Generation ───────────────────────────────────────────────────────────
 generation:
@@ -119,7 +124,7 @@ categories: ["cat_1", "cat_4"]
 # How many questions to sample per category. null = use all in that category.
 # This is applied AFTER category filtering and BEFORE the global sample_size
 # from experiments.yaml. If both are set, this takes precedence.
-samples_per_category: 1
+samples_per_category: 5
 
 # ── Experiment matrix personas ───────────────────────────────────────────
 # Source personas: whose activations we extract
@@ -139,6 +144,10 @@ controls:
   text_only_baseline: true
   # Patch a random activation from a DIFFERENT question (shuffled control)
   shuffled_activation: true
+  # Fraction of (question × layer) cells to run controls on (0.0-1.0).
+  # 1.0 = run controls on every cell (default). 0.25 = run on ~25% of cells.
+  # The "real" condition always runs on all cells.
+  control_sample_rate: 0.25
 
 # ── Layer sweep mode ─────────────────────────────────────────────────────
 # When enabled, overrides extraction.layers and injection.layer to sweep

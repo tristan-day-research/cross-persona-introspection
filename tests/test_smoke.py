@@ -224,5 +224,5 @@ def test_patchscope_helpers():
     # Config loading
     cfg = _load_patchscope_config("patchscope.yaml")
     assert cfg["injection"]["layer"] == 3
-    assert cfg["injection"]["num_placeholders"] == 5
+    assert cfg["injection"]["num_placeholders"] == 1
     assert "open_summary" in cfg["interpretation_templates"]
