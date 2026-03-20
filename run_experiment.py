@@ -90,6 +90,7 @@ def build_run_config(exp_config: dict) -> RunConfig:
         use_persona_suffixes=exp_config.get("use_persona_suffixes", False),
         confidence_legend=exp_config.get("confidence_legend", "bins"),
         task_file=exp_config.get("task_file"),
+        patchscope_config=exp_config.get("patchscope_config"),
         model_dtype=exp_config.get("model_dtype"),
         batch_size=exp_config.get("batch_size", 1),
         openrouter_model=exp_config.get("openrouter_model"),
@@ -129,6 +130,9 @@ def run_one(config_name: str, overrides: list[str] | None = None) -> None:
     elif experiment_name == "activation_probing":
         from cross_persona_introspection.experiments.activation_probing import ActivationProbing
         experiment = ActivationProbing(run_config, used_personas)
+    elif experiment_name == "patchscope":
+        from cross_persona_introspection.experiments.patchscope import PatchscopeExperiment
+        experiment = PatchscopeExperiment(run_config, personas)
     else:
         raise ValueError(f"Unknown experiment: {experiment_name}")
 

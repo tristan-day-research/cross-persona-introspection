@@ -10,14 +10,15 @@ def test_imports():
     from cross_persona_introspection import schemas
     from cross_persona_introspection.backends import hf_backend, openrouter_backend
     from cross_persona_introspection.core import persona_inducer, task_loader, response_parser, kv_cache, results_logger
-    from cross_persona_introspection.experiments import base, cross_persona_prediction, source_reporter_matrix
+    from cross_persona_introspection.experiments import base, cross_persona_prediction, source_reporter_matrix, patchscope
     from cross_persona_introspection.evaluation import choice_matching, calibration, llm_judge
 
 
 def test_schemas():
     """Schema dataclasses should instantiate correctly."""
     from cross_persona_introspection.schemas import (
-        PersonaConfig, TaskItem, RunConfig, TrialRecord, ParsedResponse, SourceStateMetrics
+        PersonaConfig, TaskItem, RunConfig, TrialRecord, ParsedResponse, SourceStateMetrics,
+        PatchscopeRecord,
     )
 
     p = PersonaConfig(name="test", system_prompt="You are a test.", description="test persona")
@@ -166,3 +167,62 @@ def test_config_loading():
     with open(config_dir / "experiments.yaml") as f:
         experiments = yaml.safe_load(f)
     assert "cross_persona_prediction_dev" in experiments
+    assert "patchscope_dev" in experiments
+
+    with open(config_dir / "patchscope.yaml") as f:
+        ps_config = yaml.safe_load(f)
+    assert "extraction" in ps_config
+    assert "injection" in ps_config
+    assert "interpretation_templates" in ps_config
+
+
+def test_patchscope_record():
+    """PatchscopeRecord should instantiate and serialize correctly."""
+    from cross_persona_introspection.schemas import PatchscopeRecord
+    from dataclasses import asdict
+
+    rec = PatchscopeRecord(
+        experiment="patchscope",
+        model="test-model",
+        question_id="q1",
+        source_persona="persona_conservative",
+        evaluator_persona="neutral_evaluator",
+        template_name="open_summary",
+        condition="real",
+        source_layer=8,
+        injection_layer=3,
+        injection_mode="replace",
+        generated_text="This represents a conservative view.",
+        parsed_answer=None,
+        parse_success=False,
+    )
+    d = asdict(rec)
+    assert d["condition"] == "real"
+    assert d["source_layer"] == 8
+    # Should be JSON-serializable
+    json.dumps(d, default=str)
+
+
+def test_patchscope_helpers():
+    """Test patchscope helper functions that don't require a model."""
+    from cross_persona_introspection.experiments.patchscope import (
+        _load_patchscope_config,
+        _model_short_name,
+        _resolve_layers,
+    )
+
+    # Layer resolution
+    assert _resolve_layers("all", 32) == list(range(32))
+    assert _resolve_layers("middle", 32) == list(range(10, 20))
+    assert _resolve_layers(8, 32) == [8]
+    assert _resolve_layers([4, 8, 12], 32) == [4, 8, 12]
+
+    # Model short name
+    assert "llama" in _model_short_name("meta-llama/Llama-3.1-8B-Instruct")
+    assert "tinyllama" in _model_short_name("TinyLlama/TinyLlama-1.1B-Chat-v1.0")
+
+    # Config loading
+    cfg = _load_patchscope_config("patchscope.yaml")
+    assert cfg["injection"]["layer"] == 3
+    assert cfg["injection"]["num_placeholders"] == 5
+    assert "open_summary" in cfg["interpretation_templates"]

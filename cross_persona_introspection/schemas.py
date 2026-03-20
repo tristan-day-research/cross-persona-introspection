@@ -55,6 +55,8 @@ class RunConfig:
     confidence_legend: str = "bins"
     # Activation probing: direct task file path (relative to tasks/ dir)
     task_file: Optional[str] = None
+    # Patchscope: path to patchscope-specific config (relative to config/ dir)
+    patchscope_config: Optional[str] = None
     # Model dtype: "bfloat16", "float16", "float32", or None (auto: float16 on CUDA)
     model_dtype: Optional[str] = None
     # Inference batch size (activation_probing only; >1 requires padding support)
@@ -167,6 +169,39 @@ class ConfidenceEntropyRecord:
     # Exact prompts sent to the model (for auditing/debugging)
     mc_prompt_text: Optional[str] = None  # full MC prompt (base model: raw text, instruct: None)
     confidence_prompt_text: Optional[str] = None  # full confidence prompt
+    # Meta
+    error: Optional[str] = None
+    timestamp: Optional[str] = None
+
+
+@dataclass
+class PatchscopeRecord:
+    """One trial of the patchscope activation interpretation experiment.
+
+    References:
+      Patchscopes: Ghandeharioun et al., arXiv:2401.06102
+      SelfIE: Chen et al., arXiv:2403.10949
+    """
+    experiment: str
+    model: str
+    question_id: str
+    source_persona: str
+    evaluator_persona: str
+    template_name: str
+    condition: str  # "real", "text_only_baseline", "shuffled"
+    source_layer: int
+    injection_layer: int
+    injection_mode: str  # "replace" or "add"
+    # Results
+    generated_text: str = ""
+    parsed_answer: Optional[str] = None
+    parse_success: bool = False
+    # Relevancy scores (SelfIE Section 3.2)
+    relevancy_scores: Optional[list[float]] = None
+    mean_relevancy: Optional[float] = None
+    # Ground truth (from source's direct answer under that persona)
+    source_direct_answer: Optional[str] = None
+    source_answer_probs: Optional[dict[str, float]] = None
     # Meta
     error: Optional[str] = None
     timestamp: Optional[str] = None

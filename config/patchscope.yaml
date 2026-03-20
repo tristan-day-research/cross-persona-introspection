@@ -1,0 +1,140 @@
+# Patchscope activation interpretation pipeline configuration
+#
+# References:
+#   Patchscopes: Ghandeharioun et al., "Patchscopes: A Unifying Framework for
+#     Inspecting Hidden Representations of Language Models", ICML 2024. arXiv:2401.06102
+#   SelfIE: Chen et al., "SelfIE: Self-Interpretation of Large Language Model
+#     Embeddings", ICML 2024. arXiv:2403.10949
+
+# ── Activation extraction ────────────────────────────────────────────────
+extraction:
+  # Which token position to extract from.
+  #   "last"  — final token of the source prompt (default, most common)
+  #   integer — explicit 0-based index into the source sequence
+  token_position: "last"
+
+  # Which layer(s) to extract from (ℓ* in Patchscopes notation).
+  #   "all"    — every transformer layer (expensive)
+  #   "middle" — auto-select middle third of layers
+  #   list     — explicit layer indices, e.g. [8, 16, 24]
+  #   integer  — single layer index
+  layers: "middle"
+
+# ── Activation injection ─────────────────────────────────────────────────
+injection:
+  # Injection layer k in the interpretation forward pass.
+  # SelfIE ablation (Figure 11) found k < 20 best for 80-layer models.
+  # For 32-layer models, k=3 is a good default.
+  layer: 3
+
+  # "replace" — overwrite hidden state at placeholder positions (Patchscopes default)
+  # "add"     — activation * alpha added to existing hidden state
+  mode: "replace"
+
+  # Scaling factor for "add" mode (ignored when mode="replace")
+  alpha: 1.0
+
+  # Number of placeholder tokens inserted in the interpretation prompt.
+  # All are replaced with the same source activation during injection.
+  # SelfIE uses 5; this is configurable.
+  num_placeholders: 5
+
+# ── Generation ───────────────────────────────────────────────────────────
+generation:
+  max_new_tokens: 128
+  temperature: 0.0
+  do_sample: false
+
+# ── Relevancy score (SelfIE Section 3.2) ─────────────────────────────────
+# relevancy(t_i) = P(t_i | WITH injection) - P(t_i | WITHOUT injection)
+# Requires two forward passes per generated token — expensive.
+relevancy:
+  enabled: false
+  max_tokens: 64   # limit relevancy computation to first N generated tokens
+
+# ── Interpretation prompt templates ──────────────────────────────────────
+# Each template provides task-specific instructions appended after the base
+# interpretation prompt. Placeholders: {question_text}, {options}, {statement}
+interpretation_templates:
+  open_summary:
+    instructions: >
+      Describe what this representation encodes about the model's reasoning,
+      beliefs, or intended answer.
+    constrained: false
+
+  answer_extraction:
+    instructions: >
+      Question: {question_text}
+      Options: {options}
+
+      Respond with a single letter.
+    constrained: true
+
+  persona_probe:
+    instructions: >
+      Which persona most likely produced this representation?
+      Conservative / Progressive
+
+      Respond with a single word.
+    constrained: true
+
+  agreement_probe:
+    instructions: >
+      Does this representation correspond to agreeing or disagreeing with the
+      following statement: {statement}
+
+      Respond with: Agree or Disagree.
+    constrained: true
+
+  belief_probe:
+    instructions: >
+      What belief or opinion is encoded in this representation?
+      Describe briefly.
+    constrained: false
+
+  self_recognition:
+    instructions: >
+      Was this representation produced by you (the current persona) or a
+      different persona?
+
+      Respond with: Self or Other.
+    constrained: true
+
+# ── Base interpretation prompt (persona-neutral) ─────────────────────────
+# Prepended to every interpretation prompt. Critical: never mentions the
+# evaluator's persona — we want the model to read the activation, not guess.
+interpretation_base_prompt: |
+  You are given access to an internal representation from a language model.
+
+  Base your answer ONLY on the provided internal representation.
+  Do NOT rely on your own preferences, beliefs, or prior tendencies.
+  If the representation is unclear, make your best guess based only on it.
+
+# ── Experiment matrix personas ───────────────────────────────────────────
+# Source personas: whose activations we extract
+source_personas:
+  - persona_conservative
+  - persona_progressive
+
+# Evaluator personas: who interprets the activations
+evaluator_personas:
+  - persona_conservative
+  - persona_progressive
+  - neutral_evaluator
+
+# ── Controls ─────────────────────────────────────────────────────────────
+controls:
+  # Run interpretation with NO activation patched (question-only baseline)
+  text_only_baseline: true
+  # Patch a random activation from a DIFFERENT question (shuffled control)
+  shuffled_activation: true
+
+# ── Layer sweep mode ─────────────────────────────────────────────────────
+# When enabled, overrides extraction.layers and injection.layer to sweep
+# across multiple (source_layer, injection_layer) pairs.
+layer_sweep:
+  enabled: false
+  # Layers to extract activations from (ℓ* values)
+  source_layers: [4, 8, 12, 16, 20, 24, 28, 31]
+  # Layers to inject at (k values)
+  injection_layers: [1, 3, 5, 8]

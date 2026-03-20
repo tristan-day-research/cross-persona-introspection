@@ -171,6 +171,52 @@ activation_probing_full:
   max_new_tokens: 1
   temperature: 0.0
 
+# ── Patchscope configs ──────────────────────────────────────────────────
+
+patchscope_dev:
+  experiment_name: patchscope
+  model_name: "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+  personas: []                    # loaded from patchscope.yaml
+  task_sets: []
+  task_file: "opposing_personas_politics.json"
+  sample_size: 5
+  seed: 42
+  model_dtype: float16
+  patchscope_config: "patchscope.yaml"
+
+patchscope_llama31_8b:
+  experiment_name: patchscope
+  model_name: "meta-llama/Llama-3.1-8B-Instruct"
+  personas: []
+  task_sets: []
+  task_file: "opposing_personas_politics.json"
+  sample_size: null
+  seed: 42
+  model_dtype: float16
+  patchscope_config: "patchscope.yaml"
+
+patchscope_llama33_70b:
+  experiment_name: patchscope
+  model_name: "meta-llama/Llama-3.3-70B-Instruct"
+  personas: []
+  task_sets: []
+  task_file: "opposing_personas_politics.json"
+  sample_size: null
+  seed: 42
+  model_dtype: bfloat16
+  patchscope_config: "patchscope.yaml"
+
+patchscope_dolphin:
+  experiment_name: patchscope
+  model_name: "cognitivecomputations/dolphin-2.9.4-llama3.1-8b"
+  personas: []
+  task_sets: []
+  task_file: "opposing_personas_politics.json"
+  sample_size: null
+  seed: 42
+  model_dtype: float16
+  patchscope_config: "patchscope.yaml"
+
 confidence_entropy_base_full:
   experiment_name: confidence_entropy_base
   model_name: "meta-llama/Llama-3.1-8B"
