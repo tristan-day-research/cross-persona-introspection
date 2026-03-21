@@ -384,6 +384,122 @@ def inject_and_generate(
     return tokenizer.decode(new_tokens, skip_special_tokens=True)
 
 
+# ── Template → valid choices mapping ─────────────────────────────────────
+
+TEMPLATE_CHOICES: dict[str, list[str]] = {
+    "answer_extraction": ["A", "B", "C", "D"],
+    "persona_probe": ["Conservative", "Progressive"],
+    "agreement_probe": ["Agree", "Disagree"],
+    "self_recognition": ["Self", "Other"],
+}
+
+
+def _resolve_choice_token_ids(
+    tokenizer, choices: list[str]
+) -> dict[str, int]:
+    """Map each choice string to a single token ID.
+
+    Tries the bare string first, then space-prefixed (e.g. " A" vs "A"),
+    since models often predict a leading space after a prompt.
+    Returns {choice_label: token_id}.
+    """
+    token_ids = {}
+    for choice in choices:
+        for variant in [choice, f" {choice}"]:
+            ids = tokenizer.encode(variant, add_special_tokens=False)
+            if len(ids) == 1:
+                token_ids[choice] = ids[0]
+                break
+        if choice not in token_ids:
+            # Multi-token — use first token and warn
+            ids = tokenizer.encode(choice, add_special_tokens=False)
+            if ids:
+                token_ids[choice] = ids[0]
+                logger.warning(
+                    f"Choice '{choice}' is multi-token ({ids}); using first token {ids[0]}"
+                )
+    return token_ids
+
+
+def inject_and_extract_logits(
+    model,
+    tokenizer,
+    device,
+    messages: list[dict],
+    activation: Optional[torch.Tensor],
+    injection_layer: int,
+    placeholder_positions: list[int],
+    choice_token_ids: dict[str, int],
+    mode: str = "replace",
+    alpha: float = 1.0,
+) -> dict:
+    """Run interpretation forward pass with activation injection, extract logits over choices.
+
+    Single forward pass, no generation. Returns the probability distribution
+    over the constrained choice set at the next-token position.
+
+    If activation is None (text_only_baseline), runs without injection.
+
+    Returns:
+        {"probs": {choice: float}, "logits": {choice: float}, "predicted": str}
+    """
+    input_text = tokenizer.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=True
+    )
+    input_ids = tokenizer.encode(input_text, return_tensors="pt").to(device)
+
+    transformer_layers = _get_transformer_layers(model)
+
+    handle = None
+    if activation is not None:
+        act = activation.to(device)
+
+        def injection_hook(module, input, output):
+            hidden = output[0] if isinstance(output, tuple) else output
+            for pos in placeholder_positions:
+                if pos < hidden.shape[1]:
+                    if mode == "replace":
+                        hidden[0, pos, :] = act
+                    elif mode == "add":
+                        hidden[0, pos, :] = hidden[0, pos, :] + alpha * act
+            if isinstance(output, tuple):
+                return (hidden,) + output[1:]
+            return hidden
+
+        handle = transformer_layers[injection_layer].register_forward_hook(injection_hook)
+
+    try:
+        with torch.no_grad():
+            outputs = model(input_ids)
+    finally:
+        if handle is not None:
+            handle.remove()
+
+    # Next-token logits (last position)
+    next_logits = outputs.logits[0, -1, :]  # (vocab_size,)
+
+    # Extract logits for valid choices only
+    choice_logit_values = {}
+    for choice, tid in choice_token_ids.items():
+        choice_logit_values[choice] = next_logits[tid].item()
+
+    # Softmax over choices only (constrained distribution)
+    logit_tensor = torch.tensor(list(choice_logit_values.values()))
+    probs = F.softmax(logit_tensor, dim=0)
+    choice_probs = {
+        choice: probs[i].item()
+        for i, choice in enumerate(choice_logit_values.keys())
+    }
+
+    predicted = max(choice_probs, key=choice_probs.get)
+
+    return {
+        "probs": choice_probs,
+        "logits": choice_logit_values,
+        "predicted": predicted,
+    }
+
+
 def compute_relevancy_scores(
     model,
     tokenizer,
@@ -577,6 +693,7 @@ class PatchscopeExperiment(BaseExperiment):
         controls_cfg = ps["controls"]
         templates = ps["interpretation_templates"]
         base_prompt = ps["interpretation_base_prompt"]
+        constrained_mode = gen_cfg.get("constrained_mode", "generate")
 
         source_persona_names = ps["source_personas"]
         evaluator_persona_names = ps["evaluator_personas"]
@@ -610,6 +727,20 @@ class PatchscopeExperiment(BaseExperiment):
 
         control_sample_rate = float(controls_cfg.get("control_sample_rate", 1.0))
         control_rng = random.Random(self.config.seed + 7)  # separate seed for control sampling
+
+        # Pre-resolve choice token IDs for logits mode
+        all_choice_token_ids: dict[str, dict[str, int]] = {}
+        if constrained_mode == "logits":
+            for tmpl_name in TEMPLATE_CHOICES:
+                if tmpl_name in templates:
+                    choices = TEMPLATE_CHOICES[tmpl_name]
+                    all_choice_token_ids[tmpl_name] = _resolve_choice_token_ids(
+                        tokenizer, choices
+                    )
+                    logger.info(
+                        f"Logits mode — {tmpl_name} choices: "
+                        f"{all_choice_token_ids[tmpl_name]}"
+                    )
         logger.info(
             f"Placeholder token: id={placeholder_token_id} repr={repr(placeholder_token)} "
             f"× {num_placeholders}"
@@ -791,82 +922,109 @@ class PatchscopeExperiment(BaseExperiment):
                                     )
 
                                     try:
+                                        # Pick activation for this condition
                                         if condition == "text_only_baseline":
-                                            # No activation injection — just generate
-                                            gen_text = self.backend.generate(
-                                                interp_messages,
-                                                max_new_tokens=gen_cfg["max_new_tokens"],
-                                                temperature=gen_cfg["temperature"],
-                                                do_sample=gen_cfg.get("do_sample", False),
-                                            )
+                                            act_for_condition = None
                                         elif condition == "shuffled":
                                             if shuffled_act is None:
                                                 record.error = "no shuffled activation available"
                                                 record.timestamp = datetime.now(timezone.utc).isoformat()
                                                 self.records.append(record)
                                                 continue
-                                            gen_text = inject_and_generate(
-                                                model, tokenizer, device,
-                                                interp_messages, shuffled_act,
-                                                injection_layer=inj_layer,
-                                                placeholder_positions=placeholder_positions,
-                                                mode=injection_mode,
-                                                alpha=injection_alpha,
-                                                max_new_tokens=gen_cfg["max_new_tokens"],
-                                                temperature=gen_cfg["temperature"],
-                                                do_sample=gen_cfg.get("do_sample", False),
-                                            )
+                                            act_for_condition = shuffled_act
                                         else:
-                                            # "real" condition — real_act guaranteed non-None
-                                            # by the skip-check above
-                                            gen_text = inject_and_generate(
-                                                model, tokenizer, device,
-                                                interp_messages, real_act,
-                                                injection_layer=inj_layer,
-                                                placeholder_positions=placeholder_positions,
-                                                mode=injection_mode,
-                                                alpha=injection_alpha,
-                                                max_new_tokens=gen_cfg["max_new_tokens"],
-                                                temperature=gen_cfg["temperature"],
-                                                do_sample=gen_cfg.get("do_sample", False),
-                                            )
+                                            act_for_condition = real_act
 
                                         record.evaluator_system_prompt = eval_persona.system_prompt or ""
                                         record.interpretation_prompt = interp_text
-                                        record.generated_text = gen_text
 
-                                        # Parse constrained answers — search for
-                                        # expected keywords, not first word
-                                        if tmpl_cfg.get("constrained", False):
-                                            record.parsed_answer, record.parse_success = (
-                                                _parse_constrained(tmpl_name, gen_text)
-                                            )
+                                        # Decide: logits mode or generate mode
+                                        use_logits = (
+                                            constrained_mode == "logits"
+                                            and tmpl_cfg.get("constrained", False)
+                                            and tmpl_name in all_choice_token_ids
+                                        )
 
-                                        # Relevancy scores (optional, expensive)
-                                        if (
-                                            relevancy_cfg.get("enabled", False)
-                                            and condition == "real"
-                                            and real_act is not None
-                                        ):
-                                            gen_token_ids = tokenizer.encode(
-                                                gen_text, add_special_tokens=False
+                                        if use_logits:
+                                            # ── Logits mode: single forward pass, no generation ──
+                                            record.decode_mode = "logits"
+                                            result = inject_and_extract_logits(
+                                                model, tokenizer, device,
+                                                interp_messages, act_for_condition,
+                                                injection_layer=inj_layer,
+                                                placeholder_positions=placeholder_positions,
+                                                choice_token_ids=all_choice_token_ids[tmpl_name],
+                                                mode=injection_mode,
+                                                alpha=injection_alpha,
                                             )
-                                            if gen_token_ids:
-                                                rel_scores = compute_relevancy_scores(
+                                            record.choice_probs = result["probs"]
+                                            record.choice_logits = result["logits"]
+                                            record.predicted = result["predicted"]
+                                            record.parsed_answer = result["predicted"]
+                                            record.parse_success = True
+                                            record.generated_text = f"[logits] {result['predicted']}"
+
+                                            # Compute is_correct for answer_extraction
+                                            if tmpl_name == "answer_extraction" and record.source_direct_answer:
+                                                record.is_correct = (
+                                                    result["predicted"] == record.source_direct_answer
+                                                )
+
+                                        else:
+                                            # ── Generate mode: multi-token generation ──
+                                            record.decode_mode = "generate"
+                                            if act_for_condition is None:
+                                                gen_text = self.backend.generate(
+                                                    interp_messages,
+                                                    max_new_tokens=gen_cfg["max_new_tokens"],
+                                                    temperature=gen_cfg["temperature"],
+                                                    do_sample=gen_cfg.get("do_sample", False),
+                                                )
+                                            else:
+                                                gen_text = inject_and_generate(
                                                     model, tokenizer, device,
-                                                    interp_messages, real_act,
+                                                    interp_messages, act_for_condition,
                                                     injection_layer=inj_layer,
                                                     placeholder_positions=placeholder_positions,
                                                     mode=injection_mode,
                                                     alpha=injection_alpha,
-                                                    generated_token_ids=gen_token_ids,
-                                                    max_tokens=relevancy_cfg.get("max_tokens", 64),
+                                                    max_new_tokens=gen_cfg["max_new_tokens"],
+                                                    temperature=gen_cfg["temperature"],
+                                                    do_sample=gen_cfg.get("do_sample", False),
                                                 )
-                                                record.relevancy_scores = rel_scores
-                                                record.mean_relevancy = (
-                                                    sum(rel_scores) / len(rel_scores)
-                                                    if rel_scores else None
+                                            record.generated_text = gen_text
+
+                                            # Parse constrained answers from text
+                                            if tmpl_cfg.get("constrained", False):
+                                                record.parsed_answer, record.parse_success = (
+                                                    _parse_constrained(tmpl_name, gen_text)
                                                 )
+
+                                            # Relevancy scores (optional, expensive)
+                                            if (
+                                                relevancy_cfg.get("enabled", False)
+                                                and condition == "real"
+                                                and real_act is not None
+                                            ):
+                                                gen_token_ids = tokenizer.encode(
+                                                    gen_text, add_special_tokens=False
+                                                )
+                                                if gen_token_ids:
+                                                    rel_scores = compute_relevancy_scores(
+                                                        model, tokenizer, device,
+                                                        interp_messages, real_act,
+                                                        injection_layer=inj_layer,
+                                                        placeholder_positions=placeholder_positions,
+                                                        mode=injection_mode,
+                                                        alpha=injection_alpha,
+                                                        generated_token_ids=gen_token_ids,
+                                                        max_tokens=relevancy_cfg.get("max_tokens", 64),
+                                                    )
+                                                    record.relevancy_scores = rel_scores
+                                                    record.mean_relevancy = (
+                                                        sum(rel_scores) / len(rel_scores)
+                                                        if rel_scores else None
+                                                    )
 
                                         # Capture sample prompt (first of each template)
                                         sample_key = f"{tmpl_name}_{condition}"
@@ -879,7 +1037,7 @@ class PatchscopeExperiment(BaseExperiment):
                                                 "source_layer": src_layer,
                                                 "injection_layer": inj_layer,
                                                 "interp_prompt_text": interp_text,
-                                                "generated_text": gen_text,
+                                                "generated_text": record.generated_text,
                                                 "question_id": qid,
                                             }
 
@@ -899,7 +1057,7 @@ class PatchscopeExperiment(BaseExperiment):
                                         logger.info(f"  Progress: {cell_count}/{total_cells} cells")
 
                                     # Incremental save every 100 new records
-                                    if len(self.records) - self._last_flush >= 100:
+                                    if len(self.records) - self._last_flush >= 20:
                                         self._run_elapsed = time.monotonic() - run_start
                                         self._flush_results()
 

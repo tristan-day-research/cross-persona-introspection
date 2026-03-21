@@ -196,10 +196,17 @@ class PatchscopeRecord:
     evaluator_system_prompt: str = ""
     # Full prompt sent to model (exact text including special tokens, system prompt, MCQ, etc.)
     interpretation_prompt: str = ""
+    # Decoding mode: "logits" or "generate"
+    decode_mode: str = "generate"
     # Results
     generated_text: str = ""
     parsed_answer: Optional[str] = None
     parse_success: bool = False
+    # Logit-mode results (constrained single-token decode)
+    choice_probs: Optional[dict[str, float]] = None   # softmax over valid choices
+    choice_logits: Optional[dict[str, float]] = None   # raw logits for valid choices
+    predicted: Optional[str] = None                     # argmax choice
+    is_correct: Optional[bool] = None                   # predicted == source_direct_answer
     # Relevancy scores (SelfIE Section 3.2)
     relevancy_scores: Optional[list[float]] = None
     mean_relevancy: Optional[float] = None
