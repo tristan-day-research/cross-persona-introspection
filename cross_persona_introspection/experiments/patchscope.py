@@ -288,7 +288,8 @@ def extract_activation(
     input_text = tokenizer.apply_chat_template(
         messages, tokenize=False, add_generation_prompt=True
     )
-    input_ids = tokenizer.encode(input_text, return_tensors="pt").to(device)
+    # add_special_tokens=False because apply_chat_template already includes BOS
+    input_ids = tokenizer.encode(input_text, return_tensors="pt", add_special_tokens=False).to(device)
 
     captured = {}
     transformer_layers = _get_transformer_layers(model)
@@ -348,7 +349,8 @@ def inject_and_generate(
     input_text = tokenizer.apply_chat_template(
         messages, tokenize=False, add_generation_prompt=True
     )
-    input_ids = tokenizer.encode(input_text, return_tensors="pt").to(device)
+    # add_special_tokens=False because apply_chat_template already includes BOS
+    input_ids = tokenizer.encode(input_text, return_tensors="pt", add_special_tokens=False).to(device)
     attention_mask = torch.ones_like(input_ids)
 
     transformer_layers = _get_transformer_layers(model)
@@ -447,7 +449,8 @@ def inject_and_extract_logits(
     input_text = tokenizer.apply_chat_template(
         messages, tokenize=False, add_generation_prompt=True
     )
-    input_ids = tokenizer.encode(input_text, return_tensors="pt").to(device)
+    # add_special_tokens=False because apply_chat_template already includes BOS
+    input_ids = tokenizer.encode(input_text, return_tensors="pt", add_special_tokens=False).to(device)
 
     transformer_layers = _get_transformer_layers(model)
 
@@ -527,7 +530,8 @@ def compute_relevancy_scores(
     input_text = tokenizer.apply_chat_template(
         messages, tokenize=False, add_generation_prompt=True
     )
-    base_ids = tokenizer.encode(input_text, return_tensors="pt").to(device)
+    # add_special_tokens=False because apply_chat_template already includes BOS
+    base_ids = tokenizer.encode(input_text, return_tensors="pt", add_special_tokens=False).to(device)
 
     transformer_layers = _get_transformer_layers(model)
     act = activation.to(device)
@@ -896,7 +900,7 @@ class PatchscopeExperiment(BaseExperiment):
                                 interp_text = tokenizer.apply_chat_template(
                                     interp_messages, tokenize=False, add_generation_prompt=True
                                 )
-                                interp_ids = tokenizer.encode(interp_text, return_tensors="pt")
+                                interp_ids = tokenizer.encode(interp_text, return_tensors="pt", add_special_tokens=False)
                                 placeholder_positions = (
                                     interp_ids[0] == placeholder_token_id
                                 ).nonzero(as_tuple=True)[0].tolist()

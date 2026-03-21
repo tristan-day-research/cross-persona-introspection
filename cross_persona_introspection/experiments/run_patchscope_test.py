@@ -91,7 +91,7 @@ def extract_activation_raw(
     model, tokenizer, device, text: str, layer_idx: int, token_position: int
 ) -> torch.Tensor:
     """Extract activation from raw text (no chat template) at a specific token position."""
-    input_ids = tokenizer.encode(text, return_tensors="pt").to(device)
+    input_ids = tokenizer.encode(text, return_tensors="pt", add_special_tokens=False).to(device)
 
     captured = {}
     layers = _get_transformer_layers(model)
@@ -131,7 +131,7 @@ def inject_and_generate_raw(
     Returns:
         (generated_text, list_of_generated_tokens)
     """
-    input_ids = tokenizer.encode(text, return_tensors="pt").to(device)
+    input_ids = tokenizer.encode(text, return_tensors="pt", add_special_tokens=False).to(device)
     attention_mask = torch.ones_like(input_ids)
 
     layers = _get_transformer_layers(model)
@@ -171,7 +171,7 @@ def run_without_injection(
     model, tokenizer, device, text: str, max_new_tokens: int = 10
 ) -> str:
     """Baseline: generate from the target prompt without any activation injection."""
-    input_ids = tokenizer.encode(text, return_tensors="pt").to(device)
+    input_ids = tokenizer.encode(text, return_tensors="pt", add_special_tokens=False).to(device)
     attention_mask = torch.ones_like(input_ids)
 
     with torch.no_grad():
@@ -275,6 +275,17 @@ def main():
     logger.info(f"Target prompt: '{target_display}'")
     logger.info(f"Target tokens (around inject): ...{list(enumerate(target_tokens))[max(0,inject_pos-3):inject_pos+3]}")
     logger.info(f"Inject at '{inject_token}' position {inject_pos} = '{target_tokens[inject_pos]}'")
+
+    # ── Verify positions match actual model input ────────────────────
+    # These assertions catch the add_special_tokens mismatch bug
+    source_verify = tokenizer.decode([source_ids[extract_pos]])
+    target_verify = tokenizer.decode([target_ids[inject_pos]])
+    logger.info(f"VERIFY extract token at pos {extract_pos}: '{source_verify}'")
+    logger.info(f"VERIFY inject token at pos {inject_pos}: '{target_verify}'")
+    assert extract_word.lower() in source_verify.lower().strip() or source_verify.strip() in extract_word, (
+        f"Position mismatch! Expected '{extract_word}' at pos {extract_pos}, "
+        f"got '{source_verify}'. Token list: {list(enumerate(source_tokens))}"
+    )
 
     # ── Baseline (no injection) ──────────────────────────────────────
     logger.info("=== Baseline (no injection) ===")
