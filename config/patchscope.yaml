@@ -41,7 +41,7 @@ injection:
   #                   token, semantically neutral). The original SelfIE paper used
   #                   <unk> on LLaMA-2 which had a real unk token.
   #   "custom"      — use placeholder_token and num_placeholders below
-  placeholder_style: "patchscopes"
+  placeholder_stdyle: "patchscopes"
 
   # Only used when placeholder_style: "custom"
   num_placeholders: 1
