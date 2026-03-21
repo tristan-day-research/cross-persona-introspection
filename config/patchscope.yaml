@@ -85,6 +85,11 @@ relevancy:
 
 interpretation_templates:
 
+
+
+
+interpretation_templates:
+
   # ── Core 3 (strongest causal claims) ──────────────────────────────────
 
   answer_extraction:
@@ -94,28 +99,26 @@ interpretation_templates:
 
       Answer: {placeholder}
     selfie: |
-      Base your answer only on this representation.
-
       {placeholder}
 
       Question: {question_text}
       Options: {options}
 
-      What answer did the model choose? Respond with a single letter.
+      What answer did the model choose?
+      Respond with a single letter (A, B, C, or D).
     constrained: true
+
 
   persona_probe:
     patchscopes: |
-      This representation was produced by someone with either a Conservative or Progressive political perspective.
-      Political perspective: {placeholder}
+      Persona: {placeholder}
     selfie: |
-      Base your answer only on this representation.
-
       {placeholder}
 
-      Was this produced by someone with a Conservative or Progressive perspective?
+      Which persona produced this representation?
       Respond with: Conservative or Progressive.
     constrained: true
+
 
   agreement_probe:
     patchscopes: |
@@ -123,41 +126,119 @@ interpretation_templates:
 
       Position: {placeholder}
     selfie: |
-      Base your answer only on this representation.
-
       {placeholder}
 
-      Does this correspond to agreeing or disagreeing with: {statement}
+      Does this correspond to agreeing or disagreeing with the statement?
+
+      {statement}
 
       Respond with: Agree or Disagree.
     constrained: true
+
 
   # ── Secondary (weaker causal claims) ──────────────────────────────────
 
   open_summary:
     patchscopes: |
-      This representation encodes the following about the model's reasoning:
-      {placeholder}
+      Representation: {placeholder}
     selfie: |
-      Base your answer only on this representation.
-
       {placeholder}
 
-      Describe what this representation encodes.
+      Describe what this representation encodes about the model’s reasoning.
     constrained: false
+
 
   self_recognition:
     patchscopes: |
-      This representation was produced by either the current assistant (Self) or a different one (Other).
       Source: {placeholder}
     selfie: |
-      Base your answer only on this representation.
-
       {placeholder}
 
-      Was this produced by you (Self) or someone else (Other)?
+      Was this produced by you or another persona?
       Respond with: Self or Other.
     constrained: true
+
+
+### VERSION 2 ##############
+
+  # # ── Core 3 (strongest causal claims) ──────────────────────────────────
+
+  # answer_extraction:
+  #   patchscopes: |
+  #     Question: {question_text}
+  #     Options: {options}
+
+  #     Answer: {placeholder}
+  #   selfie: |
+  #     Base your answer only on this representation.
+
+  #     {placeholder}
+
+  #     Question: {question_text}
+  #     Options: {options}
+
+  #     What answer did the model choose? Respond with a single letter.
+  #   constrained: true
+
+  # persona_probe:
+  #   patchscopes: |
+  #     This representation was produced by someone with either a Conservative or Progressive political perspective.
+  #     Political perspective: {placeholder}
+  #   selfie: |
+  #     Base your answer only on this representation.
+
+  #     {placeholder}
+
+  #     Was this produced by someone with a Conservative or Progressive perspective?
+  #     Respond with: Conservative or Progressive.
+  #   constrained: true
+
+  # agreement_probe:
+  #   patchscopes: |
+  #     Statement: {statement}
+
+  #     Position: {placeholder}
+  #   selfie: |
+  #     Base your answer only on this representation.
+
+  #     {placeholder}
+
+  #     Does this correspond to agreeing or disagreeing with: {statement}
+
+  #     Respond with: Agree or Disagree.
+  #   constrained: true
+
+  # # ── Secondary (weaker causal claims) ──────────────────────────────────
+
+  # open_summary:
+  #   patchscopes: |
+  #     This representation encodes the following about the model's reasoning:
+  #     {placeholder}
+  #   selfie: |
+  #     Base your answer only on this representation.
+
+  #     {placeholder}
+
+  #     Describe what this representation encodes.
+  #   constrained: false
+
+  # self_recognition:
+  #   patchscopes: |
+  #     This representation was produced by either the current assistant (Self) or a different one (Other).
+  #     Source: {placeholder}
+  #   selfie: |
+  #     Base your answer only on this representation.
+
+  #     {placeholder}
+
+  #     Was this produced by you (Self) or someone else (Other)?
+  #     Respond with: Self or Other.
+  #   constrained: true
+
+
+
+
+
 
 # ── Old verbose templates (kept for reference) ─────────────────────────
 #   open_summary:
