@@ -124,6 +124,10 @@ def inject_and_generate_raw(
 ) -> tuple[str, list[str]]:
     """Inject activation into raw text at a specific position and generate.
 
+    Patches ALL layers from injection_layer onward during the prefill pass.
+    This ensures the KV cache at every layer contains the patched representation,
+    so generated tokens attend to the activation (not the original placeholder).
+
     Returns:
         (generated_text, list_of_generated_tokens)
     """
@@ -132,16 +136,26 @@ def inject_and_generate_raw(
 
     layers = _get_transformer_layers(model)
     act = activation.to(device)
+    seq_len = input_ids.shape[1]
 
-    def injection_hook(module, input, output):
-        hidden = output[0] if isinstance(output, tuple) else output
-        if inject_token_position < hidden.shape[1]:
-            hidden[0, inject_token_position, :] = act
-        if isinstance(output, tuple):
-            return (hidden,) + output[1:]
-        return hidden
+    def make_hook(layer_idx):
+        def injection_hook(module, input, output):
+            hidden = output[0] if isinstance(output, tuple) else output
+            # Only patch during prefill (full sequence), not during generation
+            # (single token). This prevents corrupting generated token positions.
+            if hidden.shape[1] == seq_len and inject_token_position < hidden.shape[1]:
+                hidden[0, inject_token_position, :] = act
+            if isinstance(output, tuple):
+                return (hidden,) + output[1:]
+            return hidden
+        return injection_hook
 
-    handle = layers[injection_layer].register_forward_hook(injection_hook)
+    # Hook ALL layers from injection_layer onward
+    handles = []
+    for i in range(injection_layer, len(layers)):
+        h = layers[i].register_forward_hook(make_hook(i))
+        handles.append(h)
+
     try:
         with torch.no_grad():
             output_ids = model.generate(
@@ -153,7 +167,8 @@ def inject_and_generate_raw(
                 pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
             )
     finally:
-        handle.remove()
+        for h in handles:
+            h.remove()
 
     new_token_ids = output_ids[0, input_ids.shape[1] :]
     generated_text = tokenizer.decode(new_token_ids, skip_special_tokens=True)
