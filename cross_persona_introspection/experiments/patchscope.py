@@ -908,11 +908,11 @@ class PatchscopeExperiment(BaseExperiment):
                                     cell_count += 1
                                     record = PatchscopeRecord(
                                         experiment="patchscope",
+                                        template_name=tmpl_name,
                                         model=self.config.model_name,
                                         question_id=qid,
                                         source_persona=sp_name,
                                         evaluator_persona=eval_name,
-                                        template_name=tmpl_name,
                                         condition=condition,
                                         source_layer=src_layer,
                                         injection_layer=inj_layer,
