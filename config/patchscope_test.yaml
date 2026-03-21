@@ -1,0 +1,69 @@
+# ── Patchscope Test ───────────────────────────────────────────────────
+# Reproduces the canonical example from Patchscopes (Ghandeharioun et al.,
+# ICML 2024, arXiv:2401.06102), Figure 1:
+#
+#   Source:  "Amazon's former CEO attended Oscars"
+#   Target:  "cat -> cat; 135 -> 135; hello -> hello; ?"
+#   Patch:   hidden state of "CEO" → hidden state of "?" in target
+#   Expect:  model generates "Jeff Bezos" or related token
+#
+# This verifies the core extract→inject→decode pipeline works correctly
+# before running persona experiments.
+
+model:
+  name: "meta-llama/Llama-3.1-8B-Instruct"
+  dtype: float16
+  device_map: "auto"
+
+# ── Source prompt ─────────────────────────────────────────────────────
+source:
+  # Raw text, NOT chat-templated — this is a base-model-style prompt
+  text: "Amazon's former CEO attended Oscars"
+  # Which token to extract from (the word "CEO")
+  extract_word: "CEO"
+  # If the word spans multiple tokens, use "last" subtoken
+  subtoken_strategy: "last"
+
+# ── Target prompt (few-shot token identity, from the paper §4.1) ─────
+target:
+  text: "cat -> cat; 135 -> 135; hello -> hello; ?"
+  # Which token to inject at
+  inject_token: "?"
+
+# ── Layer configuration ──────────────────────────────────────────────
+# Two modes:
+#   1. match_source_target: true  — sweep uses the SAME layer for both
+#      extract and inject (ℓ* = ℓ), per the paper's default.
+#   2. match_source_target: false — uses explicit layer_pairs below.
+
+layers:
+  # Sweep these layers when match_source_target is true
+  sweep: [5, 10, 15, 16, 17, 18, 19, 20, 25, 30]
+  match_source_target: true
+
+  # Explicit (source_layer, injection_layer) pairs.
+  # Used when match_source_target is false, OR always appended if present.
+  # Uncomment to test specific combos (e.g., deep extract → shallow inject):
+  # layer_pairs:
+  #   - [20, 3]    # deep source, shallow target (SelfIE-style)
+  #   - [20, 8]    # deep source, mid target
+  #   - [15, 3]
+  #   - [15, 8]
+  #   - [25, 5]
+  #   - [10, 10]   # same-layer baseline
+
+# ── Generation ───────────────────────────────────────────────────────
+generation:
+  max_new_tokens: 10
+  temperature: 0.0
+  do_sample: false
+
+# ── Additional test cases (always run after the main example) ────────
+extra_tests:
+  - source_text: "The Eiffel Tower is located in"
+    extract_word: "Tower"
+    expected_contains: "Paris"
+
+  - source_text: "Microsoft was founded by Bill"
+    extract_word: "Bill"
+    expected_contains: "Gates"
