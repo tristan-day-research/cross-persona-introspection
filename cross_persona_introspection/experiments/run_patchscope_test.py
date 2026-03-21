@@ -155,7 +155,7 @@ def inject_and_generate_raw(
                 temperature=temperature if do_sample else None,
                 do_sample=do_sample,
                 pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
-                use_cache=False,  # Disable KV cache so hook fires every step
+                use_cache=True,  # KV cache ON — hook only fires during prefill
             )
     finally:
         handle.remove()
