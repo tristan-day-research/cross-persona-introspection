@@ -231,24 +231,44 @@ def main():
     n_layers = len(_get_transformer_layers(model))
     logger.info(f"Model loaded: {n_layers} layers, device={device}")
 
-    # ── Tokenization debug ───────────────────────────────────────────
+    # ── Build source and target prompts ─────────────────────────────
     source_text = cfg["source"]["text"]
-    target_text = cfg["target"]["text"]
     extract_word = cfg["source"]["extract_word"]
-    inject_token = cfg["target"]["inject_token"]
     subtoken_strategy = cfg["source"].get("subtoken_strategy", "last")
 
+    target_style = cfg["target"].get("style", "raw")
+
+    if target_style == "chat":
+        # Build chat-templated target prompt
+        chat_messages = [
+            {"role": "system", "content": cfg["target"]["chat_system"]},
+            {"role": "user", "content": cfg["target"]["chat_user"]},
+        ]
+        target_text = tokenizer.apply_chat_template(
+            chat_messages, tokenize=False, add_generation_prompt=True
+        )
+        inject_token = cfg["target"]["chat_inject_token"]
+        target_display = cfg["target"]["chat_user"]
+    else:
+        target_text = cfg["target"]["raw_text"]
+        inject_token = cfg["target"]["raw_inject_token"]
+        target_display = target_text
+
+    # Tokenize source (always raw, no chat template)
     source_ids = tokenizer.encode(source_text, add_special_tokens=False)
     source_tokens = [tokenizer.decode([tid]) for tid in source_ids]
+    extract_pos = find_token_position(tokenizer, source_text, extract_word, subtoken_strategy)
+
+    # Tokenize target (may be chat-templated)
     target_ids = tokenizer.encode(target_text, add_special_tokens=False)
     target_tokens = [tokenizer.decode([tid]) for tid in target_ids]
-
-    extract_pos = find_token_position(tokenizer, source_text, extract_word, subtoken_strategy)
     inject_pos = find_token_position(tokenizer, target_text, inject_token, "last")
 
     logger.info(f"Source tokens: {list(enumerate(source_tokens))}")
     logger.info(f"Extract '{extract_word}' at position {extract_pos} = '{source_tokens[extract_pos]}'")
-    logger.info(f"Target tokens: {list(enumerate(target_tokens))}")
+    logger.info(f"Target style: {target_style}")
+    logger.info(f"Target prompt: '{target_display}'")
+    logger.info(f"Target tokens (around inject): ...{list(enumerate(target_tokens))[max(0,inject_pos-3):inject_pos+3]}")
     logger.info(f"Inject at '{inject_token}' position {inject_pos} = '{target_tokens[inject_pos]}'")
 
     # ── Baseline (no injection) ──────────────────────────────────────
@@ -381,7 +401,7 @@ def main():
             })
 
     # ── Save results ─────────────────────────────────────────────────
-    jsonl_path = RESULTS_DIR / f"patchscope_{model_short}_{timestamp}_sanity.jsonl"
+    jsonl_path = RESULTS_DIR / f"patchscope_{model_short}_{timestamp}_test.jsonl"
     with open(jsonl_path, "w") as f:
         for r in results:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
@@ -389,12 +409,13 @@ def main():
     # ── Write log file ───────────────────────────────────────────────
     log_path = jsonl_path.with_suffix(".txt")
     with open(log_path, "w") as f:
-        f.write(f"Patchscope Sanity Check\n{'=' * 60}\n\n")
+        f.write(f"Patchscope Test\n{'=' * 60}\n\n")
         f.write(f"Model: {model_name}\n")
         f.write(f"Dtype: {dtype_str}\n")
         f.write(f"Layers: {n_layers}\n")
         f.write(f"Device: {device}\n")
         f.write(f"Config: {config_path}\n")
+        f.write(f"Target style: {target_style}\n")
         f.write(f"Timestamp: {timestamp}\n\n")
 
         f.write(f"Source prompt (exact):\n  {source_text}\n\n")

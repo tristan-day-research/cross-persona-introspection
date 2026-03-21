@@ -24,11 +24,27 @@ source:
   # If the word spans multiple tokens, use "last" subtoken
   subtoken_strategy: "last"
 
-# ── Target prompt (few-shot token identity, from the paper §4.1) ─────
+# ── Target prompt ─────────────────────────────────────────────────────
+# Two styles to test:
+#   "raw"  — base-model-style few-shot token identity (from paper §4.1)
+#   "chat" — instruct-model-style with chat template
+#
+# The paper used raw prompts on base models. Instruct models need chat
+# prompts to produce meaningful output from patched activations.
+
 target:
-  text: "cat -> cat; 135 -> 135; hello -> hello; ?"
-  # Which token to inject at
-  inject_token: "?"
+  style: "chat"   # "raw" or "chat"
+
+  # Raw target (paper-style, for base models)
+  raw_text: "cat -> cat; 135 -> 135; hello -> hello; ?"
+  raw_inject_token: "?"
+
+  # Chat target (for instruct models)
+  # System prompt is intentionally minimal — we want the model to decode
+  # the activation, not follow elaborate instructions.
+  chat_system: "You are a helpful assistant."
+  chat_user: "What is this: ___"
+  chat_inject_token: "___"
 
 # ── Layer configuration ──────────────────────────────────────────────
 # Two modes:
@@ -38,19 +54,25 @@ target:
 
 layers:
   # Sweep these layers when match_source_target is true
-  sweep: [5, 10, 15, 16, 17, 18, 19, 20, 25, 30]
+  sweep: [1, 3, 5, 8, 10, 15, 20, 25, 30]
   match_source_target: true
 
   # Explicit (source_layer, injection_layer) pairs.
-  # Used when match_source_target is false, OR always appended if present.
-  # Uncomment to test specific combos (e.g., deep extract → shallow inject):
-  # layer_pairs:
-  #   - [20, 3]    # deep source, shallow target (SelfIE-style)
-  #   - [20, 8]    # deep source, mid target
-  #   - [15, 3]
-  #   - [15, 8]
-  #   - [25, 5]
-  #   - [10, 10]   # same-layer baseline
+  # Always appended after the sweep pairs.
+  # Tests deep-extract → shallow-inject (where Patchscopes works best):
+  layer_pairs:
+    - [15, 1]     # mid source → very early target
+    - [15, 3]     # mid source → early target
+    - [15, 5]     # mid source → shallow target
+    - [20, 1]
+    - [20, 3]
+    - [20, 5]
+    - [25, 1]
+    - [25, 3]
+    - [25, 5]
+    - [30, 1]
+    - [30, 3]
+    - [30, 5]
 
 # ── Generation ───────────────────────────────────────────────────────
 generation:
