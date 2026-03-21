@@ -1,98 +1,28 @@
-# Patchscope activation interpretation pipeline configuration
-#
-# References:
-#   Patchscopes: Ghandeharioun et al., "Patchscopes: A Unifying Framework for
-#     Inspecting Hidden Representations of Language Models", ICML 2024. arXiv:2401.06102
-#   SelfIE: Chen et al., "SelfIE: Self-Interpretation of Large Language Model
-#     Embeddings", ICML 2024. arXiv:2403.10949
-
-# ── Activation extraction ────────────────────────────────────────────────
-extraction:
-  # Which token position to extract from.
-  #   "last"  — final token of the source prompt (default, most common)
-  #   integer — explicit 0-based index into the source sequence
-  token_position: "last"
-
-  # Which layer(s) to extract from (ℓ* in Patchscopes notation).
-  #   "all"    — every transformer layer (expensive)
-  #   "middle" — auto-select middle third of layers
-  #   list     — explicit layer indices, e.g. [8, 16, 24]
-  #   integer  — single layer index
-  layers: "middle"
+# Patchscope activation interpretation pipeline
+# Refs: Patchscopes (arXiv:2401.06102), SelfIE (arXiv:2403.10949)
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# PROMPTS
+# ═══════════════════════════════════════════════════════════════════════
 
-# ── Activation injection ─────────────────────────────────────────────────
-injection:
-  # Injection layer k in the interpretation forward pass.
-  # SelfIE ablation (Figure 11) found k < 20 best for 80-layer models.
-  # For 32-layer models, k=3 is a good default.
-  layer: 8
+# Prompt style — selects which variant to use from each template below.
+#   "identity"    — raw pattern completion (X -> X; ___ ->). No chat template.
+#   "patchscopes" — minimal structured prompt, chat-templated with evaluator persona.
+#   "selfie"      — instructional prompt, chat-templated with evaluator persona.
+prompt_style: "identity"
 
-  # "replace" — overwrite hidden state at placeholder positions (Patchscopes default)
-  # "add"     — activation * alpha added to existing hidden state
-  mode: "replace"
+# Which templates to run (empty list = all).
+# Valid: answer_extraction, persona_probe, agreement_probe, open_summary, self_recognition
+enabled_templates: ["answer_extraction", "open_summary"]
 
-  # Scaling factor for "add" mode (ignored when mode="replace")
-  alpha: 1.0
-
-  # Placeholder style — controls both the token and count.
-  #   "patchscopes" — 1 × "___" token (inspired by Ghandeharioun et al., arXiv:2401.06102)
-  #   "selfie"      — 5 × "___" tokens (inspired by Chen et al., arXiv:2403.10949)
-  #                   NOTE: Llama 3.1 has no <unk> token, so we use "___" (single
-  #                   token, semantically neutral). The original SelfIE paper used
-  #                   <unk> on LLaMA-2 which had a real unk token.
-  #   "custom"      — use placeholder_token and num_placeholders below
-  placeholder_style: "patchscopes"
-
-  # Only used when placeholder_style: "custom"
-  num_placeholders: 1
-  placeholder_token: "?"
-
-# ── Generation ───────────────────────────────────────────────────────────
-generation:
-  max_new_tokens: 128
-  temperature: 0.0
-  do_sample: false
-
-  # Decoding mode for constrained templates (answer_extraction, persona_probe, etc.)
-  #   "logits"   — single-token decode, extract logit distribution over valid choices.
-  #                No text generation. Measures what the activation encodes directly.
-  #   "generate" — multi-token generation, parse answer from text. For qualitative runs.
-  # Unconstrained templates (open_summary) always use "generate".
-  constrained_mode: "logits"
-
-# ── Relevancy score (SelfIE Section 3.2) ─────────────────────────────────
-# relevancy(t_i) = P(t_i | WITH injection) - P(t_i | WITHOUT injection)
-# Requires two forward passes per generated token — expensive.
-relevancy:
-  enabled: false
-  max_tokens: 64   # limit relevancy computation to first N generated tokens
-
-# ── Interpretation prompt templates ──────────────────────────────────────
-
-# Each template has two prompt styles:
-#
-#   patchscopes: Pattern-completion style. The {placeholder} token goes at the
-#     END so the model is forced to "complete" what the patched activation
-#     represents. No explicit instructions — the prompt structure does the work.
-#
-#   selfie: Instructional style. The {placeholder} tokens go in the MIDDLE as a
-#     "data block" with instructions around them telling the model to interpret.
-#
-# Use {placeholder} to mark where the token(s) go.
-# Use {question_text}, {options}, {statement} for question content.
-
+# Template definitions. Each has three prompt variants.
+# Variables: {placeholder}, {question_text}, {options}, {statement}
 interpretation_templates:
-
-
-
-
-interpretation_templates:
-
-  # ── Core 3 (strongest causal claims) ──────────────────────────────────
 
   answer_extraction:
+    identity: |
+      A -> A; B -> B; C -> C; D -> D; {placeholder} ->
     patchscopes: |
       Question: {question_text}
       Options: {options}
@@ -108,8 +38,9 @@ interpretation_templates:
       Respond with a single letter (A, B, C, or D).
     constrained: true
 
-
   persona_probe:
+    identity: |
+      Conservative -> Conservative; Progressive -> Progressive; {placeholder} ->
     patchscopes: |
       Persona: {placeholder}
     selfie: |
@@ -119,8 +50,9 @@ interpretation_templates:
       Respond with: Conservative or Progressive.
     constrained: true
 
-
   agreement_probe:
+    identity: |
+      Agree -> Agree; Disagree -> Disagree; {placeholder} ->
     patchscopes: |
       Statement: {statement}
 
@@ -135,20 +67,20 @@ interpretation_templates:
       Respond with: Agree or Disagree.
     constrained: true
 
-
-  # ── Secondary (weaker causal claims) ──────────────────────────────────
-
   open_summary:
+    identity: |
+      cat -> cat; hello -> hello; {placeholder} ->
     patchscopes: |
       Representation: {placeholder}
     selfie: |
       {placeholder}
 
-      Describe what this representation encodes about the model’s reasoning.
+      Describe what this representation encodes about the model's reasoning.
     constrained: false
 
-
   self_recognition:
+    identity: |
+      Self -> Self; Other -> Other; {placeholder} ->
     patchscopes: |
       Source: {placeholder}
     selfie: |
@@ -158,233 +90,84 @@ interpretation_templates:
       Respond with: Self or Other.
     constrained: true
 
-
-### VERSION 2 ##############
-
-  # # ── Core 3 (strongest causal claims) ──────────────────────────────────
-
-  # answer_extraction:
-  #   patchscopes: |
-  #     Question: {question_text}
-  #     Options: {options}
-
-  #     Answer: {placeholder}
-  #   selfie: |
-  #     Base your answer only on this representation.
-
-  #     {placeholder}
-
-  #     Question: {question_text}
-  #     Options: {options}
-
-  #     What answer did the model choose? Respond with a single letter.
-  #   constrained: true
-
-  # persona_probe:
-  #   patchscopes: |
-  #     This representation was produced by someone with either a Conservative or Progressive political perspective.
-  #     Political perspective: {placeholder}
-  #   selfie: |
-  #     Base your answer only on this representation.
-
-  #     {placeholder}
-
-  #     Was this produced by someone with a Conservative or Progressive perspective?
-  #     Respond with: Conservative or Progressive.
-  #   constrained: true
-
-  # agreement_probe:
-  #   patchscopes: |
-  #     Statement: {statement}
-
-  #     Position: {placeholder}
-  #   selfie: |
-  #     Base your answer only on this representation.
-
-  #     {placeholder}
-
-  #     Does this correspond to agreeing or disagreeing with: {statement}
-
-  #     Respond with: Agree or Disagree.
-  #   constrained: true
-
-  # # ── Secondary (weaker causal claims) ──────────────────────────────────
-
-  # open_summary:
-  #   patchscopes: |
-  #     This representation encodes the following about the model's reasoning:
-  #     {placeholder}
-  #   selfie: |
-  #     Base your answer only on this representation.
-
-  #     {placeholder}
-
-  #     Describe what this representation encodes.
-  #   constrained: false
-
-  # self_recognition:
-  #   patchscopes: |
-  #     This representation was produced by either the current assistant (Self) or a different one (Other).
-  #     Source: {placeholder}
-  #   selfie: |
-  #     Base your answer only on this representation.
-
-  #     {placeholder}
-
-  #     Was this produced by you (Self) or someone else (Other)?
-  #     Respond with: Self or Other.
-  #   constrained: true
-
-
-
-
-
-
-# ── Old verbose templates (kept for reference) ─────────────────────────
-#   open_summary:
-#     patchscopes: |
-#       A language model produced an internal representation while answering a question.
-#       The representation encodes: {placeholder}
-#     selfie: |
-#       You are given access to an internal representation from a language model.
-#       Base your answer ONLY on the provided internal representation.
-#
-#       {placeholder}
-#
-#       Describe what this representation encodes about the model's reasoning,
-#       beliefs, or intended answer.
-#     constrained: false
-#
-#   answer_extraction:
-#     patchscopes: |
-#       A language model is answering a multiple choice question.
-#
-#       Question: {question_text}
-#       Options: {options}
-#
-#       The model's answer is: {placeholder}
-#     selfie: |
-#       You are given access to an internal representation from a language model
-#       that was answering the following question.
-#
-#       {placeholder}
-#
-#       Question: {question_text}
-#       Options: {options}
-#
-#       Based ONLY on the representation above, what answer did the model choose?
-#       Respond with a single letter.
-#     constrained: true
-#
-#   persona_probe:
-#     patchscopes: |
-#       A language model answered a political question. Its perspective was either
-#       Conservative or Progressive.
-#
-#       The model's perspective was: {placeholder}
-#     selfie: |
-#       You are given access to an internal representation from a language model.
-#       Base your answer ONLY on the provided internal representation.
-#
-#       {placeholder}
-#
-#       Which persona most likely produced this representation?
-#       Respond with a single word: Conservative or Progressive.
-#     constrained: true
-#
-#   agreement_probe:
-#     patchscopes: |
-#       A language model was asked: {statement}
-#
-#       The model's position is: {placeholder}
-#     selfie: |
-#       You are given access to an internal representation from a language model.
-#       Base your answer ONLY on the provided internal representation.
-#
-#       {placeholder}
-#
-#       Does this representation correspond to agreeing or disagreeing with the
-#       following statement: {statement}
-#
-#       Respond with: Agree or Disagree.
-#     constrained: true
-#
-#   belief_probe:
-#     patchscopes: |
-#       A language model formed an opinion on a political question.
-#       The belief encoded in its representation is: {placeholder}
-#     selfie: |
-#       You are given access to an internal representation from a language model.
-#       Base your answer ONLY on the provided internal representation.
-#
-#       {placeholder}
-#
-#       What belief or opinion is encoded in this representation?
-#       Describe briefly.
-#     constrained: false
-#
-#   self_recognition:
-#     patchscopes: |
-#       A language model produced a representation. It was produced by either
-#       the current persona (Self) or a different persona (Other).
-#
-#       The answer is: {placeholder}
-#     selfie: |
-#       You are given access to an internal representation from a language model.
-#       Base your answer ONLY on the provided internal representation.
-#
-#       {placeholder}
-#
-#       Was this representation produced by you (the current persona) or a
-#       different persona?
-#
-#       Respond with: Self or Other.
-#     constrained: true
-
-# ── Base interpretation prompt ───────────────────────────────────────────
-# Only used for selfie style (patchscopes templates are self-contained).
-# Set to empty string "" to disable.
+# Prepended to selfie prompts only. Empty = disabled.
 interpretation_base_prompt: ""
 
-# ── Question sampling ────────────────────────────────────────────────
 
-# Filter by category_id from the task file. Empty list = use all categories.
-categories: ["cat_1", "cat_4"]
+# ═══════════════════════════════════════════════════════════════════════
+# LAYERS
+# ═══════════════════════════════════════════════════════════════════════
+# Three modes (first match wins):
+#   1. layer_pairs  — explicit [source, injection] pairs
+#   2. layer_sweep  — all combos of source_layers × injection_layers
+#   3. defaults     — extraction.layers × injection.layer
 
-# How many questions to sample per category. null = use all in that category.
-# This is applied AFTER category filtering and BEFORE the global sample_size
-# from experiments.yaml. If both are set, this takes precedence.
-samples_per_category: 5
+# Option 1: explicit pairs (comment out to use option 2 or 3)
+layer_pairs:
+  - [20, 5]
+  - [25, 1]
+  - [25, 3]
+  - [25, 5]
+  - [20, 20]
+  - [25, 25]
+  - [30, 30]
 
-# ── Experiment matrix personas ───────────────────────────────────────────
-# Source personas: whose activations we extract
+# Option 2: full cross-product sweep (uncomment, remove layer_pairs above)
+# layer_sweep:
+#   enabled: true
+#   source_layers: [4, 8, 12, 16, 20, 24, 28, 31]
+#   injection_layers: [1, 3, 5, 8]
+
+# Option 3: defaults (used when neither of the above is set)
+extraction:
+  token_position: "last"
+  layers: "middle"          # "all", "middle", or [8, 16, 24]
+
+injection:
+  layer: 8
+  mode: "replace"           # "replace" or "add"
+  alpha: 1.0                # scaling for "add" mode
+  num_placeholders: 1
+  placeholder_token: "___"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# GENERATION
+# ═══════════════════════════════════════════════════════════════════════
+
+generation:
+  max_new_tokens: 128
+  temperature: 0.0
+  do_sample: false
+  # "logits"   — single-token probability distribution (quantitative)
+  # "generate" — multi-token text (qualitative). Always used for open_summary.
+  constrained_mode: "logits"
+
+relevancy:
+  enabled: false
+  max_tokens: 64
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# EXPERIMENT MATRIX
+# ═══════════════════════════════════════════════════════════════════════
+
 source_personas:
   - persona_conservative
   - persona_progressive
 
-# Evaluator personas: who interprets the activations
+# Evaluator personas (ignored for identity style — no chat template)
 evaluator_personas:
   - persona_conservative
   - persona_progressive
   - neutral_evaluator
 
-# ── Controls ─────────────────────────────────────────────────────────────
-controls:
-  # Run interpretation with NO activation patched (question-only baseline)
-  text_only_baseline: true
-  # Patch a random activation from a DIFFERENT question (shuffled control)
-  shuffled_activation: true
-  # Fraction of (question × layer) cells to run controls on (0.0-1.0).
-  # 1.0 = run controls on every cell (default). 0.25 = run on ~25% of cells.
-  # The "real" condition always runs on all cells.
-  control_sample_rate: 0.25
+# Question sampling
+categories: ["cat_1", "cat_4"]   # empty = all categories
+samples_per_category: 5          # null = all in category
 
-# ── Layer sweep mode ─────────────────────────────────────────────────────
-# When enabled, overrides extraction.layers and injection.layer to sweep
-# across multiple (source_layer, injection_layer) pairs.
-layer_sweep:
-  enabled: false
-  # Layers to extract activations from (ℓ* values)
-  source_layers: [4, 8, 12, 16, 20, 24, 28, 31]
-  # Layers to inject at (k values)
-  injection_layers: [1, 3, 5, 8]
+# Controls
+controls:
+  text_only_baseline: true
+  shuffled_activation: true
+  control_sample_rate: 0.25      # fraction of cells to run controls on

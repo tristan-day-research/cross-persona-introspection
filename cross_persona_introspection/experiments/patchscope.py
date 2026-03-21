@@ -697,6 +697,15 @@ class PatchscopeExperiment(BaseExperiment):
         relevancy_cfg = ps["relevancy"]
         controls_cfg = ps["controls"]
         templates = ps["interpretation_templates"]
+
+        # Filter templates if enabled_templates is set
+        enabled = ps.get("enabled_templates", [])
+        if enabled:
+            templates = {k: v for k, v in templates.items() if k in enabled}
+            logger.info(f"Template filter: running only {list(templates.keys())}")
+        else:
+            logger.info(f"Running all templates: {list(templates.keys())}")
+
         base_prompt = ps["interpretation_base_prompt"]
         constrained_mode = gen_cfg.get("constrained_mode", "generate")
 
@@ -704,20 +713,33 @@ class PatchscopeExperiment(BaseExperiment):
         evaluator_persona_names = ps["evaluator_personas"]
 
         # Resolve extraction layers
-        if ps.get("layer_sweep", {}).get("enabled", False):
+        # Priority: layer_pairs > layer_sweep > extraction.layers + injection.layer
+        explicit_pairs = ps.get("layer_pairs")
+        if explicit_pairs:
+            # Explicit pairs mode — source_layers is the unique set of source layers
+            source_layers = sorted(set(int(p[0]) for p in explicit_pairs))
+            # injection_layers will be looked up per source_layer below
+            injection_layers = sorted(set(int(p[1]) for p in explicit_pairs))
+            _pair_map: dict[int, list[int]] = {}
+            for p in explicit_pairs:
+                _pair_map.setdefault(int(p[0]), []).append(int(p[1]))
+            logger.info(f"Using explicit layer_pairs: {explicit_pairs}")
+        elif ps.get("layer_sweep", {}).get("enabled", False):
             sweep = ps["layer_sweep"]
             source_layers = [int(x) for x in sweep["source_layers"]]
             injection_layers = [int(x) for x in sweep["injection_layers"]]
+            _pair_map = None
         else:
             source_layers = _resolve_layers(extraction_cfg["layers"], num_layers)
             injection_layers = [int(injection_cfg["layer"])]
+            _pair_map = None
 
         injection_mode = injection_cfg["mode"]
         injection_alpha = float(injection_cfg["alpha"])
 
-        # Resolve placeholder style
-        style = injection_cfg.get("placeholder_style", "patchscopes")
-        if style == "patchscopes":
+        # Resolve prompt style (top-level prompt_style takes precedence)
+        style = ps.get("prompt_style") or injection_cfg.get("placeholder_style", "patchscopes")
+        if style in ("patchscopes", "identity"):
             num_placeholders = 1
             configured_placeholder = "___"
         elif style == "selfie":
@@ -850,17 +872,20 @@ class PatchscopeExperiment(BaseExperiment):
                         other_qi = (qi + 1) % len(self.questions)
                         shuffled_act = activations.get(sp_name, {}).get(other_qi, {}).get(src_layer)
 
-                    for inj_layer in injection_layers:
+                    # When using explicit pairs, only iterate injection layers
+                    # paired with this source layer
+                    _inj_layers = _pair_map[src_layer] if _pair_map else injection_layers
+                    for inj_layer in _inj_layers:
                         for eval_name in evaluator_persona_names:
                             eval_persona = self.all_personas[eval_name]
 
                             for tmpl_name, tmpl_cfg in templates.items():
                                 # Select prompt style matching placeholder_style
-                                prompt_style = style if style in ("patchscopes", "selfie") else "selfie"
+                                prompt_style = style if style in ("patchscopes", "selfie", "identity") else "selfie"
                                 prompt_template = tmpl_cfg.get(prompt_style)
                                 if not prompt_template:
                                     # Fall back to whichever exists
-                                    prompt_template = tmpl_cfg.get("selfie") or tmpl_cfg.get("patchscopes", "")
+                                    prompt_template = tmpl_cfg.get("patchscopes") or tmpl_cfg.get("selfie", "")
 
                                 # Build the placeholder string
                                 placeholder_str = (placeholder_token + " ") * num_placeholders
@@ -881,26 +906,35 @@ class PatchscopeExperiment(BaseExperiment):
                                     "{statement}", question.get("question_text", "")
                                 )
 
-                                # Prepend base prompt if non-empty (selfie style)
-                                if base_prompt.strip():
-                                    user_content = base_prompt.strip() + "\n\n" + user_content
+                                # Identity style: raw text, no chat template
+                                # (pattern completion, not instruction following)
+                                if prompt_style == "identity":
+                                    interp_text = user_content
+                                    interp_ids = tokenizer.encode(
+                                        interp_text, return_tensors="pt", add_special_tokens=False
+                                    )
+                                else:
+                                    # Prepend base prompt if non-empty (selfie style)
+                                    if base_prompt.strip():
+                                        user_content = base_prompt.strip() + "\n\n" + user_content
 
-                                interp_messages = []
-                                if eval_persona.system_prompt:
+                                    interp_messages = []
+                                    if eval_persona.system_prompt:
+                                        interp_messages.append({
+                                            "role": "system",
+                                            "content": eval_persona.system_prompt,
+                                        })
                                     interp_messages.append({
-                                        "role": "system",
-                                        "content": eval_persona.system_prompt,
+                                        "role": "user",
+                                        "content": user_content,
                                     })
-                                interp_messages.append({
-                                    "role": "user",
-                                    "content": user_content,
-                                })
 
-                                # Find placeholder positions in tokenized input
-                                interp_text = tokenizer.apply_chat_template(
-                                    interp_messages, tokenize=False, add_generation_prompt=True
-                                )
-                                interp_ids = tokenizer.encode(interp_text, return_tensors="pt", add_special_tokens=False)
+                                    interp_text = tokenizer.apply_chat_template(
+                                        interp_messages, tokenize=False, add_generation_prompt=True
+                                    )
+                                    interp_ids = tokenizer.encode(
+                                        interp_text, return_tensors="pt", add_special_tokens=False
+                                    )
                                 placeholder_positions = (
                                     interp_ids[0] == placeholder_token_id
                                 ).nonzero(as_tuple=True)[0].tolist()
