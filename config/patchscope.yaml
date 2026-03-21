@@ -170,4 +170,4 @@ samples_per_category: 5          # null = all in category
 controls:
   text_only_baseline: true
   shuffled_activation: true
-  control_sample_rate: 0.25      # fraction of cells to run controls on
+  control_sample_rate: 0.5      # fraction of cells to run controls on

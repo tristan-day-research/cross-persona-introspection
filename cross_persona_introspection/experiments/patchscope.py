@@ -326,6 +326,7 @@ def inject_and_generate(
     max_new_tokens: int = 128,
     temperature: float = 0.0,
     do_sample: bool = False,
+    raw_text: Optional[str] = None,
 ) -> str:
     """Run the interpretation forward pass with activation injection, then generate.
 
@@ -342,13 +343,17 @@ def inject_and_generate(
         max_new_tokens: Max tokens to generate.
         temperature: Sampling temperature.
         do_sample: Whether to sample.
+        raw_text: If provided, use this as input text directly (skip chat template).
 
     Returns:
         Generated text string.
     """
-    input_text = tokenizer.apply_chat_template(
-        messages, tokenize=False, add_generation_prompt=True
-    )
+    if raw_text is not None:
+        input_text = raw_text
+    else:
+        input_text = tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
     # add_special_tokens=False because apply_chat_template already includes BOS
     input_ids = tokenizer.encode(input_text, return_tensors="pt", add_special_tokens=False).to(device)
     attention_mask = torch.ones_like(input_ids)
@@ -435,6 +440,7 @@ def inject_and_extract_logits(
     choice_token_ids: dict[str, int],
     mode: str = "replace",
     alpha: float = 1.0,
+    raw_text: Optional[str] = None,
 ) -> dict:
     """Run interpretation forward pass with activation injection, extract logits over choices.
 
@@ -446,9 +452,12 @@ def inject_and_extract_logits(
     Returns:
         {"probs": {choice: float}, "logits": {choice: float}, "predicted": str}
     """
-    input_text = tokenizer.apply_chat_template(
-        messages, tokenize=False, add_generation_prompt=True
-    )
+    if raw_text is not None:
+        input_text = raw_text
+    else:
+        input_text = tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
     # add_special_tokens=False because apply_chat_template already includes BOS
     input_ids = tokenizer.encode(input_text, return_tensors="pt", add_special_tokens=False).to(device)
 
@@ -906,10 +915,12 @@ class PatchscopeExperiment(BaseExperiment):
                                     "{statement}", question.get("question_text", "")
                                 )
 
-                                # Identity style: raw text, no chat template
-                                # (pattern completion, not instruction following)
                                 if prompt_style == "identity":
+                                    # Identity: raw text, no chat template
                                     interp_text = user_content
+                                    # Build minimal messages for functions that require them
+                                    # (they'll be overridden by interp_text where possible)
+                                    interp_messages = [{"role": "user", "content": user_content}]
                                     interp_ids = tokenizer.encode(
                                         interp_text, return_tensors="pt", add_special_tokens=False
                                     )
@@ -984,6 +995,9 @@ class PatchscopeExperiment(BaseExperiment):
                                             and tmpl_name in all_choice_token_ids
                                         )
 
+                                        # Pass raw_text for identity style to skip chat template
+                                        _raw = interp_text if prompt_style == "identity" else None
+
                                         if use_logits:
                                             # ── Logits mode: single forward pass, no generation ──
                                             record.decode_mode = "logits"
@@ -995,6 +1009,7 @@ class PatchscopeExperiment(BaseExperiment):
                                                 choice_token_ids=all_choice_token_ids[tmpl_name],
                                                 mode=injection_mode,
                                                 alpha=injection_alpha,
+                                                raw_text=_raw,
                                             )
                                             record.choice_probs = result["probs"]
                                             record.choice_logits = result["logits"]
@@ -1030,6 +1045,7 @@ class PatchscopeExperiment(BaseExperiment):
                                                     max_new_tokens=gen_cfg["max_new_tokens"],
                                                     temperature=gen_cfg["temperature"],
                                                     do_sample=gen_cfg.get("do_sample", False),
+                                                    raw_text=_raw,
                                                 )
                                             record.generated_text = gen_text
 
