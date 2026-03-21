@@ -748,15 +748,13 @@ class PatchscopeExperiment(BaseExperiment):
 
         # Resolve prompt style (top-level prompt_style takes precedence)
         style = ps.get("prompt_style") or injection_cfg.get("placeholder_style", "patchscopes")
+        configured_placeholder = injection_cfg.get("placeholder_token", "?")
         if style in ("patchscopes", "identity"):
             num_placeholders = 1
-            configured_placeholder = "___"
         elif style == "selfie":
             num_placeholders = 5
-            configured_placeholder = "___"
         else:  # "custom"
             num_placeholders = int(injection_cfg["num_placeholders"])
-            configured_placeholder = injection_cfg.get("placeholder_token", "auto")
 
         placeholder_token_id = _get_placeholder_token_id(tokenizer, configured_placeholder)
         placeholder_token = tokenizer.decode([placeholder_token_id])

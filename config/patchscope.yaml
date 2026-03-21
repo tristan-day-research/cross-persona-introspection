@@ -7,7 +7,7 @@
 # ═══════════════════════════════════════════════════════════════════════
 
 # Prompt style — selects which variant to use from each template below.
-#   "identity"    — raw pattern completion (X -> X; ___ ->). No chat template.
+#   "identity"    — raw pattern completion (X -> X; ? ->). No chat template.
 #   "patchscopes" — minimal structured prompt, chat-templated with evaluator persona.
 #   "selfie"      — instructional prompt, chat-templated with evaluator persona.
 prompt_style: "identity"
@@ -22,7 +22,7 @@ interpretation_templates:
 
   answer_extraction:
     identity: |
-      A -> A; B -> B; C -> C; D -> D; {placeholder} ->
+      B -> B; D -> D; A -> A; C -> C; {placeholder} ->
     patchscopes: |
       Question: {question_text}
       Options: {options}
@@ -69,13 +69,13 @@ interpretation_templates:
 
   open_summary:
     identity: |
-      cat -> cat; hello -> hello; {placeholder} ->
+      Paris -> capital city; dog -> animal; {placeholder} ->
     patchscopes: |
       Representation: {placeholder}
     selfie: |
       {placeholder}
 
-      Describe what this representation encodes about the model's reasoning.
+      In one short phrase, describe what answer or stance this representation most strongly supports.
     constrained: false
 
   self_recognition:
@@ -128,7 +128,7 @@ injection:
   mode: "replace"           # "replace" or "add"
   alpha: 1.0                # scaling for "add" mode
   num_placeholders: 1
-  placeholder_token: "___"
+  placeholder_token: "?"
 
 
 # ═══════════════════════════════════════════════════════════════════════
