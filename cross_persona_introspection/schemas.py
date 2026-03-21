@@ -183,11 +183,11 @@ class PatchscopeRecord:
       SelfIE: Chen et al., arXiv:2403.10949
     """
     experiment: str
+    template_name: str
     model: str
     question_id: str
     source_persona: str
     evaluator_persona: str
-    template_name: str
     condition: str  # "real", "text_only_baseline", "shuffled"
     source_layer: int
     injection_layer: int

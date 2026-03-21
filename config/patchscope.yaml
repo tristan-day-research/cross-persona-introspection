@@ -106,13 +106,15 @@ interpretation_templates:
 
   persona_probe:
     patchscopes: |
-      Persona: {placeholder}
+      This representation was produced by someone with either a Conservative or Progressive political perspective.
+      Political perspective: {placeholder}
     selfie: |
       Base your answer only on this representation.
 
       {placeholder}
 
-      Which persona produced this? Respond with: Conservative or Progressive.
+      Was this produced by someone with a Conservative or Progressive perspective?
+      Respond with: Conservative or Progressive.
     constrained: true
 
   agreement_probe:
@@ -134,7 +136,8 @@ interpretation_templates:
 
   open_summary:
     patchscopes: |
-      Representation: {placeholder}
+      This representation encodes the following about the model's reasoning:
+      {placeholder}
     selfie: |
       Base your answer only on this representation.
 
@@ -145,13 +148,14 @@ interpretation_templates:
 
   self_recognition:
     patchscopes: |
+      This representation was produced by either the current assistant (Self) or a different one (Other).
       Source: {placeholder}
     selfie: |
       Base your answer only on this representation.
 
       {placeholder}
 
-      Was this produced by you (Self) or a different persona (Other)?
+      Was this produced by you (Self) or someone else (Other)?
       Respond with: Self or Other.
     constrained: true
 
