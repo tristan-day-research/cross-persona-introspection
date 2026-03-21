@@ -22,7 +22,7 @@ interpretation_templates:
 
   answer_extraction:
     identity: |
-      B -> B; D -> D; A -> A; C -> C; {placeholder} ->
+      cat -> cat; 135 -> 135; hello -> hello; {placeholder} ->
     patchscopes: |
       Question: {question_text}
       Options: {options}
@@ -40,7 +40,7 @@ interpretation_templates:
 
   persona_probe:
     identity: |
-      Conservative -> Conservative; Progressive -> Progressive; {placeholder} ->
+      cat -> cat; 135 -> 135; hello -> hello; {placeholder} ->
     patchscopes: |
       Persona: {placeholder}
     selfie: |
@@ -52,7 +52,7 @@ interpretation_templates:
 
   agreement_probe:
     identity: |
-      Agree -> Agree; Disagree -> Disagree; {placeholder} ->
+      cat -> cat; 135 -> 135; hello -> hello; {placeholder} ->
     patchscopes: |
       Statement: {statement}
 
@@ -69,7 +69,7 @@ interpretation_templates:
 
   open_summary:
     identity: |
-      Paris -> capital city; dog -> animal; {placeholder} ->
+      cat -> cat; 135 -> 135; hello -> hello; {placeholder} ->
     patchscopes: |
       Representation: {placeholder}
     selfie: |
@@ -80,7 +80,7 @@ interpretation_templates:
 
   self_recognition:
     identity: |
-      Self -> Self; Other -> Other; {placeholder} ->
+      cat -> cat; 135 -> 135; hello -> hello; {placeholder} ->
     patchscopes: |
       Source: {placeholder}
     selfie: |
