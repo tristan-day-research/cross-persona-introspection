@@ -213,6 +213,9 @@ class PatchscopeRecord:
     # Ground truth (from source's direct answer under that persona)
     source_direct_answer: Optional[str] = None
     source_answer_probs: Optional[dict[str, float]] = None
+    # Original question data
+    question_text: Optional[str] = None
+    question_options: Optional[dict[str, str]] = None
     # Meta
     error: Optional[str] = None
     timestamp: Optional[str] = None

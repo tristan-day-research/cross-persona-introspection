@@ -18,6 +18,11 @@ enabled_templates: ["answer_extraction", "open_summary"]
 
 # Template definitions. Each has three prompt variants.
 # Variables: {placeholder}, {question_text}, {options}, {statement}
+#
+# constrained: true  → logits mode reads next-token probabilities over a fixed
+#                      choice set (e.g. A/B/C/D) in a single forward pass.
+#                      No text is generated. Set by generation.constrained_mode.
+# constrained: false → always uses generate mode (multi-token free-form text).
 interpretation_templates:
 
   answer_extraction:
@@ -36,7 +41,7 @@ interpretation_templates:
 
       What answer did the model choose?
       Respond with a single letter (A, B, C, or D).
-    constrained: true
+    constrained: true   # logits over {A, B, C, D}
 
   persona_probe:
     identity: |
@@ -48,7 +53,7 @@ interpretation_templates:
 
       Which persona produced this representation?
       Respond with: Conservative or Progressive.
-    constrained: true
+    constrained: true   # logits over {Conservative, Progressive}
 
   agreement_probe:
     identity: |
@@ -65,7 +70,7 @@ interpretation_templates:
       {statement}
 
       Respond with: Agree or Disagree.
-    constrained: true
+    constrained: true   # logits over {Agree, Disagree}
 
   open_summary:
     identity: |
@@ -76,7 +81,7 @@ interpretation_templates:
       {placeholder}
 
       In one short phrase, describe what answer or stance this representation most strongly supports.
-    constrained: false
+    constrained: false  # free-form generation, no fixed choices
 
   self_recognition:
     identity: |
@@ -88,7 +93,7 @@ interpretation_templates:
 
       Was this produced by you or another persona?
       Respond with: Self or Other.
-    constrained: true
+    constrained: true   # logits over {Self, Other}
 
 # Prepended to selfie prompts only. Empty = disabled.
 interpretation_base_prompt: ""
@@ -141,7 +146,7 @@ generation:
   do_sample: false
   # "logits"   — single-token probability distribution (quantitative)
   # "generate" — multi-token text (qualitative). Always used for open_summary.
-  constrained_mode: "logits"
+  constrained_mode: "generate"
 
 relevancy:
   enabled: false

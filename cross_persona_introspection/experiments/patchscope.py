@@ -967,6 +967,8 @@ class PatchscopeExperiment(BaseExperiment):
                                         injection_mode=injection_mode,
                                         source_direct_answer=direct_answers[sp_name][qi]["answer"],
                                         source_answer_probs=direct_answers[sp_name][qi]["probs"],
+                                        question_text=question.get("question_text", ""),
+                                        question_options=question.get("options"),
                                     )
 
                                     try:
