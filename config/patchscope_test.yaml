@@ -1,14 +1,9 @@
 # ── Patchscope Test ───────────────────────────────────────────────────
 # Reproduces the canonical example from Patchscopes (Ghandeharioun et al.,
-# ICML 2024, arXiv:2401.06102), Figure 1:
+# ICML 2024, arXiv:2401.06102), Figure 1, and tests multiple target
+# prompt styles to find what works with instruct models.
 #
-#   Source:  "Amazon's former CEO attended Oscars"
-#   Target:  "cat -> cat; 135 -> 135; hello -> hello; ?"
-#   Patch:   hidden state of "CEO" → hidden state of "?" in target
-#   Expect:  model generates "Jeff Bezos" or related token
-#
-# This verifies the core extract→inject→decode pipeline works correctly
-# before running persona experiments.
+# Each target prompt is run against every source × layer pair.
 
 model:
   name: "meta-llama/Llama-3.1-8B-Instruct"
@@ -17,53 +12,64 @@ model:
 
 # ── Source prompt ─────────────────────────────────────────────────────
 source:
-  # Raw text, NOT chat-templated — this is a base-model-style prompt
   text: "Amazon's former CEO attended Oscars"
-  # Which token to extract from (the word "CEO")
   extract_word: "CEO"
-  # If the word spans multiple tokens, use "last" subtoken
   subtoken_strategy: "last"
 
-# ── Target prompt ─────────────────────────────────────────────────────
-# Two styles to test:
-#   "raw"  — base-model-style few-shot token identity (from paper §4.1)
-#   "chat" — instruct-model-style with chat template
+# ── Target prompts ───────────────────────────────────────────────────
+# Each entry is run independently against the source activation.
+#   style: "raw" = plain text, "chat" = wrapped in chat template
+#   text:  the prompt (for raw) or user message (for chat)
+#   inject_token: which token gets patched with the source activation
+#   system: (chat only) system prompt
+#   name:  short label for logs/results
 #
-# The paper used raw prompts on base models. Instruct models need chat
-# prompts to produce meaningful output from patched activations.
+# Add as many as you want — they all run in the same sweep.
 
-target:
-  style: "chat"   # "raw" or "chat"
+targets:
+  - name: "chat_tell_me"
+    style: "chat"
+    system: "You are a helpful assistant."
+    text: "Tell me about ___"
+    inject_token: "___"
 
-  # Raw target (paper-style, for base models)
-  raw_text: "cat -> cat; 135 -> 135; hello -> hello; ?"
-  raw_inject_token: "?"
+  - name: "raw_identity_ceo"
+    style: "raw"
+    text: "cat -> cat; 135 -> 135; CEO ->"
+    inject_token: "CEO"
 
-  # Chat target (for instruct models)
-  # System prompt is intentionally minimal — we want the model to decode
-  # the activation, not follow elaborate instructions.
-  chat_system: "You are a helpful assistant."
-  chat_user: "Tell me about ___"
-  chat_inject_token: "___"
+  - name: "raw_identity_question"
+    style: "raw"
+    text: "cat -> cat; 135 -> 135; hello -> hello; ?"
+    inject_token: "?"
+
+  - name: "chat_what_is"
+    style: "chat"
+    system: "You are a helpful assistant."
+    text: "What is this: ___"
+    inject_token: "___"
+
+  - name: "raw_completion"
+    style: "raw"
+    text: "The CEO of Amazon is"
+    inject_token: "CEO"
+
+  # Add more here — just follow the same format:
+  # - name: "my_new_prompt"
+  #   style: "raw"       # or "chat"
+  #   text: "whatever prompt with PLACEHOLDER"
+  #   inject_token: "PLACEHOLDER"
+  #   system: "optional system prompt"  # chat only
 
 # ── Layer configuration ──────────────────────────────────────────────
-# Two modes:
-#   1. match_source_target: true  — sweep uses the SAME layer for both
-#      extract and inject (ℓ* = ℓ), per the paper's default.
-#   2. match_source_target: false — uses explicit layer_pairs below.
-
 layers:
-  # Sweep these layers when match_source_target is true
   sweep: [1, 3, 5, 8, 10, 15, 20, 25, 30]
   match_source_target: true
 
-  # Explicit (source_layer, injection_layer) pairs.
-  # Always appended after the sweep pairs.
-  # Tests deep-extract → shallow-inject (where Patchscopes works best):
   layer_pairs:
-    - [15, 1]     # mid source → very early target
-    - [15, 3]     # mid source → early target
-    - [15, 5]     # mid source → shallow target
+    - [15, 1]
+    - [15, 3]
+    - [15, 5]
     - [20, 1]
     - [20, 3]
     - [20, 5]
@@ -80,7 +86,7 @@ generation:
   temperature: 0.0
   do_sample: false
 
-# ── Additional test cases (always run after the main example) ────────
+# ── Additional source test cases (run after the main example) ────────
 extra_tests:
   - source_text: "The Eiffel Tower is located in"
     extract_word: "Tower"

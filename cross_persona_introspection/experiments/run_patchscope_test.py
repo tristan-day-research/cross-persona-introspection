@@ -236,85 +236,39 @@ def main():
     n_layers = len(_get_transformer_layers(model))
     logger.info(f"Model loaded: {n_layers} layers, device={device}")
 
-    # ── Build source and target prompts ─────────────────────────────
+    # ── Source setup ────────────────────────────────────────────────
     source_text = cfg["source"]["text"]
     extract_word = cfg["source"]["extract_word"]
     subtoken_strategy = cfg["source"].get("subtoken_strategy", "last")
 
-    target_style = cfg["target"].get("style", "raw")
-
-    if target_style == "chat":
-        # Build chat-templated target prompt
-        chat_messages = [
-            {"role": "system", "content": cfg["target"]["chat_system"]},
-            {"role": "user", "content": cfg["target"]["chat_user"]},
-        ]
-        target_text = tokenizer.apply_chat_template(
-            chat_messages, tokenize=False, add_generation_prompt=True
-        )
-        inject_token = cfg["target"]["chat_inject_token"]
-        target_display = cfg["target"]["chat_user"]
-    else:
-        target_text = cfg["target"]["raw_text"]
-        inject_token = cfg["target"]["raw_inject_token"]
-        target_display = target_text
-
-    # Tokenize source (always raw, no chat template)
     source_ids = tokenizer.encode(source_text, add_special_tokens=False)
     source_tokens = [tokenizer.decode([tid]) for tid in source_ids]
     extract_pos = find_token_position(tokenizer, source_text, extract_word, subtoken_strategy)
 
-    # Tokenize target (may be chat-templated)
-    target_ids = tokenizer.encode(target_text, add_special_tokens=False)
-    target_tokens = [tokenizer.decode([tid]) for tid in target_ids]
-    inject_pos = find_token_position(tokenizer, target_text, inject_token, "last")
-
-    logger.info(f"Source tokens: {list(enumerate(source_tokens))}")
-    logger.info(f"Extract '{extract_word}' at position {extract_pos} = '{source_tokens[extract_pos]}'")
-    logger.info(f"Target style: {target_style}")
-    logger.info(f"Target prompt: '{target_display}'")
-    logger.info(f"Target tokens (around inject): ...{list(enumerate(target_tokens))[max(0,inject_pos-3):inject_pos+3]}")
-    logger.info(f"Inject at '{inject_token}' position {inject_pos} = '{target_tokens[inject_pos]}'")
-
-    # ── Verify positions match actual model input ────────────────────
-    # These assertions catch the add_special_tokens mismatch bug
+    # Verify source position
     source_verify = tokenizer.decode([source_ids[extract_pos]])
-    target_verify = tokenizer.decode([target_ids[inject_pos]])
-    logger.info(f"VERIFY extract token at pos {extract_pos}: '{source_verify}'")
-    logger.info(f"VERIFY inject token at pos {inject_pos}: '{target_verify}'")
+    logger.info(f"Source: '{source_text}'")
+    logger.info(f"Source tokens: {list(enumerate(source_tokens))}")
+    logger.info(f"Extract '{extract_word}' at position {extract_pos} = '{source_verify}'")
     assert extract_word.lower() in source_verify.lower().strip() or source_verify.strip() in extract_word, (
         f"Position mismatch! Expected '{extract_word}' at pos {extract_pos}, "
         f"got '{source_verify}'. Token list: {list(enumerate(source_tokens))}"
     )
 
-    # ── Baseline (no injection) ──────────────────────────────────────
-    logger.info("=== Baseline (no injection) ===")
-    baseline_text = run_without_injection(
-        model, tokenizer, device, target_text,
-        max_new_tokens=cfg["generation"]["max_new_tokens"],
-    )
-    logger.info(f"Baseline output: '{baseline_text}'")
-
     # ── Build layer pairs ───────────────────────────────────────────
     match_layers = cfg["layers"].get("match_source_target", True)
     layer_pairs = []
-
-    # Sweep mode: same layer for source and target
     if match_layers:
         sweep = cfg["layers"]["sweep"]
         if sweep == "all":
             sweep = list(range(n_layers))
         sweep = [l for l in sweep if l < n_layers]
         layer_pairs.extend([(l, l) for l in sweep])
-
-    # Explicit pairs (always appended if present)
     explicit = cfg["layers"].get("layer_pairs", [])
     for pair in explicit:
         src, tgt = pair[0], pair[1]
         if src < n_layers and tgt < n_layers:
             layer_pairs.append((src, tgt))
-
-    # Deduplicate while preserving order
     seen = set()
     unique_pairs = []
     for p in layer_pairs:
@@ -328,93 +282,140 @@ def main():
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     model_short = model_name.split("/")[-1].lower().replace(".", "-")
 
-    logger.info(f"=== Layer pairs ({len(layer_pairs)}): {layer_pairs} ===")
-    for source_layer, target_layer in layer_pairs:
-
-        # Extract
-        activation = extract_activation_raw(
-            model, tokenizer, device, source_text, source_layer, extract_pos
-        )
-
-        # Inject and generate
-        generated_text, generated_tokens = inject_and_generate_raw(
-            model, tokenizer, device, target_text, activation,
-            injection_layer=target_layer,
-            inject_token_position=inject_pos,
-            max_new_tokens=gen_cfg["max_new_tokens"],
-            temperature=gen_cfg.get("temperature", 0.0),
-            do_sample=gen_cfg.get("do_sample", False),
-        )
-
-        result = {
-            "source_text": source_text,
-            "target_text": target_text,
-            "extract_word": extract_word,
-            "extract_position": extract_pos,
-            "inject_position": inject_pos,
-            "source_layer": source_layer,
-            "injection_layer": target_layer,
-            "generated_text": generated_text.strip(),
-            "generated_tokens": generated_tokens,
-            "baseline_text": baseline_text.strip(),
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }
-        results.append(result)
-
-        status = "✓" if any(
-            kw in generated_text.lower()
-            for kw in ["bezos", "jeff", "ceo", "amazon"]
-        ) else " "
-        logger.info(
-            f"  Layer {source_layer:>2} → {target_layer:>2}: "
-            f"[{status}] '{generated_text.strip()[:80]}'"
-        )
-
-    # ── Extra test cases (run all layer pairs for each) ─────────────
-    extra_tests = cfg.get("extra_tests", [])
-    for test in extra_tests:
-        t_extract_word = test["extract_word"]
-        t_source_text = test["source_text"]
-        t_expected = test.get("expected_contains", "")
-
-        t_extract_pos = find_token_position(
-            tokenizer, t_source_text, t_extract_word, subtoken_strategy
-        )
-
-        logger.info(f"\n=== Extra test: '{t_source_text}' (extract '{t_extract_word}' @ pos {t_extract_pos}) ===")
-
-        for src_layer, tgt_layer in layer_pairs:
-            act = extract_activation_raw(
-                model, tokenizer, device, t_source_text, src_layer, t_extract_pos
+    # ── Helper to resolve a target config into (text, inject_pos, display) ──
+    def resolve_target(tgt_cfg):
+        style = tgt_cfg.get("style", "raw")
+        if style == "chat":
+            msgs = [{"role": "user", "content": tgt_cfg["text"]}]
+            if tgt_cfg.get("system"):
+                msgs.insert(0, {"role": "system", "content": tgt_cfg["system"]})
+            t_text = tokenizer.apply_chat_template(
+                msgs, tokenize=False, add_generation_prompt=True
             )
-            gen_text, gen_tokens = inject_and_generate_raw(
-                model, tokenizer, device, target_text, act,
-                injection_layer=tgt_layer,
+        else:
+            t_text = tgt_cfg["text"]
+        t_ids = tokenizer.encode(t_text, add_special_tokens=False)
+        t_tokens = [tokenizer.decode([tid]) for tid in t_ids]
+        t_inject_pos = find_token_position(
+            tokenizer, t_text, tgt_cfg["inject_token"], "last"
+        )
+        return t_text, t_ids, t_tokens, t_inject_pos, style
+
+    # ── Run all targets × layer pairs ────────────────────────────────
+    targets = cfg.get("targets", [])
+    if not targets:
+        logger.error("No targets defined in config!")
+        return
+
+    logger.info(f"Layer pairs ({len(layer_pairs)}): {layer_pairs}")
+    logger.info(f"Targets: {[t['name'] for t in targets]}")
+
+    for tgt_cfg in targets:
+        tgt_name = tgt_cfg["name"]
+        target_text, target_ids, target_tokens, inject_pos, target_style = resolve_target(tgt_cfg)
+
+        # Verify inject position
+        inject_verify = tokenizer.decode([target_ids[inject_pos]])
+        logger.info(f"\n{'='*60}")
+        logger.info(f"Target: '{tgt_name}' ({target_style})")
+        logger.info(f"  User text: '{tgt_cfg['text']}'")
+        logger.info(f"  Inject '{tgt_cfg['inject_token']}' at pos {inject_pos} = '{inject_verify}'")
+
+        # Baseline
+        baseline_text = run_without_injection(
+            model, tokenizer, device, target_text,
+            max_new_tokens=gen_cfg["max_new_tokens"],
+        )
+        logger.info(f"  Baseline: '{baseline_text.strip()[:80]}'")
+
+        for source_layer, target_layer in layer_pairs:
+            activation = extract_activation_raw(
+                model, tokenizer, device, source_text, source_layer, extract_pos
+            )
+            generated_text, generated_tokens = inject_and_generate_raw(
+                model, tokenizer, device, target_text, activation,
+                injection_layer=target_layer,
                 inject_token_position=inject_pos,
                 max_new_tokens=gen_cfg["max_new_tokens"],
+                temperature=gen_cfg.get("temperature", 0.0),
+                do_sample=gen_cfg.get("do_sample", False),
             )
 
-            found = t_expected.lower() in gen_text.lower() if t_expected else None
-            status = "✓" if found else "✗" if found is False else " "
-            logger.info(
-                f"  Layer {src_layer:>2} → {tgt_layer:>2}: "
-                f"[{status}] '{gen_text.strip()[:80]}'"
-            )
-
-            results.append({
-                "source_text": t_source_text,
-                "target_text": target_text,
-                "extract_word": t_extract_word,
-                "extract_position": t_extract_pos,
+            result = {
+                "target_name": tgt_name,
+                "target_style": target_style,
+                "target_user_text": tgt_cfg["text"],
+                "source_text": source_text,
+                "extract_word": extract_word,
+                "extract_position": extract_pos,
                 "inject_position": inject_pos,
-                "source_layer": src_layer,
-                "injection_layer": tgt_layer,
-                "generated_text": gen_text.strip(),
-                "generated_tokens": gen_tokens,
-                "expected_contains": t_expected,
-                "found_expected": found,
+                "source_layer": source_layer,
+                "injection_layer": target_layer,
+                "generated_text": generated_text.strip(),
+                "generated_tokens": generated_tokens,
+                "baseline_text": baseline_text.strip(),
                 "timestamp": datetime.now(timezone.utc).isoformat(),
-            })
+            }
+            results.append(result)
+
+            # Check for CEO-related keywords
+            status = "✓" if any(
+                kw in generated_text.lower()
+                for kw in ["bezos", "jeff", "ceo", "amazon"]
+            ) else " "
+            logger.info(
+                f"  Layer {source_layer:>2} → {target_layer:>2}: "
+                f"[{status}] '{generated_text.strip()[:80]}'"
+            )
+
+    # ── Extra source tests (run against first target only) ───────────
+    extra_tests = cfg.get("extra_tests", [])
+    if extra_tests and targets:
+        first_tgt = targets[0]
+        target_text, target_ids, target_tokens, inject_pos, target_style = resolve_target(first_tgt)
+
+        for test in extra_tests:
+            t_extract_word = test["extract_word"]
+            t_source_text = test["source_text"]
+            t_expected = test.get("expected_contains", "")
+            t_extract_pos = find_token_position(
+                tokenizer, t_source_text, t_extract_word, subtoken_strategy
+            )
+
+            logger.info(f"\n=== Extra: '{t_source_text}' → '{first_tgt['name']}' ===")
+
+            for src_layer, tgt_layer in layer_pairs:
+                act = extract_activation_raw(
+                    model, tokenizer, device, t_source_text, src_layer, t_extract_pos
+                )
+                gen_text, gen_tokens = inject_and_generate_raw(
+                    model, tokenizer, device, target_text, act,
+                    injection_layer=tgt_layer,
+                    inject_token_position=inject_pos,
+                    max_new_tokens=gen_cfg["max_new_tokens"],
+                )
+
+                found = t_expected.lower() in gen_text.lower() if t_expected else None
+                status = "✓" if found else "✗" if found is False else " "
+                logger.info(
+                    f"  Layer {src_layer:>2} → {tgt_layer:>2}: "
+                    f"[{status}] '{gen_text.strip()[:80]}'"
+                )
+
+                results.append({
+                    "target_name": first_tgt["name"],
+                    "source_text": t_source_text,
+                    "extract_word": t_extract_word,
+                    "extract_position": t_extract_pos,
+                    "inject_position": inject_pos,
+                    "source_layer": src_layer,
+                    "injection_layer": tgt_layer,
+                    "generated_text": gen_text.strip(),
+                    "generated_tokens": gen_tokens,
+                    "expected_contains": t_expected,
+                    "found_expected": found,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                })
 
     # ── Save results ─────────────────────────────────────────────────
     jsonl_path = RESULTS_DIR / f"patchscope_{model_short}_{timestamp}_test.jsonl"
@@ -431,40 +432,32 @@ def main():
         f.write(f"Layers: {n_layers}\n")
         f.write(f"Device: {device}\n")
         f.write(f"Config: {config_path}\n")
-        f.write(f"Target style: {target_style}\n")
+        f.write(f"Targets: {[t['name'] for t in targets]}\n")
+        f.write(f"Layer pairs: {layer_pairs}\n")
         f.write(f"Timestamp: {timestamp}\n\n")
 
-        f.write(f"Source prompt (exact):\n  {source_text}\n\n")
-        f.write(f"Source tokens:\n  {list(enumerate(source_tokens))}\n\n")
-        f.write(f"Extract word: '{extract_word}' at position {extract_pos}\n\n")
+        f.write(f"Source: '{source_text}'\n")
+        f.write(f"Extract: '{extract_word}' at position {extract_pos}\n\n")
 
-        f.write(f"Target prompt (exact):\n  {target_text}\n\n")
-        f.write(f"Target tokens:\n  {list(enumerate(target_tokens))}\n\n")
-        f.write(f"Inject at: '{inject_token}' position {inject_pos}\n\n")
-
-        f.write(f"Baseline (no injection): '{baseline_text.strip()}'\n\n")
-
-        f.write(f"{'=' * 60}\nLayer Sweep Results\n{'=' * 60}\n\n")
+        # Group results by target
+        current_target = None
         for r in results:
-            if "expected_contains" not in r:
-                f.write(
-                    f"  Layer {r['source_layer']:>2} → {r['injection_layer']:>2}: "
-                    f"'{r['generated_text']}'\n"
-                )
+            tgt = r.get("target_name", "unknown")
+            if tgt != current_target:
+                current_target = tgt
+                f.write(f"\n{'=' * 60}\n")
+                f.write(f"Target: {tgt}\n")
+                f.write(f"  Prompt: {r.get('target_user_text', r.get('source_text', ''))}\n")
+                f.write(f"  Baseline: {r.get('baseline_text', 'N/A')}\n")
+                f.write(f"{'=' * 60}\n\n")
 
-        if extra_tests:
-            f.write(f"\n{'=' * 60}\nExtra Tests\n{'=' * 60}\n\n")
-            current_source = None
-            for r in results:
-                if "expected_contains" in r:
-                    if r["source_text"] != current_source:
-                        current_source = r["source_text"]
-                        f.write(f"\n  Source: '{current_source}' (extract '{r['extract_word']}')\n")
-                    found = "✓" if r.get("found_expected") else "✗"
-                    f.write(
-                        f"    Layer {r['source_layer']:>2} → {r['injection_layer']:>2}: "
-                        f"[{found}] '{r['generated_text']}'\n"
-                    )
+            found_str = ""
+            if "expected_contains" in r:
+                found_str = f" [{'✓' if r.get('found_expected') else '✗'} {r['expected_contains']}]"
+            f.write(
+                f"  Layer {r['source_layer']:>2} → {r['injection_layer']:>2}: "
+                f"'{r['generated_text']}'{found_str}\n"
+            )
 
     logger.info(f"\nResults: {jsonl_path}")
     logger.info(f"Log: {log_path}")
