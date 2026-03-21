@@ -43,7 +43,7 @@ target:
   # System prompt is intentionally minimal — we want the model to decode
   # the activation, not follow elaborate instructions.
   chat_system: "You are a helpful assistant."
-  chat_user: "What is this: ___"
+  chat_user: "Tell me about ___"
   chat_inject_token: "___"
 
 # ── Layer configuration ──────────────────────────────────────────────
