@@ -10,7 +10,7 @@
 #   "identity"    — raw pattern completion (X -> X; ? ->). No chat template.
 #   "patchscopes" — minimal structured prompt, chat-templated with evaluator persona.
 #   "selfie"      — instructional prompt, chat-templated with evaluator persona.
-prompt_style: "identity"
+prompt_style: "patchscopes"
 
 # Which templates to run (empty list = all).
 # Valid: answer_extraction, persona_probe, agreement_probe, open_summary, self_recognition
@@ -141,12 +141,12 @@ injection:
 # ═══════════════════════════════════════════════════════════════════════
 
 generation:
-  max_new_tokens: 128
+  max_new_tokens: 64              # only used by generate mode (open_summary etc.)
   temperature: 0.0
   do_sample: false
   # "logits"   — single-token probability distribution (quantitative)
   # "generate" — multi-token text (qualitative). Always used for open_summary.
-  constrained_mode: "generate"
+  constrained_mode: "logits"
 
 relevancy:
   enabled: false
