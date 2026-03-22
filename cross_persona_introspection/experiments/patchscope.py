@@ -949,13 +949,17 @@ class PatchscopeExperiment(BaseExperiment):
                                 placeholder_str = (placeholder_token + " ") * num_placeholders
                                 placeholder_str = placeholder_str.strip()
 
-                                # Fill all template variables
+                                # Use a sentinel to track placeholder position through
+                                # chat template wrapping. This avoids matching "?" in
+                                # question text when looking for the injection target.
+                                _SENTINEL = "\x00PH\x00"
+
                                 options_str = ", ".join(
                                     f"{k}) {v}"
                                     for k, v in question.get("options", {}).items()
                                 )
                                 user_content = prompt_template.strip()
-                                user_content = user_content.replace("{placeholder}", placeholder_str)
+                                user_content = user_content.replace("{placeholder}", _SENTINEL)
                                 user_content = user_content.replace(
                                     "{question_text}", question.get("question_text", "")
                                 )
@@ -966,9 +970,10 @@ class PatchscopeExperiment(BaseExperiment):
 
                                 if prompt_style == "identity":
                                     # Identity: raw text, no chat template
+                                    # Find sentinel position, then replace with actual placeholder
+                                    _ph_char_pos = user_content.find(_SENTINEL)
+                                    user_content = user_content.replace(_SENTINEL, placeholder_str)
                                     interp_text = user_content
-                                    # Build minimal messages for functions that require them
-                                    # (they'll be overridden by interp_text where possible)
                                     interp_messages = [{"role": "user", "content": user_content}]
                                     interp_ids = tokenizer.encode(
                                         interp_text, return_tensors="pt", add_special_tokens=False
@@ -978,6 +983,25 @@ class PatchscopeExperiment(BaseExperiment):
                                     if base_prompt.strip():
                                         user_content = base_prompt.strip() + "\n\n" + user_content
 
+                                    interp_messages_sentinel = []
+                                    if eval_persona.system_prompt:
+                                        interp_messages_sentinel.append({
+                                            "role": "system",
+                                            "content": eval_persona.system_prompt,
+                                        })
+                                    interp_messages_sentinel.append({
+                                        "role": "user",
+                                        "content": user_content,
+                                    })
+
+                                    # Build interp_text with sentinel to find char position
+                                    interp_text_sentinel = tokenizer.apply_chat_template(
+                                        interp_messages_sentinel, tokenize=False, add_generation_prompt=True
+                                    )
+                                    _ph_char_pos = interp_text_sentinel.find(_SENTINEL)
+
+                                    # Now replace sentinel with actual placeholder
+                                    user_content = user_content.replace(_SENTINEL, placeholder_str)
                                     interp_messages = []
                                     if eval_persona.system_prompt:
                                         interp_messages.append({
@@ -995,23 +1019,26 @@ class PatchscopeExperiment(BaseExperiment):
                                     interp_ids = tokenizer.encode(
                                         interp_text, return_tensors="pt", add_special_tokens=False
                                     )
-                                # Find placeholder positions by decoded string match
-                                # (token ID matching fails because BPE encodes "?"
-                                # differently in isolation vs. in context, e.g. id=30
-                                # standalone but id=949 as " ?" with leading space)
-                                placeholder_positions = [
-                                    i for i, tid in enumerate(interp_ids[0].tolist())
-                                    if placeholder_token in tokenizer.decode([tid]).strip()
-                                ]
-                                if not placeholder_positions:
-                                    # Fallback: try exact token ID match
-                                    placeholder_positions = (
-                                        interp_ids[0] == placeholder_token_id
-                                    ).nonzero(as_tuple=True)[0].tolist()
+
+                                # Find placeholder token by mapping char offset to token index.
+                                # Only matches the intended answer slot, not "?" in question text.
+                                placeholder_positions = []
+                                if _ph_char_pos >= 0:
+                                    _cumulative = 0
+                                    for ti, tid in enumerate(interp_ids[0].tolist()):
+                                        _tok_str = tokenizer.decode([tid])
+                                        _tok_start = _cumulative
+                                        _cumulative += len(_tok_str)
+                                        # Check if this token overlaps the placeholder span
+                                        if (_tok_start < _ph_char_pos + len(placeholder_str)
+                                                and _cumulative >= _ph_char_pos
+                                                and placeholder_token in _tok_str.strip()):
+                                            placeholder_positions.append(ti)
+
                                 if not placeholder_positions:
                                     logger.warning(
                                         f"No placeholder positions found in prompt for "
-                                        f"{tgt_name}/{tmpl_name}! Injection will be skipped."
+                                        f"{tmpl_name}! Injection will be skipped."
                                     )
 
                                 for condition in conditions:
