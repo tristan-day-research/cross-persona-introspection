@@ -27,7 +27,7 @@ interpretation_templates:
 
   answer_extraction:
     identity: |
-      cat -> cat; 135 -> 135; hello -> hello; {placeholder} ->
+      cat -> cat; 135 -> 135; hello -> hello; {placeholder}
     patchscopes: |
       Question: {question_text}
       Options: {options}
@@ -45,7 +45,7 @@ interpretation_templates:
 
   persona_probe:
     identity: |
-      cat -> cat; 135 -> 135; hello -> hello; {placeholder} ->
+      cat -> cat; 135 -> 135; hello -> hello; {placeholder}
     patchscopes: |
       Persona: {placeholder}
     selfie: |
@@ -57,7 +57,7 @@ interpretation_templates:
 
   agreement_probe:
     identity: |
-      cat -> cat; 135 -> 135; hello -> hello; {placeholder} ->
+      cat -> cat; 135 -> 135; hello -> hello; {placeholder}
     patchscopes: |
       Statement: {statement}
 
@@ -74,7 +74,7 @@ interpretation_templates:
 
   open_summary:
     identity: |
-      cat -> cat; 135 -> 135; hello -> hello; {placeholder} ->
+      cat -> cat; 135 -> 135; hello -> hello; {placeholder}
     patchscopes: |
       Representation: {placeholder}
     selfie: |
@@ -85,7 +85,7 @@ interpretation_templates:
 
   self_recognition:
     identity: |
-      cat -> cat; 135 -> 135; hello -> hello; {placeholder} ->
+      cat -> cat; 135 -> 135; hello -> hello; {placeholder}
     patchscopes: |
       Source: {placeholder}
     selfie: |

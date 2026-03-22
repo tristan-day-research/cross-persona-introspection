@@ -18,7 +18,7 @@ interpretation_templates:
 
   answer_extraction:
     identity: |
-      cat -> cat; 135 -> 135; hello -> hello; {placeholder} ->
+      cat -> cat; 135 -> 135; hello -> hello; {placeholder}
     patchscopes: |
       Question: {question_text}
       Options: {options}
@@ -36,7 +36,7 @@ interpretation_templates:
 
   open_summary:
     identity: |
-      cat -> cat; 135 -> 135; hello -> hello; {placeholder} ->
+      cat -> cat; 135 -> 135; hello -> hello; {placeholder}
     patchscopes: |
       Representation: {placeholder}
     selfie: |
