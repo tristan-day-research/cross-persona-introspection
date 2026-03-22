@@ -3,9 +3,8 @@
 # to verify the activation patching mechanism works end-to-end.
 #
 # Part 1: MCQ mode — standard pipeline with simple known-answer questions
-# Part 2: source_override — exact Bezos replication from the paper
-#
-# Toggle source_override on/off to switch between modes.
+# Part 2: source_overrides — exact replication from the paper (raw text,
+#          specific word extraction). Runs AFTER Part 1 in the same run.
 
 # ═══════════════════════════════════════════════════════════════════════
 # PROMPTS
@@ -50,16 +49,30 @@ interpretation_base_prompt: ""
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# SOURCE OVERRIDE (Part 2 — exact Bezos replication)
+# SOURCE OVERRIDES (Part 2 — exact paper replication)
 # ═══════════════════════════════════════════════════════════════════════
-# Uncomment to bypass MCQ formatting and test with raw source text.
-# When active, extracts activation at a specific word in raw text
-# instead of using the last-token of a chat-templated MCQ prompt.
+# Raw source text tests that run AFTER the MCQ matrix (Phase 3).
+# Each entry extracts activation at a specific word in raw text and
+# injects it through the same templates × layer pairs as Phase 2.
 
-# source_override:
-#   raw_text: "Amazon's former CEO attended Oscars"
-#   extract_word: "CEO"
-#   subtoken_strategy: "last"
+source_overrides:
+  - name: "bezos_ceo"
+    raw_text: "Amazon's former CEO attended Oscars"
+    extract_word: "CEO"
+    subtoken_strategy: "last"
+    expected_contains: "bezos"
+
+  - name: "eiffel_tower"
+    raw_text: "The Eiffel Tower is located in"
+    extract_word: "Tower"
+    subtoken_strategy: "last"
+    expected_contains: "paris"
+
+  - name: "bill_gates"
+    raw_text: "Microsoft was founded by Bill"
+    extract_word: "Bill"
+    subtoken_strategy: "last"
+    expected_contains: "gates"
 
 
 # ═══════════════════════════════════════════════════════════════════════

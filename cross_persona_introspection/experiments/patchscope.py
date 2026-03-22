@@ -822,29 +822,6 @@ class PatchscopeExperiment(BaseExperiment):
             f"× {num_placeholders}"
         )
 
-        # ── Source override mode ──────────────────────────────────────────
-        # When source_override is set, bypass MCQ formatting and extract
-        # activation at a specific word in raw text (e.g., the Bezos example
-        # from the Patchscopes paper).
-        source_override = ps.get("source_override")
-        if source_override:
-            raw_text = source_override["raw_text"]
-            extract_word = source_override["extract_word"]
-            sub_strategy = source_override.get("subtoken_strategy", "last")
-            token_pos = find_token_position(tokenizer, raw_text, extract_word, sub_strategy)
-            logger.info(
-                f"Source override: '{raw_text}', extract '{extract_word}' "
-                f"at token position {token_pos}"
-            )
-            # Override questions with a single dummy entry
-            self.questions = [{
-                "question_id": "source_override",
-                "question_text": raw_text,
-                "options": {},
-            }]
-            # Override source personas to a single dummy name
-            source_persona_names = ["source_override"]
-
         # Pre-compute source activations and direct answers for all (source_persona, question, layer)
         # This avoids redundant forward passes when sweeping evaluators/templates.
         logger.info("=== Phase 1: Extracting source activations ===")
@@ -856,28 +833,6 @@ class PatchscopeExperiment(BaseExperiment):
         for sp_name in source_persona_names:
             activations[sp_name] = {}
             direct_answers[sp_name] = {}
-
-            if source_override:
-                # ── Source override: extract from raw text at specific word ──
-                activations[sp_name][0] = {}
-                for layer in source_layers:
-                    try:
-                        act = extract_activation(
-                            model, tokenizer, device,
-                            messages=[],  # unused when raw_text is set
-                            layer_idx=layer,
-                            token_position=token_pos,
-                            raw_text=raw_text,
-                        )
-                        activations[sp_name][0][layer] = act
-                    except Exception as e:
-                        msg = f"Extract error: source_override layer={layer}: {e}"
-                        logger.error(msg)
-                        self._errors.append(msg)
-                direct_answers[sp_name][0] = {
-                    "answer": None, "probs": {}, "raw": ""
-                }
-                continue
 
             sp = self.all_personas[sp_name]
 
@@ -1032,9 +987,24 @@ class PatchscopeExperiment(BaseExperiment):
                                     interp_ids = tokenizer.encode(
                                         interp_text, return_tensors="pt", add_special_tokens=False
                                     )
-                                placeholder_positions = (
-                                    interp_ids[0] == placeholder_token_id
-                                ).nonzero(as_tuple=True)[0].tolist()
+                                # Find placeholder positions by decoded string match
+                                # (token ID matching fails because BPE encodes "?"
+                                # differently in isolation vs. in context, e.g. id=30
+                                # standalone but id=949 as " ?" with leading space)
+                                placeholder_positions = [
+                                    i for i, tid in enumerate(interp_ids[0].tolist())
+                                    if placeholder_token in tokenizer.decode([tid]).strip()
+                                ]
+                                if not placeholder_positions:
+                                    # Fallback: try exact token ID match
+                                    placeholder_positions = (
+                                        interp_ids[0] == placeholder_token_id
+                                    ).nonzero(as_tuple=True)[0].tolist()
+                                if not placeholder_positions:
+                                    logger.warning(
+                                        f"No placeholder positions found in prompt for "
+                                        f"{tgt_name}/{tmpl_name}! Injection will be skipped."
+                                    )
 
                                 for condition in conditions:
                                     # Skip control conditions based on sampling rate
@@ -1203,6 +1173,208 @@ class PatchscopeExperiment(BaseExperiment):
                                     if len(self.records) - self._last_flush >= 20:
                                         self._run_elapsed = time.monotonic() - run_start
                                         self._flush_results()
+
+        # ── Phase 3: Source overrides (raw text, specific word extraction) ──
+        source_overrides = ps.get("source_overrides", [])
+        if source_overrides:
+            logger.info(f"=== Phase 3: Source overrides ({len(source_overrides)} entries) ===")
+
+            for so_entry in source_overrides:
+                so_name = so_entry["name"]
+                so_raw_text = so_entry["raw_text"]
+                so_extract_word = so_entry["extract_word"]
+                so_strategy = so_entry.get("subtoken_strategy", "last")
+                so_expected = so_entry.get("expected_contains", "")
+
+                try:
+                    so_token_pos = find_token_position(
+                        tokenizer, so_raw_text, so_extract_word, so_strategy
+                    )
+                except ValueError as e:
+                    msg = f"Source override '{so_name}': {e}"
+                    logger.error(msg)
+                    self._errors.append(msg)
+                    continue
+
+                logger.info(
+                    f"  Override '{so_name}': '{so_raw_text}', "
+                    f"extract '{so_extract_word}' at position {so_token_pos}"
+                )
+
+                # Extract activations at all source layers
+                so_activations: dict[int, torch.Tensor] = {}
+                for layer in source_layers:
+                    try:
+                        act = extract_activation(
+                            model, tokenizer, device,
+                            messages=[],
+                            layer_idx=layer,
+                            token_position=so_token_pos,
+                            raw_text=so_raw_text,
+                        )
+                        so_activations[layer] = act
+                    except Exception as e:
+                        msg = f"Extract error: override '{so_name}' layer={layer}: {e}"
+                        logger.error(msg)
+                        self._errors.append(msg)
+
+                if not so_activations:
+                    continue
+
+                # Run through templates × layer pairs (same loop as Phase 2
+                # but with source_persona="source_override", no evaluator sweep,
+                # only "real" condition)
+                for src_layer in source_layers:
+                    real_act = so_activations.get(src_layer)
+                    if real_act is None:
+                        continue
+
+                    _inj_layers = _pair_map[src_layer] if _pair_map else injection_layers
+                    for inj_layer in _inj_layers:
+                        for tmpl_name, tmpl_cfg in templates.items():
+                            prompt_style = style if style in ("patchscopes", "selfie", "identity") else "selfie"
+                            prompt_template = tmpl_cfg.get(prompt_style)
+                            if not prompt_template:
+                                prompt_template = tmpl_cfg.get("patchscopes") or tmpl_cfg.get("selfie", "")
+
+                            placeholder_str = (placeholder_token + " ") * num_placeholders
+                            placeholder_str = placeholder_str.strip()
+
+                            user_content = prompt_template.strip()
+                            user_content = user_content.replace("{placeholder}", placeholder_str)
+                            user_content = user_content.replace("{question_text}", so_raw_text)
+                            user_content = user_content.replace("{options}", "")
+                            user_content = user_content.replace("{statement}", so_raw_text)
+
+                            if prompt_style == "identity":
+                                interp_text = user_content
+                                interp_messages = [{"role": "user", "content": user_content}]
+                                interp_ids = tokenizer.encode(
+                                    interp_text, return_tensors="pt", add_special_tokens=False
+                                )
+                            else:
+                                if base_prompt.strip():
+                                    user_content = base_prompt.strip() + "\n\n" + user_content
+                                interp_messages = [{"role": "user", "content": user_content}]
+                                interp_text = tokenizer.apply_chat_template(
+                                    interp_messages, tokenize=False, add_generation_prompt=True
+                                )
+                                interp_ids = tokenizer.encode(
+                                    interp_text, return_tensors="pt", add_special_tokens=False
+                                )
+
+                            placeholder_positions = [
+                                i for i, tid in enumerate(interp_ids[0].tolist())
+                                if placeholder_token in tokenizer.decode([tid]).strip()
+                            ]
+                            if not placeholder_positions:
+                                placeholder_positions = (
+                                    interp_ids[0] == placeholder_token_id
+                                ).nonzero(as_tuple=True)[0].tolist()
+
+                            _raw = interp_text if prompt_style == "identity" else None
+
+                            record = PatchscopeRecord(
+                                experiment="patchscope",
+                                template_name=tmpl_name,
+                                model=self.config.model_name,
+                                question_id=f"override_{so_name}",
+                                source_persona="source_override",
+                                evaluator_persona="source_override",
+                                condition="real",
+                                source_layer=src_layer,
+                                injection_layer=inj_layer,
+                                injection_mode=injection_mode,
+                                source_direct_answer=None,
+                                source_answer_probs=None,
+                                question_text=so_raw_text,
+                                question_options=None,
+                            )
+
+                            try:
+                                record.interpretation_prompt = interp_text
+
+                                use_logits = (
+                                    constrained_mode == "logits"
+                                    and tmpl_cfg.get("constrained", False)
+                                    and tmpl_name in all_choice_token_ids
+                                )
+
+                                if use_logits:
+                                    record.decode_mode = "logits"
+                                    result = inject_and_extract_logits(
+                                        model, tokenizer, device,
+                                        interp_messages, real_act,
+                                        injection_layer=inj_layer,
+                                        placeholder_positions=placeholder_positions,
+                                        choice_token_ids=all_choice_token_ids[tmpl_name],
+                                        mode=injection_mode,
+                                        alpha=injection_alpha,
+                                        raw_text=_raw,
+                                    )
+                                    record.choice_probs = result["probs"]
+                                    record.choice_logits = result["logits"]
+                                    record.predicted = result["predicted"]
+                                    record.parsed_answer = result["predicted"]
+                                    record.parse_success = True
+                                    record.generated_text = f"[logits] {result['predicted']}"
+                                else:
+                                    record.decode_mode = "generate"
+                                    gen_text = inject_and_generate(
+                                        model, tokenizer, device,
+                                        interp_messages, real_act,
+                                        injection_layer=inj_layer,
+                                        placeholder_positions=placeholder_positions,
+                                        mode=injection_mode,
+                                        alpha=injection_alpha,
+                                        max_new_tokens=gen_cfg["max_new_tokens"],
+                                        temperature=gen_cfg["temperature"],
+                                        do_sample=gen_cfg.get("do_sample", False),
+                                        raw_text=_raw,
+                                    )
+                                    record.generated_text = gen_text
+
+                                # Check expected output
+                                found = (
+                                    so_expected.lower() in record.generated_text.lower()
+                                    if so_expected else None
+                                )
+                                status = "✓" if found else "✗" if found is False else " "
+                                logger.info(
+                                    f"    {so_name} L{src_layer:>2}→{inj_layer:>2} "
+                                    f"{tmpl_name}: [{status}] '{record.generated_text.strip()[:60]}'"
+                                )
+
+                                # Capture sample prompt
+                                sample_key = f"override_{so_name}_{tmpl_name}"
+                                if sample_key not in self._sample_prompts:
+                                    self._sample_prompts[sample_key] = {
+                                        "template": tmpl_name,
+                                        "condition": "real (source_override)",
+                                        "source_persona": "source_override",
+                                        "evaluator_persona": "source_override",
+                                        "source_layer": src_layer,
+                                        "injection_layer": inj_layer,
+                                        "interp_prompt_text": interp_text,
+                                        "generated_text": record.generated_text,
+                                        "question_id": f"override_{so_name}",
+                                    }
+
+                            except Exception as e:
+                                msg = (
+                                    f"Override interpret error: {so_name} "
+                                    f"{tmpl_name} L{src_layer}→{inj_layer}: {e}"
+                                )
+                                logger.error(msg)
+                                self._errors.append(msg)
+                                record.error = str(e)
+
+                            record.timestamp = datetime.now(timezone.utc).isoformat()
+                            self.records.append(record)
+
+                # Incremental save after each override entry
+                self._run_elapsed = time.monotonic() - run_start
+                self._flush_results()
 
         self._run_elapsed = time.monotonic() - run_start
         self._flush_results()
@@ -1423,6 +1595,21 @@ class PatchscopeExperiment(BaseExperiment):
                 lines.append(f"  {rline}")
             lines.append("")
         lines.append("")
+
+        # ── Source override results (Phase 3)
+        override_records = [r for r in self.records if r.source_persona == "source_override"]
+        if override_records:
+            lines += [sep, "SOURCE OVERRIDE RESULTS (raw text, specific word extraction)", thin]
+            current_qid = None
+            for r in override_records:
+                if r.question_id != current_qid:
+                    current_qid = r.question_id
+                    lines.append(f"\n  {r.question_id}: \"{r.question_text}\"")
+                lines.append(
+                    f"    L{r.source_layer:>2} → {r.injection_layer:>2}  "
+                    f"{r.template_name:<20s}  '{r.generated_text.strip()[:70]}'"
+                )
+            lines.append("")
 
         # ── Results summary
         lines += [sep, "RESULTS SUMMARY", thin]
