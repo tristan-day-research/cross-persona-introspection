@@ -1,0 +1,41 @@
+[
+  {
+    "question_id": "bezos_ceo",
+    "persona_pair": "test",
+    "category_id": "test",
+    "category_name": "Patchscope Sanity Check",
+    "question_text": "Who is Amazon's former CEO?",
+    "options": {
+      "A": "Jeff Bezos",
+      "B": "Elon Musk",
+      "C": "Tim Cook",
+      "D": "Satya Nadella"
+    }
+  },
+  {
+    "question_id": "eiffel_tower",
+    "persona_pair": "test",
+    "category_id": "test",
+    "category_name": "Patchscope Sanity Check",
+    "question_text": "Where is the Eiffel Tower located?",
+    "options": {
+      "A": "London",
+      "B": "Berlin",
+      "C": "Paris",
+      "D": "Rome"
+    }
+  },
+  {
+    "question_id": "bill_gates",
+    "persona_pair": "test",
+    "category_id": "test",
+    "category_name": "Patchscope Sanity Check",
+    "question_text": "Who co-founded Microsoft?",
+    "options": {
+      "A": "Steve Jobs",
+      "B": "Bill Gates",
+      "C": "Mark Zuckerberg",
+      "D": "Larry Page"
+    }
+  }
+]

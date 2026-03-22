@@ -1,0 +1,117 @@
+# Patchscope Bezos sanity check
+# Uses the same pipeline as patchscope.yaml but with trivial factual questions
+# to verify the activation patching mechanism works end-to-end.
+#
+# Part 1: MCQ mode — standard pipeline with simple known-answer questions
+# Part 2: source_override — exact Bezos replication from the paper
+#
+# Toggle source_override on/off to switch between modes.
+
+# ═══════════════════════════════════════════════════════════════════════
+# PROMPTS
+# ═══════════════════════════════════════════════════════════════════════
+
+prompt_style: "identity"
+
+enabled_templates: ["answer_extraction", "open_summary"]
+
+interpretation_templates:
+
+  answer_extraction:
+    identity: |
+      cat -> cat; 135 -> 135; hello -> hello; {placeholder} ->
+    patchscopes: |
+      Question: {question_text}
+      Options: {options}
+
+      Answer: {placeholder}
+    selfie: |
+      {placeholder}
+
+      Question: {question_text}
+      Options: {options}
+
+      What answer did the model choose?
+      Respond with a single letter (A, B, C, or D).
+    constrained: true
+
+  open_summary:
+    identity: |
+      cat -> cat; 135 -> 135; hello -> hello; {placeholder} ->
+    patchscopes: |
+      Representation: {placeholder}
+    selfie: |
+      {placeholder}
+
+      In one short phrase, describe what answer or stance this representation most strongly supports.
+    constrained: false
+
+interpretation_base_prompt: ""
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# SOURCE OVERRIDE (Part 2 — exact Bezos replication)
+# ═══════════════════════════════════════════════════════════════════════
+# Uncomment to bypass MCQ formatting and test with raw source text.
+# When active, extracts activation at a specific word in raw text
+# instead of using the last-token of a chat-templated MCQ prompt.
+
+# source_override:
+#   raw_text: "Amazon's former CEO attended Oscars"
+#   extract_word: "CEO"
+#   subtoken_strategy: "last"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# LAYERS
+# ═══════════════════════════════════════════════════════════════════════
+
+layer_pairs:
+  - [20, 5]
+  - [25, 5]
+  - [25, 25]
+
+extraction:
+  token_position: "last"
+  layers: "middle"
+
+injection:
+  layer: 8
+  mode: "replace"
+  alpha: 1.0
+  num_placeholders: 1
+  placeholder_token: "?"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# GENERATION
+# ═══════════════════════════════════════════════════════════════════════
+
+generation:
+  max_new_tokens: 10
+  temperature: 0.0
+  do_sample: false
+  constrained_mode: "generate"   # use generate so we see actual text output
+
+relevancy:
+  enabled: false
+  max_tokens: 64
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# EXPERIMENT MATRIX (minimal — just verify patching works)
+# ═══════════════════════════════════════════════════════════════════════
+
+source_personas:
+  - neutral_evaluator
+
+evaluator_personas:
+  - neutral_evaluator
+
+categories: []            # all categories (just "test" in our task file)
+samples_per_category: null
+
+controls:
+  text_only_baseline: true
+  shuffled_activation: false
+  control_sample_rate: 1.0

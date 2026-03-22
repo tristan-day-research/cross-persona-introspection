@@ -194,6 +194,43 @@ def _get_placeholder_token_id(tokenizer, configured_token: str = "auto") -> int:
     return ids[0] if ids else 1
 
 
+def find_token_position(tokenizer, text: str, word: str, strategy: str = "last") -> int:
+    """Find the token position of a word in tokenized text.
+
+    Args:
+        tokenizer: HuggingFace tokenizer.
+        text: Full input text.
+        word: Word to find (e.g., "CEO").
+        strategy: "last" uses the last subtoken of the word, "first" uses the first.
+
+    Returns:
+        Token position (0-indexed).
+    """
+    token_ids = tokenizer.encode(text, add_special_tokens=False)
+    tokens = [tokenizer.decode([tid]) for tid in token_ids]
+
+    # Find contiguous span that decodes to the target word
+    word_ids = tokenizer.encode(word, add_special_tokens=False)
+
+    # Search for the subsequence
+    for i in range(len(token_ids) - len(word_ids) + 1):
+        if token_ids[i : i + len(word_ids)] == word_ids:
+            if strategy == "last":
+                return i + len(word_ids) - 1
+            else:
+                return i
+
+    # Fallback: search by decoded string matching
+    for i, tok_str in enumerate(tokens):
+        if word.lower() in tok_str.lower().strip():
+            return i
+
+    raise ValueError(
+        f"Could not find '{word}' in tokenized text. "
+        f"Tokens: {list(enumerate(tokens))}"
+    )
+
+
 def _format_question_for_source(question: dict) -> str:
     """Format a question dict into a user-facing MCQ string for the source pass."""
     lines = [question["question_text"], ""]
@@ -271,6 +308,7 @@ def extract_activation(
     messages: list[dict],
     layer_idx: int,
     token_position: str | int = "last",
+    raw_text: Optional[str] = None,
 ) -> torch.Tensor:
     """Run a source forward pass and capture the hidden state at (layer, position).
 
@@ -281,13 +319,17 @@ def extract_activation(
         messages: Chat messages for the source prompt.
         layer_idx: Which transformer layer to hook (0-indexed, excluding embedding).
         token_position: "last" or an integer index.
+        raw_text: If provided, use this as input text directly (skip chat template).
 
     Returns:
         Activation tensor of shape (d_model,).
     """
-    input_text = tokenizer.apply_chat_template(
-        messages, tokenize=False, add_generation_prompt=True
-    )
+    if raw_text is not None:
+        input_text = raw_text
+    else:
+        input_text = tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
     # add_special_tokens=False because apply_chat_template already includes BOS
     input_ids = tokenizer.encode(input_text, return_tensors="pt", add_special_tokens=False).to(device)
 
@@ -780,6 +822,29 @@ class PatchscopeExperiment(BaseExperiment):
             f"× {num_placeholders}"
         )
 
+        # ── Source override mode ──────────────────────────────────────────
+        # When source_override is set, bypass MCQ formatting and extract
+        # activation at a specific word in raw text (e.g., the Bezos example
+        # from the Patchscopes paper).
+        source_override = ps.get("source_override")
+        if source_override:
+            raw_text = source_override["raw_text"]
+            extract_word = source_override["extract_word"]
+            sub_strategy = source_override.get("subtoken_strategy", "last")
+            token_pos = find_token_position(tokenizer, raw_text, extract_word, sub_strategy)
+            logger.info(
+                f"Source override: '{raw_text}', extract '{extract_word}' "
+                f"at token position {token_pos}"
+            )
+            # Override questions with a single dummy entry
+            self.questions = [{
+                "question_id": "source_override",
+                "question_text": raw_text,
+                "options": {},
+            }]
+            # Override source personas to a single dummy name
+            source_persona_names = ["source_override"]
+
         # Pre-compute source activations and direct answers for all (source_persona, question, layer)
         # This avoids redundant forward passes when sweeping evaluators/templates.
         logger.info("=== Phase 1: Extracting source activations ===")
@@ -789,9 +854,32 @@ class PatchscopeExperiment(BaseExperiment):
         direct_answers: dict[str, dict[int, dict]] = {}
 
         for sp_name in source_persona_names:
-            sp = self.all_personas[sp_name]
             activations[sp_name] = {}
             direct_answers[sp_name] = {}
+
+            if source_override:
+                # ── Source override: extract from raw text at specific word ──
+                activations[sp_name][0] = {}
+                for layer in source_layers:
+                    try:
+                        act = extract_activation(
+                            model, tokenizer, device,
+                            messages=[],  # unused when raw_text is set
+                            layer_idx=layer,
+                            token_position=token_pos,
+                            raw_text=raw_text,
+                        )
+                        activations[sp_name][0][layer] = act
+                    except Exception as e:
+                        msg = f"Extract error: source_override layer={layer}: {e}"
+                        logger.error(msg)
+                        self._errors.append(msg)
+                direct_answers[sp_name][0] = {
+                    "answer": None, "probs": {}, "raw": ""
+                }
+                continue
+
+            sp = self.all_personas[sp_name]
 
             for qi, question in enumerate(tqdm(
                 self.questions, desc=f"  Extract [{sp_name}]", leave=True

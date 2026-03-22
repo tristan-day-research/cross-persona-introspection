@@ -228,6 +228,21 @@ patchscope_dolphin:
   model_dtype: float16
   patchscope_config: "patchscope.yaml"
 
+# ── Patchscope Bezos sanity check ─────────────────────────────────────
+# Runs the Jeff Bezos example from the Patchscopes paper through the
+# real experiment pipeline to verify end-to-end patching works.
+
+patchscope_bezos_test:
+  experiment_name: patchscope
+  model_name: "meta-llama/Llama-3.1-8B-Instruct"
+  personas: []
+  task_sets: []
+  task_file: "patchscope_bezos_test.json"
+  sample_size: null
+  seed: 42
+  model_dtype: float16
+  patchscope_config: "patchscope_bezos.yaml"
+
 confidence_entropy_base_full:
   experiment_name: confidence_entropy_base
   model_name: "meta-llama/Llama-3.1-8B"
