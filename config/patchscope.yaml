@@ -114,7 +114,6 @@ layer_pairs:
   - [25, 3]
   - [25, 5]
   - [20, 20]
-  - [25, 25]
   - [30, 30]
 
 # Option 2: full cross-product sweep (uncomment, remove layer_pairs above)
