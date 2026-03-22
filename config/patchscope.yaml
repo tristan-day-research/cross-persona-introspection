@@ -14,7 +14,7 @@ prompt_style: "patchscopes"
 
 # Which templates to run (empty list = all).
 # Valid: answer_extraction, persona_probe, agreement_probe, open_summary, self_recognition
-enabled_templates: ["answer_extraction", "open_summary"]
+enabled_templates: ["answer_extraction"]
 
 # Template definitions. Each has three prompt variants.
 # Variables: {placeholder}, {question_text}, {options}, {statement}
@@ -114,6 +114,7 @@ layer_pairs:
   - [25, 3]
   - [25, 5]
   - [20, 20]
+  - [25, 25]
   - [30, 30]
 
 # Option 2: full cross-product sweep (uncomment, remove layer_pairs above)
@@ -168,10 +169,10 @@ evaluator_personas:
 
 # Question sampling
 categories: ["cat_1", "cat_4"]   # empty = all categories
-samples_per_category: 5          # null = all in category
+samples_per_category: null       # null = all in category
 
 # Controls
 controls:
   text_only_baseline: true
   shuffled_activation: true
-  control_sample_rate: 0.5      # fraction of cells to run controls on
+  control_sample_rate: 1.0      # 1.0 = run controls for every cell (needed for matched source_gain)

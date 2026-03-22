@@ -895,6 +895,14 @@ class PatchscopeExperiment(BaseExperiment):
         )
         logger.info(f"Total matrix cells: {total_cells}")
 
+        # ── Baseline cache ──────────────────────────────────────────────
+        # text_only_baseline results depend only on (question, evaluator, template)
+        # — not on source_persona, source_layer, or injection_layer (no activation
+        # is injected). Cache them to avoid redundant forward passes.
+        # Key: (question_id, evaluator_persona, template_name)
+        # Value: dict with logits/generate results
+        _baseline_cache: dict[tuple, dict] = {}
+
         cell_count = 0
         for sp_name in source_persona_names:
             for qi, question in enumerate(self.questions):
@@ -1056,6 +1064,29 @@ class PatchscopeExperiment(BaseExperiment):
                                         # Pass raw_text for identity style to skip chat template
                                         _raw = interp_text if prompt_style == "identity" else None
 
+                                        # ── Baseline deduplication ──
+                                        # text_only_baseline depends only on (question, evaluator, template),
+                                        # not on source_persona/layer. Reuse cached results.
+                                        _baseline_key = (qid, eval_name, tmpl_name)
+                                        if condition == "text_only_baseline" and _baseline_key in _baseline_cache:
+                                            cached = _baseline_cache[_baseline_key]
+                                            record.decode_mode = cached["decode_mode"]
+                                            record.generated_text = cached["generated_text"]
+                                            record.parsed_answer = cached.get("parsed_answer")
+                                            record.parse_success = cached.get("parse_success", False)
+                                            record.choice_probs = cached.get("choice_probs")
+                                            record.choice_logits = cached.get("choice_logits")
+                                            record.predicted = cached.get("predicted")
+                                            if tmpl_name == "answer_extraction" and record.source_direct_answer:
+                                                record.is_correct = (
+                                                    record.predicted == record.source_direct_answer
+                                                )
+                                            # Skip to record append (no forward pass needed)
+                                            record.timestamp = datetime.now(timezone.utc).isoformat()
+                                            self.records.append(record)
+                                            cell_count += 1
+                                            continue
+
                                         if use_logits:
                                             # ── Logits mode: single forward pass, no generation ──
                                             record.decode_mode = "logits"
@@ -1138,6 +1169,18 @@ class PatchscopeExperiment(BaseExperiment):
                                                         sum(rel_scores) / len(rel_scores)
                                                         if rel_scores else None
                                                     )
+
+                                        # Cache baseline results for deduplication
+                                        if condition == "text_only_baseline" and _baseline_key not in _baseline_cache:
+                                            _baseline_cache[_baseline_key] = {
+                                                "decode_mode": record.decode_mode,
+                                                "generated_text": record.generated_text,
+                                                "parsed_answer": record.parsed_answer,
+                                                "parse_success": record.parse_success,
+                                                "choice_probs": record.choice_probs,
+                                                "choice_logits": record.choice_logits,
+                                                "predicted": record.predicted,
+                                            }
 
                                         # Capture sample prompt (first of each template)
                                         sample_key = f"{tmpl_name}_{condition}"
