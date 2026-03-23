@@ -1154,7 +1154,6 @@ class PatchscopeExperiment(BaseExperiment):
                                             act_for_condition = real_act
 
                                         record.evaluator_system_prompt = eval_persona.system_prompt or ""
-                                        record.interpretation_prompt = interp_text
 
                                         # Get shuffle remap for answer remapping
                                         _shuffle_key = (qid, sp_name)
@@ -1180,6 +1179,12 @@ class PatchscopeExperiment(BaseExperiment):
                                             # Ensure it ends with a space after "Answer:"
                                             if not _raw_baseline.endswith(" "):
                                                 _raw_baseline += " "
+
+                                        # Log the actual prompt used for this condition
+                                        if condition == "text_only_baseline" and _raw_baseline:
+                                            record.interpretation_prompt = _raw_baseline
+                                        else:
+                                            record.interpretation_prompt = interp_text
 
                                         # ── Baseline deduplication ──
                                         # text_only_baseline depends only on (question, evaluator, template),
