@@ -231,11 +231,43 @@ def find_token_position(tokenizer, text: str, word: str, strategy: str = "last")
     )
 
 
+def _shuffle_options(question: dict, seed: int, qid: str, persona: str) -> tuple[dict, dict[str, str]]:
+    """Shuffle option order for a question, returning (shuffled_question, remap).
+
+    Returns:
+        shuffled_question: question dict with options reordered (new labels A-D)
+        remap: dict mapping shuffled label -> original label, e.g. {"A": "C", "B": "A", ...}
+    """
+    rng = random.Random(seed + hash(qid + persona))
+    original_labels = ["A", "B", "C", "D"]
+    shuffled_labels = original_labels.copy()
+    rng.shuffle(shuffled_labels)
+    # shuffled_labels[i] is the original label that goes into position i
+    # e.g. shuffled_labels = ["C", "A", "D", "B"] means new A = old C
+    options = question.get("options", {})
+    new_options = {}
+    remap = {}  # new_label -> original_label
+    for new_pos, new_label in enumerate(original_labels):
+        orig_label = shuffled_labels[new_pos]
+        if orig_label in options:
+            new_options[new_label] = options[orig_label]
+            remap[new_label] = orig_label
+    shuffled_q = dict(question)
+    shuffled_q["options"] = new_options
+    return shuffled_q, remap
+
+
+def _format_options_lines(options: dict) -> str:
+    """Format options as one per line: A) ..., B) ..., matching source prompt format."""
+    return "\n".join(f"{k}) {v}" for k, v in options.items())
+
+
 def _format_question_for_source(question: dict) -> str:
     """Format a question dict into a user-facing MCQ string for the source pass."""
     lines = [question["question_text"], ""]
     for letter in ["A", "B", "C", "D"]:
-        lines.append(f"{letter}) {question['options'][letter]}")
+        if letter in question.get("options", {}):
+            lines.append(f"{letter}) {question['options'][letter]}")
     lines.append("")
     lines.append(
         "Choose the single best answer. "
@@ -829,6 +861,10 @@ class PatchscopeExperiment(BaseExperiment):
         activations: dict[str, dict[int, dict[int, torch.Tensor]]] = {}
         # direct_answers[source_persona][question_idx] = {"answer": str, "probs": dict}
         direct_answers: dict[str, dict[int, dict]] = {}
+        # shuffle_maps[(qid, sp_name)] = (shuffled_question, remap)
+        shuffle_maps: dict[tuple[str, str], tuple[dict, dict[str, str]]] = {}
+        # Sample source prompts for .txt log
+        self._sample_source_prompts: dict[str, dict] = {}
 
         for sp_name in source_persona_names:
             activations[sp_name] = {}
@@ -840,7 +876,16 @@ class PatchscopeExperiment(BaseExperiment):
                 self.questions, desc=f"  Extract [{sp_name}]", leave=True
             )):
                 try:
-                    user_msg = _format_question_for_source(question)
+                    qid = question.get("question_id", f"q{qi}")
+
+                    # Shuffle option order to control for label-position bias
+                    shuffled_q, remap = _shuffle_options(
+                        question, self.config.seed, qid, sp_name
+                    )
+                    shuffle_maps[(qid, sp_name)] = (shuffled_q, remap)
+                    inverse_remap = {v: k for k, v in remap.items()}  # orig -> shuffled
+
+                    user_msg = _format_question_for_source(shuffled_q)
                     messages = []
                     if sp.system_prompt:
                         messages.append({"role": "system", "content": sp.system_prompt})
@@ -856,18 +901,37 @@ class PatchscopeExperiment(BaseExperiment):
                         )
                         activations[sp_name][qi][layer] = act
 
-                    # Get source's direct answer (ground truth)
-                    direct_text = self.backend.generate(
-                        messages, max_new_tokens=16, temperature=0.0, do_sample=False
+                    # Get source's direct answer via logits (same method as reporter)
+                    probs, logits_dict = self.backend.get_choice_probs_and_logits(
+                        messages, ["A", "B", "C", "D"]
                     )
-                    probs = self.backend.get_choice_probs(messages, ["A", "B", "C", "D"])
-                    parsed = direct_text.strip().upper()
-                    answer = parsed[0] if parsed and parsed[0] in "ABCD" else None
+                    shuffled_answer = max(probs, key=probs.get)
+                    # Remap back to canonical (original) label
+                    canonical_answer = remap.get(shuffled_answer, shuffled_answer)
+                    # Remap probs/logits keys back to canonical
+                    canonical_probs = {remap.get(k, k): v for k, v in probs.items()}
+                    canonical_logits = {remap.get(k, k): v for k, v in logits_dict.items()}
                     direct_answers[sp_name][qi] = {
-                        "answer": answer,
-                        "probs": probs,
-                        "raw": direct_text,
+                        "answer": canonical_answer,
+                        "probs": canonical_probs,
+                        "logits": canonical_logits,
+                        "raw": f"[logits] {canonical_answer}",
+                        "shuffled_answer": shuffled_answer,
+                        "option_order": [remap.get(l, l) for l in ["A", "B", "C", "D"]],
                     }
+
+                    # Capture sample source prompt for .txt log
+                    if sp_name not in self._sample_source_prompts:
+                        self._sample_source_prompts[sp_name] = {
+                            "persona": sp_name,
+                            "question_id": qid,
+                            "prompt_text": tokenizer.apply_chat_template(
+                                messages, tokenize=False, add_generation_prompt=True
+                            ),
+                            "answer": canonical_answer,
+                            "shuffled_answer": shuffled_answer,
+                            "option_order": [remap.get(l, l) for l in ["A", "B", "C", "D"]],
+                        }
 
                 except Exception as e:
                     msg = f"Extract error: {sp_name} q{qi} {question.get('question_id', '?')}: {e}"
@@ -875,7 +939,7 @@ class PatchscopeExperiment(BaseExperiment):
                     self._errors.append(msg)
                     activations.setdefault(sp_name, {})[qi] = {}
                     direct_answers.setdefault(sp_name, {})[qi] = {
-                        "answer": None, "probs": {}, "raw": ""
+                        "answer": None, "probs": {}, "logits": {}, "raw": ""
                     }
 
         # Phase 2: Run interpretation matrix
@@ -954,15 +1018,25 @@ class PatchscopeExperiment(BaseExperiment):
                                 # question text when looking for the injection target.
                                 _SENTINEL = "\x00PH\x00"
 
+                                # Use shuffled options matching the source pass
+                                _shuffle_key = (qid, sp_name)
+                                if _shuffle_key in shuffle_maps:
+                                    _q_for_template = shuffle_maps[_shuffle_key][0]
+                                else:
+                                    _q_for_template = question
+                                _opts = _q_for_template.get("options", {})
+
                                 options_str = ", ".join(
-                                    f"{k}) {v}"
-                                    for k, v in question.get("options", {}).items()
+                                    f"{k}) {v}" for k, v in _opts.items()
                                 )
+                                options_formatted_str = _format_options_lines(_opts)
+
                                 user_content = prompt_template.strip()
                                 user_content = user_content.replace("{placeholder}", _SENTINEL)
                                 user_content = user_content.replace(
                                     "{question_text}", question.get("question_text", "")
                                 )
+                                user_content = user_content.replace("{options_formatted}", options_formatted_str)
                                 user_content = user_content.replace("{options}", options_str)
                                 user_content = user_content.replace(
                                     "{statement}", question.get("question_text", "")
@@ -1047,6 +1121,7 @@ class PatchscopeExperiment(BaseExperiment):
                                         if control_rng.random() > control_sample_rate:
                                             continue
                                     cell_count += 1
+                                    _da = direct_answers[sp_name][qi]
                                     record = PatchscopeRecord(
                                         experiment="patchscope",
                                         template_name=tmpl_name,
@@ -1058,8 +1133,8 @@ class PatchscopeExperiment(BaseExperiment):
                                         source_layer=src_layer,
                                         injection_layer=inj_layer,
                                         injection_mode=injection_mode,
-                                        source_direct_answer=direct_answers[sp_name][qi]["answer"],
-                                        source_answer_probs=direct_answers[sp_name][qi]["probs"],
+                                        source_direct_answer=_da["answer"],
+                                        source_answer_probs=_da["probs"],
                                         question_text=question.get("question_text", ""),
                                         question_options=question.get("options"),
                                     )
@@ -1081,6 +1156,11 @@ class PatchscopeExperiment(BaseExperiment):
                                         record.evaluator_system_prompt = eval_persona.system_prompt or ""
                                         record.interpretation_prompt = interp_text
 
+                                        # Get shuffle remap for answer remapping
+                                        _shuffle_key = (qid, sp_name)
+                                        _remap = shuffle_maps.get(_shuffle_key, (None, {}))[1]
+                                        _inverse_remap = {v: k for k, v in _remap.items()} if _remap else {}
+
                                         # Decide: logits mode or generate mode
                                         use_logits = (
                                             constrained_mode == "logits"
@@ -1091,10 +1171,20 @@ class PatchscopeExperiment(BaseExperiment):
                                         # Pass raw_text for identity style to skip chat template
                                         _raw = interp_text if prompt_style == "identity" else None
 
+                                        # For text_only_baseline: build prompt WITHOUT placeholder
+                                        # so the model doesn't see "?" — it just predicts the next token
+                                        # after "Answer: " naturally
+                                        _raw_baseline = None
+                                        if condition == "text_only_baseline" and _ph_char_pos >= 0:
+                                            _raw_baseline = interp_text[:_ph_char_pos].rstrip()
+                                            # Ensure it ends with a space after "Answer:"
+                                            if not _raw_baseline.endswith(" "):
+                                                _raw_baseline += " "
+
                                         # ── Baseline deduplication ──
                                         # text_only_baseline depends only on (question, evaluator, template),
                                         # not on source_persona/layer. Reuse cached results.
-                                        _baseline_key = (qid, eval_name, tmpl_name)
+                                        _baseline_key = (qid, eval_name, tmpl_name, sp_name)
                                         if condition == "text_only_baseline" and _baseline_key in _baseline_cache:
                                             cached = _baseline_cache[_baseline_key]
                                             record.decode_mode = cached["decode_mode"]
@@ -1108,7 +1198,6 @@ class PatchscopeExperiment(BaseExperiment):
                                                 record.is_correct = (
                                                     record.predicted == record.source_direct_answer
                                                 )
-                                            # Skip to record append (no forward pass needed)
                                             record.timestamp = datetime.now(timezone.utc).isoformat()
                                             self.records.append(record)
                                             cell_count += 1
@@ -1117,6 +1206,8 @@ class PatchscopeExperiment(BaseExperiment):
                                         if use_logits:
                                             # ── Logits mode: single forward pass, no generation ──
                                             record.decode_mode = "logits"
+                                            # For baseline, use prompt without placeholder
+                                            _effective_raw = _raw_baseline if condition == "text_only_baseline" else _raw
                                             result = inject_and_extract_logits(
                                                 model, tokenizer, device,
                                                 interp_messages, act_for_condition,
@@ -1125,19 +1216,30 @@ class PatchscopeExperiment(BaseExperiment):
                                                 choice_token_ids=all_choice_token_ids[tmpl_name],
                                                 mode=injection_mode,
                                                 alpha=injection_alpha,
-                                                raw_text=_raw,
+                                                raw_text=_effective_raw,
                                             )
-                                            record.choice_probs = result["probs"]
-                                            record.choice_logits = result["logits"]
-                                            record.predicted = result["predicted"]
-                                            record.parsed_answer = result["predicted"]
+
+                                            # Remap shuffled labels back to canonical
+                                            if _remap and tmpl_name == "answer_extraction":
+                                                canonical_probs = {_remap.get(k, k): v for k, v in result["probs"].items()}
+                                                canonical_logits = {_remap.get(k, k): v for k, v in result["logits"].items()}
+                                                canonical_predicted = _remap.get(result["predicted"], result["predicted"])
+                                            else:
+                                                canonical_probs = result["probs"]
+                                                canonical_logits = result["logits"]
+                                                canonical_predicted = result["predicted"]
+
+                                            record.choice_probs = canonical_probs
+                                            record.choice_logits = canonical_logits
+                                            record.predicted = canonical_predicted
+                                            record.parsed_answer = canonical_predicted
                                             record.parse_success = True
-                                            record.generated_text = f"[logits] {result['predicted']}"
+                                            record.generated_text = f"[logits] {canonical_predicted}"
 
                                             # Compute is_correct for answer_extraction
                                             if tmpl_name == "answer_extraction" and record.source_direct_answer:
                                                 record.is_correct = (
-                                                    result["predicted"] == record.source_direct_answer
+                                                    canonical_predicted == record.source_direct_answer
                                                 )
 
                                         else:
@@ -1640,8 +1742,25 @@ class PatchscopeExperiment(BaseExperiment):
                 lines.append("  (no system prompt)")
         lines.append("")
 
-        # ── Sample prompts (verbatim, one per template+condition)
-        lines += [sep, "SAMPLE PROMPTS AND RESPONSES (verbatim, including special tokens)", thin]
+        # ── Source prompt examples
+        if hasattr(self, '_sample_source_prompts') and self._sample_source_prompts:
+            lines += [sep, "SOURCE PROMPT EXAMPLES (verbatim, including special tokens)", thin]
+            for sp_name, sample in sorted(self._sample_source_prompts.items()):
+                lines += [
+                    f"\n--- {sp_name} ---",
+                    f"  question_id   : {sample['question_id']}",
+                    f"  option_order  : {sample.get('option_order', 'ABCD')}",
+                    f"  source_answer : {sample['answer']} (shuffled: {sample.get('shuffled_answer', '?')})",
+                    "",
+                    "  ── FULL SOURCE PROMPT (exact tokens sent to model) ──",
+                ]
+                for pline in sample["prompt_text"].splitlines():
+                    lines.append(f"  {pline}")
+                lines.append("")
+            lines.append("")
+
+        # ── Sample reporter prompts (verbatim, one per template+condition)
+        lines += [sep, "SAMPLE REPORTER PROMPTS AND RESPONSES (verbatim, including special tokens)", thin]
         for sample_key, sample in sorted(self._sample_prompts.items()):
             lines += [
                 f"\n--- {sample_key} ---",

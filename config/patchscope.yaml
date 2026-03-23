@@ -29,15 +29,18 @@ interpretation_templates:
     identity: |
       cat -> cat; 135 -> 135; hello -> hello; {placeholder}
     patchscopes: |
-      Question: {question_text}
-      Options: {options}
+      {question_text}
 
+      {options_formatted}
+
+      Choose the single best answer. Answer with exactly one letter: A, B, C, or D.
       Answer: {placeholder}
     selfie: |
       {placeholder}
 
-      Question: {question_text}
-      Options: {options}
+      {question_text}
+
+      {options_formatted}
 
       What answer did the model choose?
       Respond with a single letter (A, B, C, or D).
@@ -169,7 +172,7 @@ evaluator_personas:
 
 # Question sampling
 categories: ["cat_1", "cat_4"]   # empty = all categories
-samples_per_category: null       # null = all in category
+samples_per_category: 20       # null = all in category
 
 # Controls
 controls:
