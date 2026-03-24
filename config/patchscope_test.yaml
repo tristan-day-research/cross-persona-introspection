@@ -1,97 +1,97 @@
-# ── Patchscope Test ───────────────────────────────────────────────────
-# Reproduces the canonical example from Patchscopes (Ghandeharioun et al.,
-# ICML 2024, arXiv:2401.06102), Figure 1, and tests multiple target
-# prompt styles to find what works with instruct models.
-#
-# Each target prompt is run against every source × layer pair.
+# # ── Patchscope Test ───────────────────────────────────────────────────
+# # Reproduces the canonical example from Patchscopes (Ghandeharioun et al.,
+# # ICML 2024, arXiv:2401.06102), Figure 1, and tests multiple target
+# # prompt styles to find what works with instruct models.
+# #
+# # Each target prompt is run against every source × layer pair.
 
-model:
-  name: "meta-llama/Llama-3.1-8B-Instruct"
-  dtype: float16
-  device_map: "auto"
+# model:
+#   name: "meta-llama/Llama-3.1-8B-Instruct"
+#   dtype: float16
+#   device_map: "auto"
 
-# ── Source prompt ─────────────────────────────────────────────────────
-source:
-  text: "Amazon's former CEO attended Oscars"
-  extract_word: "CEO"
-  subtoken_strategy: "last"
+# # ── Source prompt ─────────────────────────────────────────────────────
+# source:
+#   text: "Amazon's former CEO attended Oscars"
+#   extract_word: "CEO"
+#   subtoken_strategy: "last"
 
-# ── Target prompts ───────────────────────────────────────────────────
-# Each entry is run independently against the source activation.
-#   style: "raw" = plain text, "chat" = wrapped in chat template
-#   text:  the prompt (for raw) or user message (for chat)
-#   inject_token: which token gets patched with the source activation
-#   system: (chat only) system prompt
-#   name:  short label for logs/results
-#
-# Add as many as you want — they all run in the same sweep.
+# # ── Target prompts ───────────────────────────────────────────────────
+# # Each entry is run independently against the source activation.
+# #   style: "raw" = plain text, "chat" = wrapped in chat template
+# #   text:  the prompt (for raw) or user message (for chat)
+# #   inject_token: which token gets patched with the source activation
+# #   system: (chat only) system prompt
+# #   name:  short label for logs/results
+# #
+# # Add as many as you want — they all run in the same sweep.
 
-targets:
-  - name: "chat_tell_me"
-    style: "chat"
-    system: "You are a helpful assistant."
-    text: "Tell me about ___"
-    inject_token: "___"
+# targets:
+#   - name: "chat_tell_me"
+#     style: "chat"
+#     system: "You are a helpful assistant."
+#     text: "Tell me about ___"
+#     inject_token: "___"
 
-  - name: "raw_identity_ceo"
-    style: "raw"
-    text: "cat -> cat; 135 -> 135; CEO ->"
-    inject_token: "CEO"
+#   - name: "raw_identity_ceo"
+#     style: "raw"
+#     text: "cat -> cat; 135 -> 135; CEO ->"
+#     inject_token: "CEO"
 
-  - name: "raw_identity_question"
-    style: "raw"
-    text: "cat -> cat; 135 -> 135; hello -> hello; ?"
-    inject_token: "?"
+#   - name: "raw_identity_question"
+#     style: "raw"
+#     text: "cat -> cat; 135 -> 135; hello -> hello; ?"
+#     inject_token: "?"
 
-  - name: "chat_what_is"
-    style: "chat"
-    system: "You are a helpful assistant."
-    text: "What is this: ___"
-    inject_token: "___"
+#   - name: "chat_what_is"
+#     style: "chat"
+#     system: "You are a helpful assistant."
+#     text: "What is this: ___"
+#     inject_token: "___"
 
-  - name: "raw_completion"
-    style: "raw"
-    text: "The CEO of Amazon is"
-    inject_token: "CEO"
+#   - name: "raw_completion"
+#     style: "raw"
+#     text: "The CEO of Amazon is"
+#     inject_token: "CEO"
 
-  # Add more here — just follow the same format:
-  # - name: "my_new_prompt"
-  #   style: "raw"       # or "chat"
-  #   text: "whatever prompt with PLACEHOLDER"
-  #   inject_token: "PLACEHOLDER"
-  #   system: "optional system prompt"  # chat only
+#   # Add more here — just follow the same format:
+#   # - name: "my_new_prompt"
+#   #   style: "raw"       # or "chat"
+#   #   text: "whatever prompt with PLACEHOLDER"
+#   #   inject_token: "PLACEHOLDER"
+#   #   system: "optional system prompt"  # chat only
 
-# ── Layer configuration ──────────────────────────────────────────────
-layers:
-  sweep: [1, 3, 5, 8, 10, 15, 20, 25, 30]
-  match_source_target: true
+# # ── Layer configuration ──────────────────────────────────────────────
+# layers:
+#   sweep: [1, 3, 5, 8, 10, 15, 20, 25, 30]
+#   match_source_target: true
 
-  layer_pairs:
-    - [15, 1]
-    - [15, 3]
-    - [15, 5]
-    - [20, 1]
-    - [20, 3]
-    - [20, 5]
-    - [25, 1]
-    - [25, 3]
-    - [25, 5]
-    - [30, 1]
-    - [30, 3]
-    - [30, 5]
+#   layer_pairs:
+#     - [15, 1]
+#     - [15, 3]
+#     - [15, 5]
+#     - [20, 1]
+#     - [20, 3]
+#     - [20, 5]
+#     - [25, 1]
+#     - [25, 3]
+#     - [25, 5]
+#     - [30, 1]
+#     - [30, 3]
+#     - [30, 5]
 
-# ── Generation ───────────────────────────────────────────────────────
-generation:
-  max_new_tokens: 10
-  temperature: 0.0
-  do_sample: false
+# # ── Generation ───────────────────────────────────────────────────────
+# generation:
+#   max_new_tokens: 10
+#   temperature: 0.0
+#   do_sample: false
 
-# ── Additional source test cases (run after the main example) ────────
-extra_tests:
-  - source_text: "The Eiffel Tower is located in"
-    extract_word: "Tower"
-    expected_contains: "Paris"
+# # ── Additional source test cases (run after the main example) ────────
+# extra_tests:
+#   - source_text: "The Eiffel Tower is located in"
+#     extract_word: "Tower"
+#     expected_contains: "Paris"
 
-  - source_text: "Microsoft was founded by Bill"
-    extract_word: "Bill"
-    expected_contains: "Gates"
+#   - source_text: "Microsoft was founded by Bill"
+#     extract_word: "Bill"
+#     expected_contains: "Gates"

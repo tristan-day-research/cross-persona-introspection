@@ -1,153 +1,153 @@
-# Patchscope Bezos sanity check
-# Uses the same pipeline as patchscope.yaml but with trivial factual questions
-# to verify the activation patching mechanism works end-to-end.
-#
-# Part 1: MCQ mode — standard pipeline with simple known-answer questions
-# Part 2: source_overrides — exact replication from the paper (raw text,
-#          specific word extraction). Runs AFTER Part 1 in the same run.
+# # Patchscope Bezos sanity check
+# # Uses the same pipeline as patchscope.yaml but with trivial factual questions
+# # to verify the activation patching mechanism works end-to-end.
+# #
+# # Part 1: MCQ mode — standard pipeline with simple known-answer questions
+# # Part 2: source_overrides — exact replication from the paper (raw text,
+# #          specific word extraction). Runs AFTER Part 1 in the same run.
 
-# ═══════════════════════════════════════════════════════════════════════
-# PROMPTS
-# ═══════════════════════════════════════════════════════════════════════
+# # ═══════════════════════════════════════════════════════════════════════
+# # PROMPTS
+# # ═══════════════════════════════════════════════════════════════════════
 
-prompt_style: "identity"
+# prompt_style: "identity"
 
-enabled_templates: ["answer_extraction", "open_summary"]
+# enabled_templates: ["answer_extraction", "open_summary"]
 
-interpretation_templates:
+# interpretation_templates:
 
-  answer_extraction:
-    identity: |
-      cat -> cat; 135 -> 135; hello -> hello; {placeholder}
-    patchscopes: |
-      {question_text}
+#   answer_extraction:
+#     identity: |
+#       cat -> cat; 135 -> 135; hello -> hello; {placeholder}
+#     patchscopes: |
+#       {question_text}
 
-      {options_formatted}
+#       {options_formatted}
 
-      Choose the single best answer. Answer with exactly one letter: A, B, C, or D.
-      Answer: {placeholder}
-    selfie: |
-      {placeholder}
+#       Choose the single best answer. Answer with exactly one letter: A, B, C, or D.
+#       Answer: {placeholder}
+#     selfie: |
+#       {placeholder}
 
-      {question_text}
+#       {question_text}
 
-      {options_formatted}
+#       {options_formatted}
 
-      What answer did the model choose?
-      Respond with a single letter (A, B, C, or D).
-    constrained: true
+#       What answer did the model choose?
+#       Respond with a single letter (A, B, C, or D).
+#     constrained: true
 
-  open_summary:
-    identity: |
-      cat -> cat; 135 -> 135; hello -> hello; {placeholder}
-    patchscopes: |
-      Representation: {placeholder}
-    selfie: |
-      {placeholder}
+#   open_summary:
+#     identity: |
+#       cat -> cat; 135 -> 135; hello -> hello; {placeholder}
+#     patchscopes: |
+#       Representation: {placeholder}
+#     selfie: |
+#       {placeholder}
 
-      In one short phrase, describe what answer or stance this representation most strongly supports.
-    constrained: false
+#       In one short phrase, describe what answer or stance this representation most strongly supports.
+#     constrained: false
 
-interpretation_base_prompt: ""
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# SOURCE OVERRIDES (Part 2 — exact paper replication)
-# ═══════════════════════════════════════════════════════════════════════
-# Raw source text tests that run AFTER the MCQ matrix (Phase 3).
-# Each entry extracts activation at a specific word in raw text and
-# injects it through the same templates × layer pairs as Phase 2.
-
-source_overrides:
-  - name: "bezos_ceo"
-    raw_text: "Amazon's former CEO attended Oscars"
-    extract_word: "CEO"
-    subtoken_strategy: "last"
-    expected_contains: "bezos"
-
-  - name: "eiffel_tower"
-    raw_text: "The Eiffel Tower is located in"
-    extract_word: "Tower"
-    subtoken_strategy: "last"
-    expected_contains: "paris"
-
-  - name: "bill_gates"
-    raw_text: "Microsoft was founded by Bill"
-    extract_word: "Bill"
-    subtoken_strategy: "last"
-    expected_contains: "gates"
+# interpretation_base_prompt: ""
 
 
-# ═══════════════════════════════════════════════════════════════════════
-# LAYERS
-# ═══════════════════════════════════════════════════════════════════════
+# # ═══════════════════════════════════════════════════════════════════════
+# # SOURCE OVERRIDES (Part 2 — exact paper replication)
+# # ═══════════════════════════════════════════════════════════════════════
+# # Raw source text tests that run AFTER the MCQ matrix (Phase 3).
+# # Each entry extracts activation at a specific word in raw text and
+# # injects it through the same templates × layer pairs as Phase 2.
 
-layer_pairs:
-  # Diagonal (same source and injection layer)
-  - [1, 1]
-  - [3, 3]
-  - [5, 5]
-  - [8, 8]
-  - [10, 10]
-  - [15, 15]
-  - [20, 20]
-  - [25, 25]
-  - [30, 30]
-  # Cross-layer (high source → low injection)
-  - [15, 1]
-  - [15, 3]
-  - [15, 5]
-  - [20, 1]
-  - [20, 3]
-  - [20, 5]
-  - [25, 1]
-  - [25, 3]
-  - [25, 5]
-  - [30, 1]
-  - [30, 3]
-  - [30, 5]
+# source_overrides:
+#   - name: "bezos_ceo"
+#     raw_text: "Amazon's former CEO attended Oscars"
+#     extract_word: "CEO"
+#     subtoken_strategy: "last"
+#     expected_contains: "bezos"
 
-extraction:
-  token_position: "last"
-  layers: "middle"
+#   - name: "eiffel_tower"
+#     raw_text: "The Eiffel Tower is located in"
+#     extract_word: "Tower"
+#     subtoken_strategy: "last"
+#     expected_contains: "paris"
 
-injection:
-  layer: 8
-  mode: "replace"
-  alpha: 1.0
-  num_placeholders: 1
-  placeholder_token: "?"
+#   - name: "bill_gates"
+#     raw_text: "Microsoft was founded by Bill"
+#     extract_word: "Bill"
+#     subtoken_strategy: "last"
+#     expected_contains: "gates"
 
 
-# ═══════════════════════════════════════════════════════════════════════
-# GENERATION
-# ═══════════════════════════════════════════════════════════════════════
+# # ═══════════════════════════════════════════════════════════════════════
+# # LAYERS
+# # ═══════════════════════════════════════════════════════════════════════
 
-generation:
-  max_new_tokens: 10
-  temperature: 0.0
-  do_sample: false
-  constrained_mode: "generate"   # use generate so we see actual text output
+# layer_pairs:
+#   # Diagonal (same source and injection layer)
+#   - [1, 1]
+#   - [3, 3]
+#   - [5, 5]
+#   - [8, 8]
+#   - [10, 10]
+#   - [15, 15]
+#   - [20, 20]
+#   - [25, 25]
+#   - [30, 30]
+#   # Cross-layer (high source → low injection)
+#   - [15, 1]
+#   - [15, 3]
+#   - [15, 5]
+#   - [20, 1]
+#   - [20, 3]
+#   - [20, 5]
+#   - [25, 1]
+#   - [25, 3]
+#   - [25, 5]
+#   - [30, 1]
+#   - [30, 3]
+#   - [30, 5]
 
-relevancy:
-  enabled: false
-  max_tokens: 64
+# extraction:
+#   token_position: "last"
+#   layers: "middle"
+
+# injection:
+#   layer: 8
+#   mode: "replace"
+#   alpha: 1.0
+#   num_placeholders: 1
+#   placeholder_token: "?"
 
 
-# ═══════════════════════════════════════════════════════════════════════
-# EXPERIMENT MATRIX (minimal — just verify patching works)
-# ═══════════════════════════════════════════════════════════════════════
+# # ═══════════════════════════════════════════════════════════════════════
+# # GENERATION
+# # ═══════════════════════════════════════════════════════════════════════
 
-source_personas:
-  - neutral_evaluator
+# generation:
+#   max_new_tokens: 10
+#   temperature: 0.0
+#   do_sample: false
+#   constrained_mode: "generate"   # use generate so we see actual text output
 
-evaluator_personas:
-  - neutral_evaluator
+# relevancy:
+#   enabled: false
+#   max_tokens: 64
 
-categories: []            # all categories (just "test" in our task file)
-samples_per_category: null
 
-controls:
-  text_only_baseline: true
-  shuffled_activation: false
-  control_sample_rate: 1.0
+# # ═══════════════════════════════════════════════════════════════════════
+# # EXPERIMENT MATRIX (minimal — just verify patching works)
+# # ═══════════════════════════════════════════════════════════════════════
+
+# source_personas:
+#   - neutral_evaluator
+
+# evaluator_personas:
+#   - neutral_evaluator
+
+# categories: []            # all categories (just "test" in our task file)
+# samples_per_category: null
+
+# controls:
+#   text_only_baseline: true
+#   shuffled_activation: false
+#   control_sample_rate: 1.0

@@ -790,7 +790,6 @@ class PatchscopeExperiment(BaseExperiment):
             logger.info(f"Running all templates: {list(templates.keys())}")
 
         base_prompt = ps["interpretation_base_prompt"]
-        constrained_mode = gen_cfg.get("constrained_mode", "generate")
 
         source_persona_names = ps["source_personas"]
         evaluator_persona_names = ps["evaluator_personas"]
@@ -836,19 +835,18 @@ class PatchscopeExperiment(BaseExperiment):
         control_sample_rate = float(controls_cfg.get("control_sample_rate", 1.0))
         control_rng = random.Random(self.config.seed + 7)  # separate seed for control sampling
 
-        # Pre-resolve choice token IDs for logits mode
+        # Pre-resolve choice token IDs for templates using logits decode_mode
         all_choice_token_ids: dict[str, dict[str, int]] = {}
-        if constrained_mode == "logits":
-            for tmpl_name in TEMPLATE_CHOICES:
-                if tmpl_name in templates:
-                    choices = TEMPLATE_CHOICES[tmpl_name]
-                    all_choice_token_ids[tmpl_name] = _resolve_choice_token_ids(
-                        tokenizer, choices
-                    )
-                    logger.info(
-                        f"Logits mode — {tmpl_name} choices: "
-                        f"{all_choice_token_ids[tmpl_name]}"
-                    )
+        for tmpl_name, tmpl_cfg in templates.items():
+            if tmpl_cfg.get("decode_mode", "generate") == "logits" and tmpl_name in TEMPLATE_CHOICES:
+                choices = TEMPLATE_CHOICES[tmpl_name]
+                all_choice_token_ids[tmpl_name] = _resolve_choice_token_ids(
+                    tokenizer, choices
+                )
+                logger.info(
+                    f"Logits mode — {tmpl_name} choices: "
+                    f"{all_choice_token_ids[tmpl_name]}"
+                )
         logger.info(
             f"Placeholder token: id={placeholder_token_id} repr={repr(placeholder_token)} "
             f"× {num_placeholders}"
@@ -1162,8 +1160,7 @@ class PatchscopeExperiment(BaseExperiment):
 
                                         # Decide: logits mode or generate mode
                                         use_logits = (
-                                            constrained_mode == "logits"
-                                            and tmpl_cfg.get("constrained", False)
+                                            tmpl_cfg.get("decode_mode", "generate") == "logits"
                                             and tmpl_name in all_choice_token_ids
                                         )
 
@@ -1272,8 +1269,8 @@ class PatchscopeExperiment(BaseExperiment):
                                                 )
                                             record.generated_text = gen_text
 
-                                            # Parse constrained answers from text
-                                            if tmpl_cfg.get("constrained", False):
+                                            # Parse answers from generated text if template has known choices
+                                            if tmpl_name in TEMPLATE_CHOICES:
                                                 record.parsed_answer, record.parse_success = (
                                                     _parse_constrained(tmpl_name, gen_text)
                                                 )
@@ -1472,8 +1469,7 @@ class PatchscopeExperiment(BaseExperiment):
                                 record.interpretation_prompt = interp_text
 
                                 use_logits = (
-                                    constrained_mode == "logits"
-                                    and tmpl_cfg.get("constrained", False)
+                                    tmpl_cfg.get("decode_mode", "generate") == "logits"
                                     and tmpl_name in all_choice_token_ids
                                 )
 
