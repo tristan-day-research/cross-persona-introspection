@@ -10,9 +10,9 @@ Figure 1 from Patchscopes (Ghandeharioun et al., ICML 2024, arXiv:2401.06102):
   Expect: "Jeff Bezos" or similar CEO-related tokens
 
 Usage:
-    python -m cross_persona_introspection.experiments.run_patchscope_test
-    python -m cross_persona_introspection.experiments.run_patchscope_test --config patchscope_test.yaml
-    python -m cross_persona_introspection.experiments.run_patchscope_test --model meta-llama/Llama-3.1-8B-Instruct
+    python -m cross_persona_introspection.experiments.patchscope.run_patchscope_test
+    python -m cross_persona_introspection.experiments.patchscope.run_patchscope_test --config patchscope_test.yaml
+    python -m cross_persona_introspection.experiments.patchscope.run_patchscope_test --model meta-llama/Llama-3.1-8B-Instruct
 """
 
 import argparse
@@ -35,14 +35,14 @@ logger = logging.getLogger(__name__)
 # Suppress the max_new_tokens/max_length warning
 warnings.filterwarnings("ignore", message=".*max_new_tokens.*max_length.*")
 
-ROOT = Path(__file__).resolve().parent.parent.parent
+ROOT = Path(__file__).resolve().parent.parent.parent.parent
 CONFIG_DIR = ROOT / "config"
 RESULTS_DIR = ROOT / "results" / "raw"
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Reuse the core hook functions from the patchscope experiment
 sys.path.insert(0, str(ROOT))
-from cross_persona_introspection.experiments.patchscope import (
+from cross_persona_introspection.experiments.patchscope.patchscope_helpers import (
     _get_transformer_layers,
 )
 

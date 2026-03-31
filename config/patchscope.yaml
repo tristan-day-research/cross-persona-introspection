@@ -8,8 +8,8 @@
 
 # Prompt style — selects which variant to use from each template below.
 #   "identity"    — raw pattern completion (X -> X; ? ->). No chat template.
-#   "patchscopes" — minimal structured prompt, chat-templated with evaluator persona.
-#   "selfie"      — instructional prompt, chat-templated with evaluator persona.
+#   "patchscopes" — minimal structured prompt, chat-templated with reporter persona.
+#   "selfie"      — instructional prompt, chat-templated with reporter persona.
 prompt_style: "identity"
 
 # Which templates to run (empty list = all).
@@ -146,6 +146,10 @@ generation:
   temperature: 0.0
   do_sample: false
   # decode_mode is now per-template (set in interpretation_templates above)
+  # When true, save full-vocab log-softmax at each choice token position
+  # (choice_logprobs + total_choice_prob). Costs ~nothing extra compute
+  # since we already have the full logit vector; just stores more per record.
+  save_logprobs: true
 
 relevancy:
   enabled: false
@@ -160,8 +164,8 @@ source_personas:
   - persona_conservative
   - persona_progressive
 
-# Evaluator personas (ignored for identity style — no chat template)
-evaluator_personas:
+# Reporter personas (ignored for identity style — no chat template)
+reporter_personas:
   - persona_conservative
   - persona_progressive
   - neutral_evaluator

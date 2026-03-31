@@ -131,7 +131,7 @@ def run_one(config_name: str, overrides: list[str] | None = None) -> None:
         from cross_persona_introspection.experiments.activation_probing import ActivationProbing
         experiment = ActivationProbing(run_config, used_personas)
     elif experiment_name == "patchscope":
-        from cross_persona_introspection.experiments.patchscope import PatchscopeExperiment
+        from cross_persona_introspection.experiments.patchscope.patchscope_experiment import PatchscopeExperiment
         experiment = PatchscopeExperiment(run_config, personas)
     else:
         raise ValueError(f"Unknown experiment: {experiment_name}")

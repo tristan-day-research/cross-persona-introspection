@@ -141,7 +141,7 @@
 # source_personas:
 #   - neutral_evaluator
 
-# evaluator_personas:
+# reporter_personas:
 #   - neutral_evaluator
 
 # categories: []            # all categories (just "test" in our task file)

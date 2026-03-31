@@ -102,13 +102,17 @@ class HFBackend:
         }
 
     def get_choice_probs_and_logits(
-        self, messages: list[dict[str, str]], choices: list[str]
-    ) -> tuple[dict[str, float], dict[str, float]]:
+        self, messages: list[dict[str, str]], choices: list[str],
+        save_logprobs: bool = False,
+    ) -> tuple[dict[str, float], dict[str, float], ...]:
         """Get both probabilities and raw logits for constrained choices.
 
         Single forward pass. Returns (probs_dict, logits_dict) where:
         - probs_dict: softmax probabilities over choices only (sum to 1)
         - logits_dict: raw pre-softmax logits (preserve scale information)
+
+        If save_logprobs=True, returns (probs_dict, logits_dict, logprobs_dict, total_choice_prob)
+        where logprobs_dict has full-vocab log-softmax values at each choice token.
         """
         logits = self.get_next_token_logits(messages)
 
@@ -131,6 +135,19 @@ class HFBackend:
             choice: choice_logits[i].item()
             for i, choice in enumerate(choice_token_ids.keys())
         }
+
+        if save_logprobs:
+            full_logprobs = F.log_softmax(logits, dim=0)
+            full_probs = F.softmax(logits, dim=0)
+            logprobs_dict = {
+                choice: full_logprobs[tid].item()
+                for choice, tid in choice_token_ids.items()
+            }
+            total_choice_prob = sum(
+                full_probs[tid].item() for tid in choice_token_ids.values()
+            )
+            return probs_dict, logits_dict, logprobs_dict, total_choice_prob
+
         return probs_dict, logits_dict
 
     def compute_confidence_metrics(

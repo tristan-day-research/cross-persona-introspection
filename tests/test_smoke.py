@@ -186,7 +186,7 @@ def test_patchscope_record():
         model="test-model",
         question_id="q1",
         source_persona="persona_conservative",
-        evaluator_persona="neutral_evaluator",
+        reporter_persona="neutral_evaluator",
         template_name="open_summary",
         condition="real",
         source_layer=8,
@@ -205,7 +205,7 @@ def test_patchscope_record():
 
 def test_patchscope_helpers():
     """Test patchscope helper functions that don't require a model."""
-    from cross_persona_introspection.experiments.patchscope import (
+    from cross_persona_introspection.experiments.patchscope.patchscope_helpers import (
         _load_patchscope_config,
         _model_short_name,
         _resolve_layers,

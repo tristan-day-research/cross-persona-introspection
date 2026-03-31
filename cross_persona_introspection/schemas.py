@@ -187,13 +187,13 @@ class PatchscopeRecord:
     model: str
     question_id: str
     source_persona: str
-    evaluator_persona: str
+    reporter_persona: str
     condition: str  # "real", "text_only_baseline", "shuffled"
     source_layer: int
     injection_layer: int
     injection_mode: str  # "replace" or "add"
-    # Evaluator system prompt (raw, before chat template)
-    evaluator_system_prompt: str = ""
+    # Reporter system prompt (raw, before chat template)
+    reporter_system_prompt: str = ""
     # Full prompt sent to model (exact text including special tokens, system prompt, MCQ, etc.)
     interpretation_prompt: str = ""
     # Decoding mode: "logits" or "generate"
@@ -205,6 +205,8 @@ class PatchscopeRecord:
     # Logit-mode results (constrained single-token decode)
     choice_probs: Optional[dict[str, float]] = None   # softmax over valid choices
     choice_logits: Optional[dict[str, float]] = None   # raw logits for valid choices
+    choice_logprobs: Optional[dict[str, float]] = None  # log-softmax over full vocab at choice tokens
+    total_choice_prob: Optional[float] = None           # sum of full-vocab probs on choice tokens
     predicted: Optional[str] = None                     # argmax choice
     is_correct: Optional[bool] = None                   # predicted == source_direct_answer
     # Relevancy scores (SelfIE Section 3.2)
