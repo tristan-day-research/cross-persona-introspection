@@ -26,9 +26,8 @@ from cross_persona_introspection.experiments.patchscope.patchscope_helpers impor
     find_token_position,
 )
 from cross_persona_introspection.experiments.patchscope.patchscope_patching import (
-    extract_activation,
-    inject_and_extract_logits,
-    inject_and_generate,
+    extract_activations_multi_layer,
+    patch_and_decode,
 )
 from cross_persona_introspection.schemas import PatchscopeRecord
 
@@ -89,22 +88,20 @@ def run_source_overrides(
             f"extract '{so_extract_word}' at position {so_token_pos}"
         )
 
-        # Extract activations at all source layers
-        so_activations: dict[int, torch.Tensor] = {}
-        for layer in source_layers:
-            try:
-                act = extract_activation(
-                    model, tokenizer, device,
-                    messages=[],
-                    layer_idx=layer,
-                    token_position=so_token_pos,
-                    raw_text=so_raw_text,
-                )
-                so_activations[layer] = act
-            except Exception as e:
-                msg = f"Extract error: override '{so_name}' layer={layer}: {e}"
-                logger.error(msg)
-                errors.append(msg)
+        # Extract activations at all source layers (single forward pass)
+        try:
+            so_activations = extract_activations_multi_layer(
+                model, tokenizer, device,
+                messages=[],
+                layer_indices=source_layers,
+                token_position=so_token_pos,
+                raw_text=so_raw_text,
+            )
+        except Exception as e:
+            msg = f"Extract error: override '{so_name}': {e}"
+            logger.error(msg)
+            errors.append(msg)
+            so_activations = {}
 
         if not so_activations:
             continue
@@ -160,19 +157,25 @@ def run_source_overrides(
                             and tmpl_name in all_choice_token_ids
                         )
 
+                        result = patch_and_decode(
+                            model, tokenizer, device,
+                            interp_messages, real_act,
+                            injection_layer=inj_layer,
+                            placeholder_positions=placeholder_positions,
+                            mode=injection_mode,
+                            alpha=injection_alpha,
+                            raw_text=_raw,
+                            decode_mode="logits" if use_logits else "generate",
+                            max_new_tokens=gen_cfg["max_new_tokens"],
+                            temperature=gen_cfg["temperature"],
+                            do_sample=gen_cfg.get("do_sample", False),
+                            choice_token_ids=all_choice_token_ids.get(tmpl_name),
+                            save_logprobs=save_logprobs,
+                        )
+
+                        record.decode_mode = "logits" if use_logits else "generate"
+                        record.generated_text = result["generated_text"]
                         if use_logits:
-                            record.decode_mode = "logits"
-                            result = inject_and_extract_logits(
-                                model, tokenizer, device,
-                                interp_messages, real_act,
-                                injection_layer=inj_layer,
-                                placeholder_positions=placeholder_positions,
-                                choice_token_ids=all_choice_token_ids[tmpl_name],
-                                mode=injection_mode,
-                                alpha=injection_alpha,
-                                raw_text=_raw,
-                                save_logprobs=save_logprobs,
-                            )
                             record.choice_probs = result["probs"]
                             record.choice_logits = result["logits"]
                             record.choice_logprobs = result.get("logprobs")
@@ -180,22 +183,6 @@ def run_source_overrides(
                             record.predicted = result["predicted"]
                             record.parsed_answer = result["predicted"]
                             record.parse_success = True
-                            record.generated_text = f"[logits] {result['predicted']}"
-                        else:
-                            record.decode_mode = "generate"
-                            gen_text = inject_and_generate(
-                                model, tokenizer, device,
-                                interp_messages, real_act,
-                                injection_layer=inj_layer,
-                                placeholder_positions=placeholder_positions,
-                                mode=injection_mode,
-                                alpha=injection_alpha,
-                                max_new_tokens=gen_cfg["max_new_tokens"],
-                                temperature=gen_cfg["temperature"],
-                                do_sample=gen_cfg.get("do_sample", False),
-                                raw_text=_raw,
-                            )
-                            record.generated_text = gen_text
 
                         # Check expected output
                         found = (

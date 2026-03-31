@@ -1,21 +1,57 @@
 """Low-level activation patching primitives.
 
-These four functions are the mechanistic core of the Patchscope experiment:
+Three functions are the mechanistic core of the Patchscope experiment:
 
-1. extract_activation  — run a source forward pass, hook a layer, capture one
-                         hidden-state vector.
-2. inject_and_generate — run an interpretation forward pass with a hooked layer
-                         that overwrites (or adds to) placeholder positions,
-                         then auto-regressively generate text.
-3. inject_and_extract_logits — same injection, but instead of generating, read
-                               next-token logits over a constrained choice set.
-4. compute_relevancy_scores  — SelfIE-style metric: for each generated token,
-                               how much did the injected activation change its
-                               probability?
+1. **extract_activations_multi_layer** — run a source forward pass, hook
+   multiple layers simultaneously, capture one hidden-state vector per layer.
 
-All functions operate on raw PyTorch models / tokenizers and are stateless —
-they don't depend on the experiment class or config.  The only coupling to
-the rest of the codebase is `_get_transformer_layers` (architecture adapter).
+2. **patch_and_decode** — the unified patching function.  Patches a source
+   activation into an interpretation prompt at placeholder positions, then
+   decodes the model's response.  Two decode modes:
+   - ``"logits"``: single forward pass, read next-token probabilities over a
+     constrained choice set (e.g. A/B/C/D).
+   - ``"generate"``: auto-regressive generation, decode free-form text.
+
+3. **compute_relevancy_scores** — SelfIE-style metric: for each generated
+   token, how much did the patched activation change its probability?  Uses
+   KV-cache so each token is one incremental step, not a full re-process.
+
+All functions operate on raw PyTorch models / tokenizers and are stateless.
+The only coupling to the rest of the codebase is ``_get_transformer_layers``
+(architecture adapter in patchscope_helpers).
+
+
+How hooks work
+--------------
+PyTorch ``register_forward_hook(fn)`` attaches a callback to a module (here,
+a transformer layer).  Every time that module's ``forward()`` runs, PyTorch
+calls ``fn(module, input, output)`` immediately after.  The hook can read
+*output* (to capture hidden states) or return a modified *output* (to patch
+activations).  Hooks are removed by calling ``handle.remove()`` on the handle
+returned by ``register_forward_hook``.
+
+Multiple hooks can be registered on different layers at the same time — they
+all fire during a single forward pass, which is how
+``extract_activations_multi_layer`` captures every layer in one pass.
+
+
+What "KV-cache on/off" means
+-----------------------------
+Transformer attention computes Key and Value projections for every token at
+every layer.  With ``use_cache=True``, the model saves these K/V tensors after
+each forward call.  On the next call you only feed the *new* token(s) and pass
+``past_key_values`` back in — the model skips recomputing K/V for all previous
+tokens and just appends the new ones.
+
+**Prefill** = the first forward call that processes the entire prompt (many
+tokens, no cache yet).  **Decode steps** = subsequent calls that each process
+one new token, reusing the cached K/V from all prior tokens.
+
+This matters for patching: the hook modifies hidden states at placeholder
+positions during prefill.  Those modifications flow into the K/V cache.  During
+decode steps the placeholder positions aren't re-processed — the model just
+reads their cached K/V.  So the patch's effect persists through the cache
+without the hook needing to fire again.
 """
 
 from typing import Optional
@@ -29,31 +65,34 @@ from cross_persona_introspection.experiments.patchscope.patchscope_helpers impor
 
 
 # ---------------------------------------------------------------------------
-# 1. Extract
+# 1. Extract (multi-layer, single forward pass)
 # ---------------------------------------------------------------------------
 
-def extract_activation(
+def extract_activations_multi_layer(
     model,
     tokenizer,
     device,
     messages: list[dict],
-    layer_idx: int,
+    layer_indices: list[int],
     token_position: str | int = "last",
     raw_text: Optional[str] = None,
-) -> torch.Tensor:
-    """Run a source forward pass and return the hidden state at (layer, position).
+) -> dict[int, torch.Tensor]:
+    """Run ONE forward pass and capture hidden states at multiple layers.
+
+    Registers a hook on every requested layer simultaneously, runs one
+    forward pass, then removes all hooks.
 
     Args:
         model: HuggingFace causal LM.
         tokenizer: Matching tokenizer.
         device: Target device for input tensors.
         messages: Chat-formatted source prompt.  Ignored when *raw_text* is set.
-        layer_idx: Transformer layer to hook (0-indexed, post-embedding).
+        layer_indices: Transformer layers to hook (0-indexed, post-embedding).
         token_position: ``"last"`` or an integer token index.
         raw_text: If given, used verbatim as model input (skips chat template).
 
     Returns:
-        1-D tensor of shape ``(d_model,)``.
+        Dict mapping layer index to a 1-D tensor of shape ``(d_model,)``.
     """
     if raw_text is not None:
         input_text = raw_text
@@ -65,115 +104,35 @@ def extract_activation(
         input_text, return_tensors="pt", add_special_tokens=False
     ).to(device)
 
-    captured = {}
+    captured: dict[int, torch.Tensor] = {}
     transformer_layers = _get_transformer_layers(model)
 
-    def hook_fn(module, input, output):
-        hidden = output[0] if isinstance(output, tuple) else output
-        pos = -1 if token_position == "last" else int(token_position)
-        captured["activation"] = hidden[0, pos, :].detach().clone()
+    def make_hook(layer_idx):
+        def hook_fn(module, input, output):
+            hidden = output[0] if isinstance(output, tuple) else output
+            pos = -1 if token_position == "last" else int(token_position)
+            captured[layer_idx] = hidden[0, pos, :].detach().clone()
+        return hook_fn
 
-    handle = transformer_layers[layer_idx].register_forward_hook(hook_fn)
+    handles = []
+    for idx in layer_indices:
+        handles.append(transformer_layers[idx].register_forward_hook(make_hook(idx)))
+
     try:
         with torch.no_grad():
             model(input_ids)
     finally:
-        handle.remove()
+        for h in handles:
+            h.remove()
 
-    return captured["activation"]
-
-
-# ---------------------------------------------------------------------------
-# 2. Inject + generate
-# ---------------------------------------------------------------------------
-
-def inject_and_generate(
-    model,
-    tokenizer,
-    device,
-    messages: list[dict],
-    activation: torch.Tensor,
-    injection_layer: int,
-    placeholder_positions: list[int],
-    mode: str = "replace",
-    alpha: float = 1.0,
-    max_new_tokens: int = 128,
-    temperature: float = 0.0,
-    do_sample: bool = False,
-    raw_text: Optional[str] = None,
-) -> str:
-    """Inject an activation into an interpretation prompt, then generate text.
-
-    During the prefill pass the hook fires and overwrites (``mode="replace"``)
-    or adds to (``mode="add"``) the hidden states at each placeholder position.
-    KV-cache is enabled so the hook does **not** fire during auto-regressive
-    decoding — the injected information propagates only through the cached
-    key/value representations.
-
-    Args:
-        model / tokenizer / device: HuggingFace model triple.
-        messages: Interpretation prompt (chat format).
-        activation: Source activation, shape ``(d_model,)``.
-        injection_layer: Layer index for the hook.
-        placeholder_positions: Token indices where placeholders sit.
-        mode: ``"replace"`` or ``"add"``.
-        alpha: Scaling factor (only used when *mode* is ``"add"``).
-        max_new_tokens / temperature / do_sample: Generation parameters.
-        raw_text: Verbatim input text (skips chat template when set).
-
-    Returns:
-        Decoded string of newly generated tokens.
-    """
-    if raw_text is not None:
-        input_text = raw_text
-    else:
-        input_text = tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
-        )
-    input_ids = tokenizer.encode(
-        input_text, return_tensors="pt", add_special_tokens=False
-    ).to(device)
-    attention_mask = torch.ones_like(input_ids)
-
-    transformer_layers = _get_transformer_layers(model)
-    act = activation.to(device)
-
-    def injection_hook(module, input, output):
-        hidden = output[0] if isinstance(output, tuple) else output
-        for pos in placeholder_positions:
-            if pos < hidden.shape[1]:
-                if mode == "replace":
-                    hidden[0, pos, :] = act
-                elif mode == "add":
-                    hidden[0, pos, :] = hidden[0, pos, :] + alpha * act
-        if isinstance(output, tuple):
-            return (hidden,) + output[1:]
-        return hidden
-
-    handle = transformer_layers[injection_layer].register_forward_hook(injection_hook)
-    try:
-        with torch.no_grad():
-            output_ids = model.generate(
-                input_ids,
-                attention_mask=attention_mask,
-                max_new_tokens=max_new_tokens,
-                temperature=temperature if do_sample else None,
-                do_sample=do_sample,
-                pad_token_id=tokenizer.pad_token_id,
-                use_cache=True,
-            )
-    finally:
-        handle.remove()
-
-    new_tokens = output_ids[0, input_ids.shape[1]:]
-    return tokenizer.decode(new_tokens, skip_special_tokens=True)
+    return captured
 
 
 # ---------------------------------------------------------------------------
-# 3. Inject + read logits (no generation)
+# 2. Patch and decode (unified: logits or generate)
 # ---------------------------------------------------------------------------
 
-def inject_and_extract_logits(
+def patch_and_decode(
     model,
     tokenizer,
     device,
@@ -181,22 +140,57 @@ def inject_and_extract_logits(
     activation: Optional[torch.Tensor],
     injection_layer: int,
     placeholder_positions: list[int],
-    choice_token_ids: dict[str, int],
     mode: str = "replace",
     alpha: float = 1.0,
     raw_text: Optional[str] = None,
+    # ── Decode strategy ───────────────────────────────────────────────
+    decode_mode: str = "generate",
+    # Generate-mode params (ignored when decode_mode="logits")
+    max_new_tokens: int = 128,
+    temperature: float = 0.0,
+    do_sample: bool = False,
+    # Logits-mode params (ignored when decode_mode="generate")
+    choice_token_ids: Optional[dict[str, int]] = None,
     save_logprobs: bool = False,
 ) -> dict:
-    """Single forward pass with optional injection; return constrained next-token probs.
+    """Patch a source activation into an interpretation prompt and decode.
 
-    When *activation* is ``None`` (text-only baseline), the forward pass runs
-    without any hook — useful for measuring what the model predicts from the
-    prompt text alone.
+    This is the single entry point for all activation patching.  The operation
+    has three stages:
+
+    1. **Tokenize** the interpretation prompt.
+    2. **Patch** the activation at placeholder positions via a forward hook
+       (skipped when *activation* is None, for text-only baselines).
+    3. **Decode** the model's response — either by reading constrained
+       next-token logits (``decode_mode="logits"``) or by auto-regressive
+       generation (``decode_mode="generate"``).
+
+    Args:
+        model / tokenizer / device: HuggingFace model triple.
+        messages: Interpretation prompt (chat format).
+        activation: Source activation tensor of shape ``(d_model,)``, or None
+            for text-only baseline (runs without patching).
+        injection_layer: Layer index for the patching hook.
+        placeholder_positions: Token indices where placeholders sit in the
+            tokenized prompt — these are the positions that get overwritten.
+        mode: ``"replace"`` overwrites hidden states; ``"add"`` adds scaled.
+        alpha: Scaling factor for ``"add"`` mode.
+        raw_text: Verbatim input text (skips chat template when set).
+        decode_mode: ``"logits"`` for constrained single-token decode,
+            ``"generate"`` for free-form auto-regressive generation.
+        max_new_tokens / temperature / do_sample: Generation params
+            (only used when ``decode_mode="generate"``).
+        choice_token_ids: ``{label: token_id}`` for constrained decode
+            (required when ``decode_mode="logits"``).
+        save_logprobs: If True and logits mode, include full-vocab logprobs
+            for choice tokens in the result.
 
     Returns:
-        Dict with keys ``probs``, ``logits``, ``predicted``, and optionally
-        ``logprobs`` and ``total_choice_prob``.
+        Dict always containing ``"generated_text"`` (str).
+        In logits mode, also: ``"probs"``, ``"logits"``, ``"predicted"``,
+        and optionally ``"logprobs"`` and ``"total_choice_prob"``.
     """
+    # ── 1. Tokenize ───────────────────────────────────────────────────
     if raw_text is not None:
         input_text = raw_text
     else:
@@ -207,13 +201,23 @@ def inject_and_extract_logits(
         input_text, return_tensors="pt", add_special_tokens=False
     ).to(device)
 
+    # ── 2. Patch (register hook if activation provided) ───────────────
     transformer_layers = _get_transformer_layers(model)
-
     handle = None
+
     if activation is not None:
         act = activation.to(device)
 
+        # For generate mode, the hook should only fire during prefill (the
+        # first forward call).  On subsequent decode steps the KV-cache
+        # already carries the patch's effect.  For logits mode there's only
+        # one forward call, so the flag is harmless.
+        prefill_done = [False]
+
         def injection_hook(module, input, output):
+            if prefill_done[0]:
+                return
+            prefill_done[0] = True
             hidden = output[0] if isinstance(output, tuple) else output
             for pos in placeholder_positions:
                 if pos < hidden.shape[1]:
@@ -227,14 +231,61 @@ def inject_and_extract_logits(
 
         handle = transformer_layers[injection_layer].register_forward_hook(injection_hook)
 
+    # ── 3. Decode ─────────────────────────────────────────────────────
     try:
         with torch.no_grad():
-            outputs = model(input_ids)
+            if decode_mode == "generate":
+                result = _decode_generate(
+                    model, tokenizer, input_ids,
+                    max_new_tokens=max_new_tokens,
+                    temperature=temperature,
+                    do_sample=do_sample,
+                )
+            elif decode_mode == "logits":
+                if choice_token_ids is None:
+                    raise ValueError("choice_token_ids is required for decode_mode='logits'")
+                result = _decode_logits(
+                    model, input_ids, choice_token_ids,
+                    save_logprobs=save_logprobs,
+                )
+            else:
+                raise ValueError(f"Unknown decode_mode: {decode_mode!r}")
     finally:
         if handle is not None:
             handle.remove()
 
-    # Next-token logits at the last position
+    return result
+
+
+def _decode_generate(
+    model, tokenizer, input_ids,
+    max_new_tokens, temperature, do_sample,
+) -> dict:
+    """Auto-regressive generation.  Returns {"generated_text": str}."""
+    attention_mask = torch.ones_like(input_ids)
+    output_ids = model.generate(
+        input_ids,
+        attention_mask=attention_mask,
+        max_new_tokens=max_new_tokens,
+        temperature=temperature if do_sample else None,
+        do_sample=do_sample,
+        pad_token_id=tokenizer.pad_token_id,
+        use_cache=True,
+    )
+    new_tokens = output_ids[0, input_ids.shape[1]:]
+    return {"generated_text": tokenizer.decode(new_tokens, skip_special_tokens=True)}
+
+
+def _decode_logits(
+    model, input_ids, choice_token_ids,
+    save_logprobs,
+) -> dict:
+    """Single forward pass, constrained next-token probs.
+
+    Returns dict with "generated_text", "probs", "logits", "predicted",
+    and optionally "logprobs" and "total_choice_prob".
+    """
+    outputs = model(input_ids)
     next_logits = outputs.logits[0, -1, :]
 
     choice_logit_values = {
@@ -253,6 +304,7 @@ def inject_and_extract_logits(
     predicted = max(choice_probs, key=choice_probs.get)
 
     result = {
+        "generated_text": f"[logits] {predicted}",
         "probs": choice_probs,
         "logits": choice_logit_values,
         "predicted": predicted,
@@ -273,7 +325,7 @@ def inject_and_extract_logits(
 
 
 # ---------------------------------------------------------------------------
-# 4. SelfIE relevancy scores
+# 3. SelfIE relevancy scores (KV-cached)
 # ---------------------------------------------------------------------------
 
 def compute_relevancy_scores(
@@ -289,10 +341,11 @@ def compute_relevancy_scores(
     generated_token_ids: list[int],
     max_tokens: int = 64,
 ) -> list[float]:
-    """Per-token relevancy: P(token | WITH injection) − P(token | WITHOUT).
+    """Per-token relevancy: P(token | WITH patch) - P(token | WITHOUT).
 
-    Two forward passes per generated token position — one with the injection
-    hook active, one without.  Covers the first *max_tokens* generated tokens.
+    Uses KV-cache to avoid re-processing the entire sequence for every token.
+    Two full forward passes for prefill (with/without patching), then two
+    incremental single-token steps per generated token.
 
     Returns:
         List of floats, one per token (up to *max_tokens*).
@@ -306,49 +359,59 @@ def compute_relevancy_scores(
 
     transformer_layers = _get_transformer_layers(model)
     act = activation.to(device)
-    scores = []
 
     n_tokens = min(len(generated_token_ids), max_tokens)
+    if n_tokens == 0:
+        return []
+
+    def injection_hook(module, input, output):
+        hidden = output[0] if isinstance(output, tuple) else output
+        for pos in placeholder_positions:
+            if pos < hidden.shape[1]:
+                if mode == "replace":
+                    hidden[0, pos, :] = act
+                elif mode == "add":
+                    hidden[0, pos, :] = hidden[0, pos, :] + alpha * act
+        if isinstance(output, tuple):
+            return (hidden,) + output[1:]
+        return hidden
+
+    # Prefill WITH patch
+    handle = transformer_layers[injection_layer].register_forward_hook(injection_hook)
+    try:
+        with torch.no_grad():
+            out_with = model(base_ids, use_cache=True)
+    finally:
+        handle.remove()
+    past_with = out_with.past_key_values
+
+    # Prefill WITHOUT patch
+    with torch.no_grad():
+        out_without = model(base_ids, use_cache=True)
+    past_without = out_without.past_key_values
+
+    scores = []
 
     for i in range(n_tokens):
-        if i > 0:
-            prefix_gen = torch.tensor(
-                [generated_token_ids[:i]], device=device
-            )
-            full_ids = torch.cat([base_ids, prefix_gen], dim=1)
-        else:
-            full_ids = base_ids
-
         target_token_id = generated_token_ids[i]
 
-        # Forward WITH injection
-        def injection_hook(module, input, output):
-            hidden = output[0] if isinstance(output, tuple) else output
-            for pos in placeholder_positions:
-                if pos < hidden.shape[1]:
-                    if mode == "replace":
-                        hidden[0, pos, :] = act
-                    elif mode == "add":
-                        hidden[0, pos, :] = hidden[0, pos, :] + alpha * act
-            if isinstance(output, tuple):
-                return (hidden,) + output[1:]
-            return hidden
+        if i == 0:
+            logits_with = out_with.logits[0, -1, :]
+            logits_without = out_without.logits[0, -1, :]
+        else:
+            prev_token = torch.tensor([[generated_token_ids[i - 1]]], device=device)
 
-        handle = transformer_layers[injection_layer].register_forward_hook(injection_hook)
-        try:
             with torch.no_grad():
-                out_with = model(full_ids)
-        finally:
-            handle.remove()
+                step_with = model(prev_token, past_key_values=past_with, use_cache=True)
+            past_with = step_with.past_key_values
+            logits_with = step_with.logits[0, -1, :]
 
-        logits_with = out_with.logits[0, -1, :]
+            with torch.no_grad():
+                step_without = model(prev_token, past_key_values=past_without, use_cache=True)
+            past_without = step_without.past_key_values
+            logits_without = step_without.logits[0, -1, :]
+
         prob_with = F.softmax(logits_with, dim=-1)[target_token_id].item()
-
-        # Forward WITHOUT injection
-        with torch.no_grad():
-            out_without = model(full_ids)
-
-        logits_without = out_without.logits[0, -1, :]
         prob_without = F.softmax(logits_without, dim=-1)[target_token_id].item()
 
         scores.append(prob_with - prob_without)

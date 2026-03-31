@@ -119,6 +119,42 @@ def _resolve_layers(spec, num_layers: int) -> list[int]:
         raise ValueError(f"Unknown layer spec: {spec}")
 
 
+def _resolve_layer_config(
+    ps_config: dict, extraction_cfg: dict, injection_cfg: dict, num_layers: int,
+) -> tuple[list[int], list[int], dict[int, list[int]] | None]:
+    """Parse layer_pairs / layer_sweep / simple layer config from patchscope YAML.
+
+    Three modes (checked in priority order):
+      1. ``layer_pairs`` — explicit (source, injection) pairs.
+      2. ``layer_sweep``  — Cartesian product of source × injection layer lists.
+      3. Fall back to ``extraction.layers`` + ``injection.layer``.
+
+    Returns:
+        ``(source_layers, injection_layers, pair_map_or_None)``
+        *pair_map* is a dict mapping each source layer to its paired injection
+        layers (only set in mode 1; ``None`` otherwise).
+    """
+    explicit_pairs = ps_config.get("layer_pairs")
+    if explicit_pairs:
+        source_layers = sorted(set(int(p[0]) for p in explicit_pairs))
+        injection_layers = sorted(set(int(p[1]) for p in explicit_pairs))
+        pair_map: dict[int, list[int]] = {}
+        for p in explicit_pairs:
+            pair_map.setdefault(int(p[0]), []).append(int(p[1]))
+        logger.info(f"Using explicit layer_pairs: {explicit_pairs}")
+        return source_layers, injection_layers, pair_map
+
+    if ps_config.get("layer_sweep", {}).get("enabled", False):
+        sweep = ps_config["layer_sweep"]
+        source_layers = [int(x) for x in sweep["source_layers"]]
+        injection_layers = [int(x) for x in sweep["injection_layers"]]
+        return source_layers, injection_layers, None
+
+    source_layers = _resolve_layers(extraction_cfg["layers"], num_layers)
+    injection_layers = [int(injection_cfg["layer"])]
+    return source_layers, injection_layers, None
+
+
 def _get_transformer_layers(model):
     """Return the nn.ModuleList of transformer layers for supported architectures."""
     if hasattr(model, "model") and hasattr(model.model, "layers"):
@@ -463,3 +499,130 @@ def build_interpretation_prompt(
         logger.warning("No placeholder positions found in prompt! Injection will be skipped.")
 
     return interp_text, interp_messages, placeholder_positions
+
+
+# ── Position validation ────────────────────────────────────────────────
+
+
+def validate_placeholder_positions(
+    tokenizer,
+    interp_text: str,
+    placeholder_positions: list[int],
+    placeholder_token: str,
+    tmpl_name: str = "",
+    raise_on_error: bool = True,
+) -> bool:
+    """Verify that placeholder_positions actually point to placeholder tokens.
+
+    Decodes the token at each position and checks that it contains the
+    expected placeholder token.  Logs an annotated token map showing exactly
+    where the placeholders are.
+
+    Call this once per template during the first cell to catch bugs early.
+
+    Args:
+        tokenizer: HuggingFace tokenizer.
+        interp_text: The fully rendered interpretation prompt string.
+        placeholder_positions: Token indices where injection will happen.
+        placeholder_token: The expected placeholder string (e.g. "?").
+        tmpl_name: Template name for log messages.
+        raise_on_error: If True, raise ValueError on mismatch.
+
+    Returns:
+        True if all positions are valid.
+    """
+    token_ids = tokenizer.encode(interp_text, add_special_tokens=False)
+    tokens = [tokenizer.decode([tid]) for tid in token_ids]
+
+    # Build annotated token map
+    position_set = set(placeholder_positions)
+    annotated = []
+    for i, tok in enumerate(tokens):
+        marker = " <<<PATCH" if i in position_set else ""
+        annotated.append(f"  [{i:3d}] {repr(tok)}{marker}")
+
+    # Only log full map at DEBUG; log summary at INFO
+    token_map_str = "\n".join(annotated)
+    logger.debug(f"Token map for template={tmpl_name}:\n{token_map_str}")
+
+    # Validate each position
+    errors = []
+    for pos in placeholder_positions:
+        if pos >= len(tokens):
+            errors.append(f"position {pos} is out of range (prompt has {len(tokens)} tokens)")
+        elif placeholder_token not in tokens[pos].strip():
+            errors.append(
+                f"position {pos} is {repr(tokens[pos])}, expected placeholder {repr(placeholder_token)}"
+            )
+
+    if errors:
+        context_lines = []
+        for pos in placeholder_positions:
+            start = max(0, pos - 2)
+            end = min(len(tokens), pos + 3)
+            context_lines.append(
+                "  ... " + " ".join(
+                    f"[{repr(tokens[i])}]" if i != pos else f">>>{repr(tokens[i])}<<<"
+                    for i in range(start, end)
+                ) + " ..."
+            )
+        error_msg = (
+            f"Placeholder validation FAILED for template={tmpl_name}:\n"
+            + "\n".join(f"  - {e}" for e in errors)
+            + "\nContext:\n" + "\n".join(context_lines)
+        )
+        if raise_on_error:
+            raise ValueError(error_msg)
+        logger.error(error_msg)
+        return False
+
+    if not placeholder_positions:
+        msg = f"No placeholder positions for template={tmpl_name} — injection will be a no-op"
+        if raise_on_error:
+            raise ValueError(msg)
+        logger.error(msg)
+        return False
+
+    # Log a concise summary
+    pos_tokens = [f"[{p}]={repr(tokens[p].strip())}" for p in placeholder_positions]
+    logger.info(f"Placeholder validation OK for template={tmpl_name}: {', '.join(pos_tokens)}")
+    return True
+
+
+def validate_extraction_position(
+    tokenizer,
+    source_text: str,
+    token_position: str | int,
+    tmpl_name: str = "",
+) -> None:
+    """Log which token the extraction hook will capture.
+
+    For "last", shows the final token.  For an integer, shows that specific
+    token.  This is a diagnostic — it always logs, never raises.
+    """
+    token_ids = tokenizer.encode(source_text, add_special_tokens=False)
+    tokens = [tokenizer.decode([tid]) for tid in token_ids]
+
+    if token_position == "last":
+        pos = len(tokens) - 1
+    else:
+        pos = int(token_position)
+
+    if 0 <= pos < len(tokens):
+        # Show a window around the extraction position
+        start = max(0, pos - 3)
+        end = min(len(tokens), pos + 4)
+        context = " ".join(
+            f">>>{repr(tokens[i])}<<<" if i == pos else repr(tokens[i])
+            for i in range(start, end)
+        )
+        logger.info(
+            f"Extraction position for {tmpl_name}: "
+            f"token_position={token_position!r} -> [{pos}]={repr(tokens[pos].strip())}  "
+            f"context: ...{context}..."
+        )
+    else:
+        logger.warning(
+            f"Extraction position {token_position!r} -> index {pos} is out of range "
+            f"(prompt has {len(tokens)} tokens)"
+        )
