@@ -64,11 +64,18 @@ def write_run_log(
         "",
     ]
 
-    # ── Matrix dimensions
+    # ── Matrix dimensions (aligned with experiment layer / template resolution)
     ps = ps_config
     n_src = len(ps.get("source_personas", []))
     n_reporter = len(ps.get("reporter_personas", []))
-    n_templates = len(ps.get("interpretation_templates", {}))
+    all_templates = ps.get("interpretation_templates", {})
+    enabled_only = ps.get("enabled_templates") or []
+    if enabled_only:
+        template_keys = [k for k in enabled_only if k in all_templates]
+        n_templates = len(template_keys)
+    else:
+        template_keys = list(all_templates.keys())
+        n_templates = len(template_keys)
     conditions = ["real"]
     if ps.get("controls", {}).get("text_only_baseline"):
         conditions.append("text_only_baseline")
@@ -76,25 +83,41 @@ def write_run_log(
         conditions.append("shuffled")
     n_conditions = len(conditions)
 
+    num_model_layers = backend.model.config.num_hidden_layers if backend else None
     if ps.get("layer_sweep", {}).get("enabled"):
         n_src_layers = len(ps["layer_sweep"]["source_layers"])
         n_inj_layers = len(ps["layer_sweep"]["injection_layers"])
+        layer_cells = n_src_layers * n_inj_layers
+    elif ps.get("layer_pairs"):
+        pairs = ps["layer_pairs"]
+        n_src_layers = len({int(p[0]) for p in pairs})
+        n_inj_layers = len({int(p[1]) for p in pairs})
+        layer_cells = len(pairs)
     else:
-        num_model_layers = backend.model.config.num_hidden_layers if backend else "?"
-        n_src_layers = len(_resolve_layers(ps["extraction"]["layers"], num_model_layers)) if isinstance(num_model_layers, int) else "?"
+        n_src_layers = (
+            len(_resolve_layers(ps["extraction"]["layers"], num_model_layers))
+            if num_model_layers is not None
+            else "?"
+        )
         n_inj_layers = 1
+        layer_cells = n_src_layers * n_inj_layers if isinstance(n_src_layers, int) else "?"
 
-    total = n_questions * n_src * n_src_layers * n_inj_layers * n_reporter * n_templates * n_conditions
+    if isinstance(layer_cells, int):
+        total = n_questions * n_src * layer_cells * n_reporter * n_templates * n_conditions
+    else:
+        total = "?"
+
     lines += [sep, "MATRIX DIMENSIONS", thin]
     lines += [
         f"  questions           : {n_questions}",
         f"  source_personas     : {n_src}  {ps.get('source_personas', [])}",
         f"  extraction_layers   : {n_src_layers}",
         f"  injection_layers    : {n_inj_layers}",
+        f"  layer_cells (src×inj per config): {layer_cells}",
         f"  reporter_personas   : {n_reporter}  {ps.get('reporter_personas', [])}",
-        f"  templates           : {n_templates}  {list(ps.get('interpretation_templates', {}).keys())}",
+        f"  templates           : {n_templates}  {template_keys}",
         f"  conditions          : {n_conditions}  {conditions}",
-        f"  total cells         : {total}",
+        f"  total cells (nominal): {total}",
         "",
     ]
 

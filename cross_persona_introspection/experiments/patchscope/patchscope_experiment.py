@@ -211,12 +211,7 @@ class PatchscopeExperiment(BaseExperiment):
         # Resolve prompt style
         style = ps_config.get("prompt_style") or injection_cfg.get("placeholder_style", "patchscopes")
         configured_placeholder = injection_cfg.get("placeholder_token", "?")
-        if style in ("patchscopes", "identity"):
-            num_placeholders = 1
-        elif style == "selfie":
-            num_placeholders = 5
-        else:
-            num_placeholders = int(injection_cfg["num_placeholders"])
+        num_placeholders = int(injection_cfg.get("num_placeholders", 1))
 
         placeholder_token_id = patchscope_helpers._get_placeholder_token_id(tokenizer, configured_placeholder)
         placeholder_token = tokenizer.decode([placeholder_token_id])
@@ -368,7 +363,7 @@ class PatchscopeExperiment(BaseExperiment):
                 injection_layers=injection_layers,
                 pair_map=pair_map,
                 templates=templates,
-                prompt_style=style if style in ("patchscopes", "selfie", "identity") else "selfie",
+                prompt_style=style,
                 base_prompt=base_prompt,
                 placeholder_token=placeholder_token,
                 num_placeholders=num_placeholders,
@@ -548,7 +543,7 @@ class PatchscopeExperiment(BaseExperiment):
                             reporter_persona = self.all_personas[reporter_name]
 
                             for tmpl_name, tmpl_cfg in templates.items():
-                                prompt_style = style if style in ("patchscopes", "selfie", "identity") else "selfie"
+                                prompt_style = style
 
                                 # Use shuffled options matching the source pass
                                 shuffle_key = (question_id, sp_name)
@@ -754,6 +749,7 @@ class PatchscopeExperiment(BaseExperiment):
             max_new_tokens=gen_cfg["max_new_tokens"],
             temperature=gen_cfg["temperature"],
             do_sample=gen_cfg.get("do_sample", False),
+            use_cache=gen_cfg.get("use_cache", True),
             choice_token_ids=all_choice_token_ids.get(tmpl_name),
             save_logprobs=save_logprobs,
         )

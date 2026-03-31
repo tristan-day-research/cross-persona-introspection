@@ -1,10 +1,97 @@
 # Patchscope activation interpretation pipeline
 # Refs: Patchscopes (arXiv:2401.06102), SelfIE (arXiv:2403.10949)
 
+# ═══════════════════════════════════════════════════════════════════════
+# LAYERS
+# ═══════════════════════════════════════════════════════════════════════
+# Three modes (first match wins):
+#   1. layer_pairs  — explicit [source, injection] pairs
+#   2. layer_sweep  — all combos of source_layers × injection_layers
+#   3. defaults     — extraction.layers × injection.layer
+
+# Option 1: explicit pairs (comment out to use option 2 or 3)
+layer_pairs:
+  - [20, 5]
+  - [25, 1]
+  - [25, 3]
+  - [25, 5]
+  - [20, 20]
+  - [25, 25]
+  - [30, 30]
+
+# Option 2: full cross-product sweep (uncomment, remove layer_pairs above)
+# layer_sweep:
+#   enabled: true
+#   source_layers: [4, 8, 12, 16, 20, 24, 28, 31]
+#   injection_layers: [1, 3, 5, 8]
+
+# Option 3: defaults (used when neither of the above is set)
+extraction:
+  token_position: "last"
+  layers: "middle"          # "all", "middle", or [8, 16, 24]
+
+injection:
+  layer: 8
+  mode: "replace"           # "replace" or "add"
+  alpha: 1.0                # scaling for "add" mode
+  # Repeats placeholder_token at {placeholder} for every prompt_style (not hardcoded per style).
+  num_placeholders: 1
+  placeholder_token: "___"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# GENERATION
+# ═══════════════════════════════════════════════════════════════════════
+
+generation:
+  max_new_tokens: 64              # only used by generate mode (open_summary etc.)
+  temperature: 0.0
+  do_sample: false
+  use_cache: false                 # applies to both generate() and model(...) decode paths
+  # decode_mode is now per-template (set in interpretation_templates above)
+  # When true, save full-vocab log-softmax at each choice token position
+  # (choice_logprobs + total_choice_prob). Costs ~nothing extra compute
+  # since we already have the full logit vector; just stores more per record.
+  save_logprobs: true
+
+relevancy:
+  enabled: false
+  max_tokens: 64
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# EXPERIMENT MATRIX
+# ═══════════════════════════════════════════════════════════════════════
+
+source_personas:
+  - persona_conservative
+  - persona_progressive
+
+# Reporter personas (ignored for identity style — no chat template)
+reporter_personas:
+  - persona_conservative
+  - persona_progressive
+  - neutral_evaluator
+
+# Question sampling
+categories: ["cat_1", "cat_2", "cat_3", "cat_4", "cat_5"]   # empty = all categories
+samples_per_category: 5      # null = all in category
+
+# Controls
+controls:
+  text_only_baseline: true
+  shuffled_activation: true
+  control_sample_rate: 1.0      # 1.0 = run controls for every cell (needed for matched source_gain)
+
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # PROMPTS
 # ═══════════════════════════════════════════════════════════════════════
+
+# Which templates to run (empty list = all).
+# Valid: open_summary, answer_extraction, persona_probe, agreement_probe, self_recognition
+enabled_templates: ["open_summary"]
 
 # Prompt style — selects which variant to use from each template below.
 #   "identity"    — raw pattern completion (X -> X; ? ->). No chat template.
@@ -12,9 +99,6 @@
 #   "selfie"      — instructional prompt, chat-templated with reporter persona.
 prompt_style: "identity"
 
-# Which templates to run (empty list = all).
-# Valid: answer_extraction, persona_probe, agreement_probe, open_summary, self_recognition
-enabled_templates: ["answer_extraction"]
 
 # Template definitions. Each has three prompt variants.
 # Variables: {placeholder}, {question_text}, {options}, {statement}
@@ -22,6 +106,18 @@ enabled_templates: ["answer_extraction"]
 # decode_mode: "logits"   → single-token probability over fixed choices (A/B/C/D).
 # decode_mode: "generate" → multi-token free-form text generation.
 interpretation_templates:
+
+  open_summary:
+    identity: |
+      cat -> cat; 135 -> 135; hello -> hello; {placeholder}
+    patchscopes: |
+      Representation: {placeholder}
+    selfie: |
+      {placeholder}
+
+      In one short phrase, describe what answer or stance this representation most strongly supports.
+    decode_mode: "generate"  # free-form generation, no fixed choices OR generate
+
 
   answer_extraction:
     identity: |
@@ -73,16 +169,6 @@ interpretation_templates:
       Respond with: Agree or Disagree.
     decode_mode: "logits"   # logits over {Agree, Disagree} OR generate
 
-  open_summary:
-    identity: |
-      cat -> cat; 135 -> 135; hello -> hello; {placeholder}
-    patchscopes: |
-      Representation: {placeholder}
-    selfie: |
-      {placeholder}
-
-      In one short phrase, describe what answer or stance this representation most strongly supports.
-    decode_mode: "generate"  # free-form generation, no fixed choices OR generate
 
   self_recognition:
     identity: |
@@ -100,82 +186,3 @@ interpretation_templates:
 interpretation_base_prompt: ""
 
 
-# ═══════════════════════════════════════════════════════════════════════
-# LAYERS
-# ═══════════════════════════════════════════════════════════════════════
-# Three modes (first match wins):
-#   1. layer_pairs  — explicit [source, injection] pairs
-#   2. layer_sweep  — all combos of source_layers × injection_layers
-#   3. defaults     — extraction.layers × injection.layer
-
-# Option 1: explicit pairs (comment out to use option 2 or 3)
-layer_pairs:
-  - [20, 5]
-  - [25, 1]
-  - [25, 3]
-  - [25, 5]
-  - [20, 20]
-  - [25, 25]
-  - [30, 30]
-
-# Option 2: full cross-product sweep (uncomment, remove layer_pairs above)
-# layer_sweep:
-#   enabled: true
-#   source_layers: [4, 8, 12, 16, 20, 24, 28, 31]
-#   injection_layers: [1, 3, 5, 8]
-
-# Option 3: defaults (used when neither of the above is set)
-extraction:
-  token_position: "last"
-  layers: "middle"          # "all", "middle", or [8, 16, 24]
-
-injection:
-  layer: 8
-  mode: "replace"           # "replace" or "add"
-  alpha: 1.0                # scaling for "add" mode
-  num_placeholders: 1
-  placeholder_token: "?"
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# GENERATION
-# ═══════════════════════════════════════════════════════════════════════
-
-generation:
-  max_new_tokens: 64              # only used by generate mode (open_summary etc.)
-  temperature: 0.0
-  do_sample: false
-  # decode_mode is now per-template (set in interpretation_templates above)
-  # When true, save full-vocab log-softmax at each choice token position
-  # (choice_logprobs + total_choice_prob). Costs ~nothing extra compute
-  # since we already have the full logit vector; just stores more per record.
-  save_logprobs: true
-
-relevancy:
-  enabled: false
-  max_tokens: 64
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# EXPERIMENT MATRIX
-# ═══════════════════════════════════════════════════════════════════════
-
-source_personas:
-  - persona_conservative
-  - persona_progressive
-
-# Reporter personas (ignored for identity style — no chat template)
-reporter_personas:
-  - persona_conservative
-  - persona_progressive
-  - neutral_evaluator
-
-# Question sampling
-categories: ["cat_1", "cat_2", "cat_3", "cat_4", "cat_5"]   # empty = all categories
-samples_per_category: 20      # null = all in category
-
-# Controls
-controls:
-  text_only_baseline: true
-  shuffled_activation: true
-  control_sample_rate: 1.0      # 1.0 = run controls for every cell (needed for matched source_gain)

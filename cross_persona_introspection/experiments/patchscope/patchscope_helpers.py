@@ -5,6 +5,7 @@ placeholder resolution, and interpretation-prompt construction used by
 PatchscopeExperiment and patchscope_source_overrides.
 """
 
+import hashlib
 import json
 import logging
 import random
@@ -260,7 +261,9 @@ def _shuffle_options(question: dict, seed: int, qid: str, persona: str) -> tuple
         shuffled_question: question dict with options reordered (new labels A-D)
         remap: dict mapping shuffled label -> original label, e.g. {"A": "C", "B": "A", ...}
     """
-    rng = random.Random(seed + hash(qid + persona))
+    # Stable across processes (unlike built-in hash randomization).
+    mix = hashlib.sha256(f"{seed}\0{qid}\0{persona}".encode()).digest()
+    rng = random.Random(int.from_bytes(mix[:8], "big"))
     original_labels = ["A", "B", "C", "D"]
     shuffled_labels = original_labels.copy()
     rng.shuffle(shuffled_labels)

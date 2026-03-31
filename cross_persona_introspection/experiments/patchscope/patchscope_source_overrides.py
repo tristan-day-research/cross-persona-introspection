@@ -169,6 +169,7 @@ def run_source_overrides(
                             max_new_tokens=gen_cfg["max_new_tokens"],
                             temperature=gen_cfg["temperature"],
                             do_sample=gen_cfg.get("do_sample", False),
+                            use_cache=gen_cfg.get("use_cache", True),
                             choice_token_ids=all_choice_token_ids.get(tmpl_name),
                             save_logprobs=save_logprobs,
                         )

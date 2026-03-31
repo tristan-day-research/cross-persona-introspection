@@ -149,6 +149,7 @@ def patch_and_decode(
     max_new_tokens: int = 128,
     temperature: float = 0.0,
     do_sample: bool = False,
+    use_cache: bool = True,
     # Logits-mode params (ignored when decode_mode="generate")
     choice_token_ids: Optional[dict[str, int]] = None,
     save_logprobs: bool = False,
@@ -180,6 +181,13 @@ def patch_and_decode(
             ``"generate"`` for free-form auto-regressive generation.
         max_new_tokens / temperature / do_sample: Generation params
             (only used when ``decode_mode="generate"``).
+        use_cache: Whether to enable KV-cache in ``generate`` and forward passes.
+            With cache on, decode steps only process the new token, so the hook
+            sees sequence length 1 and placeholder indices do not match — the
+            patch from prefill persists via cached K/V. With cache off, the model
+            may recompute the full prefix each step; the hook runs whenever
+            hidden length includes the placeholder indices, and we patch on
+            those forwards (no one-shot guard).
         choice_token_ids: ``{label: token_id}`` for constrained decode
             (required when ``decode_mode="logits"``).
         save_logprobs: If True and logits mode, include full-vocab logprobs
@@ -208,23 +216,29 @@ def patch_and_decode(
     if activation is not None:
         act = activation.to(device)
 
-        # For generate mode, the hook should only fire during prefill (the
-        # first forward call).  On subsequent decode steps the KV-cache
-        # already carries the patch's effect.  For logits mode there's only
-        # one forward call, so the flag is harmless.
-        prefill_done = [False]
+        # With use_cache=True during generate(), later decode steps often forward
+        # only the new token (hidden length 1), so placeholder token indices
+        # are out of range — we skip those forwards; the patched K/V from
+        # prefill still carries the edit. With use_cache=False, forwards may
+        # include the full growing prefix each time — we patch whenever indices
+        # fit; no "prefill only" guard.
+        use_one_shot_hook = decode_mode == "generate" and use_cache
+        hook_done = [False]
 
         def injection_hook(module, input, output):
-            if prefill_done[0]:
+            if use_one_shot_hook and hook_done[0]:
                 return
-            prefill_done[0] = True
             hidden = output[0] if isinstance(output, tuple) else output
+            patched_any = False
             for pos in placeholder_positions:
                 if pos < hidden.shape[1]:
+                    patched_any = True
                     if mode == "replace":
                         hidden[0, pos, :] = act
                     elif mode == "add":
                         hidden[0, pos, :] = hidden[0, pos, :] + alpha * act
+            if use_one_shot_hook and patched_any:
+                hook_done[0] = True
             if isinstance(output, tuple):
                 return (hidden,) + output[1:]
             return hidden
@@ -240,12 +254,14 @@ def patch_and_decode(
                     max_new_tokens=max_new_tokens,
                     temperature=temperature,
                     do_sample=do_sample,
+                    use_cache=use_cache,
                 )
             elif decode_mode == "logits":
                 if choice_token_ids is None:
                     raise ValueError("choice_token_ids is required for decode_mode='logits'")
                 result = _decode_logits(
                     model, input_ids, choice_token_ids,
+                    use_cache=use_cache,
                     save_logprobs=save_logprobs,
                 )
             else:
@@ -259,7 +275,7 @@ def patch_and_decode(
 
 def _decode_generate(
     model, tokenizer, input_ids,
-    max_new_tokens, temperature, do_sample,
+    max_new_tokens, temperature, do_sample, use_cache,
 ) -> dict:
     """Auto-regressive generation.  Returns {"generated_text": str}."""
     attention_mask = torch.ones_like(input_ids)
@@ -270,7 +286,7 @@ def _decode_generate(
         temperature=temperature if do_sample else None,
         do_sample=do_sample,
         pad_token_id=tokenizer.pad_token_id,
-        use_cache=True,
+        use_cache=use_cache,
     )
     new_tokens = output_ids[0, input_ids.shape[1]:]
     return {"generated_text": tokenizer.decode(new_tokens, skip_special_tokens=True)}
@@ -278,6 +294,7 @@ def _decode_generate(
 
 def _decode_logits(
     model, input_ids, choice_token_ids,
+    use_cache,
     save_logprobs,
 ) -> dict:
     """Single forward pass, constrained next-token probs.
@@ -285,7 +302,7 @@ def _decode_logits(
     Returns dict with "generated_text", "probs", "logits", "predicted",
     and optionally "logprobs" and "total_choice_prob".
     """
-    outputs = model(input_ids)
+    outputs = model(input_ids, use_cache=use_cache)
     next_logits = outputs.logits[0, -1, :]
 
     choice_logit_values = {
