@@ -96,6 +96,7 @@ class PatchscopeExperiment(BaseExperiment):
         self.questions: list[dict] = []
         self.records: list[PatchscopeRecord] = []
         self._sample_prompts: dict[str, dict] = {}
+        self._no_persona_chat_per_layer: dict[str, dict] = {}
         self._errors: list[str] = []
         self._run_elapsed: float = 0.0
         self._jsonl_path: Optional[Path] = None
@@ -1000,6 +1001,108 @@ class PatchscopeExperiment(BaseExperiment):
         ):
             _try_reporter_sample("oppose")
 
+        if (
+            rep_cfg.get("include_no_persona_chat_template_sample_per_layer", False)
+            and condition == "real"
+            and prompt_style != "identity"
+            and layer_tag not in self._no_persona_chat_per_layer
+            and activation is not None
+        ):
+            try:
+                self._capture_no_persona_chat_template_per_layer(
+                    model=model,
+                    tokenizer=tokenizer,
+                    device=device,
+                    layer_tag=layer_tag,
+                    record=record,
+                    activation=activation,
+                    tmpl_name=tmpl_name,
+                    tmpl_cfg=tmpl_cfg,
+                    inj_layer=inj_layer,
+                    injection_mode=injection_mode,
+                    injection_alpha=injection_alpha,
+                    gen_cfg=gen_cfg,
+                    all_choice_token_ids=all_choice_token_ids,
+                    save_logprobs=save_logprobs,
+                    interp_question=interp_question,
+                    base_prompt=base_prompt,
+                    placeholder_token=placeholder_token,
+                    num_placeholders=num_placeholders,
+                    prompt_style=prompt_style,
+                )
+            except Exception as e:
+                logger.warning(
+                    f"No-persona chat-template log sample failed for {layer_tag}: {e}"
+                )
+
+    def _capture_no_persona_chat_template_per_layer(
+        self,
+        *,
+        model,
+        tokenizer,
+        device,
+        layer_tag: str,
+        record,
+        activation,
+        tmpl_name: str,
+        tmpl_cfg: dict,
+        inj_layer: int,
+        injection_mode: str,
+        injection_alpha: float,
+        gen_cfg: dict,
+        all_choice_token_ids: dict,
+        save_logprobs: bool,
+        interp_question: dict,
+        base_prompt: str,
+        placeholder_token: str,
+        num_placeholders: int,
+        prompt_style: str,
+    ) -> None:
+        """One .txt log decode per layer pair: chat template, no custom system (persona)."""
+        ns_text, ns_msgs, ns_ph = patchscope_helpers.build_interpretation_prompt(
+            tokenizer=tokenizer,
+            tmpl_cfg=tmpl_cfg,
+            prompt_style=prompt_style,
+            base_prompt=base_prompt,
+            placeholder_token=placeholder_token,
+            num_placeholders=num_placeholders,
+            question=interp_question,
+            reporter_system_prompt=None,
+            use_chat_template=True,
+        )
+        decode_mode = tmpl_cfg.get("decode_mode", "generate")
+        use_logits = decode_mode == "logits" and tmpl_name in all_choice_token_ids
+
+        result = patchscope_patching.patch_and_decode(
+            model,
+            tokenizer,
+            device,
+            ns_msgs,
+            activation,
+            injection_layer=inj_layer,
+            placeholder_positions=ns_ph,
+            mode=injection_mode,
+            alpha=injection_alpha,
+            raw_text=None,
+            decode_mode="logits" if use_logits else "generate",
+            max_new_tokens=gen_cfg["max_new_tokens"],
+            temperature=gen_cfg["temperature"],
+            do_sample=gen_cfg.get("do_sample", False),
+            use_cache=gen_cfg.get("use_cache", True),
+            choice_token_ids=all_choice_token_ids.get(tmpl_name),
+            save_logprobs=save_logprobs,
+        )
+        self._no_persona_chat_per_layer[layer_tag] = {
+            "template": tmpl_name,
+            "question_id": record.question_id,
+            "source_persona": record.source_persona,
+            "reporter_persona": record.reporter_persona,
+            "source_layer": record.source_layer,
+            "injection_layer": inj_layer,
+            "interp_prompt_text": ns_text,
+            "generated_text": result["generated_text"],
+        }
+
     def _capture_no_system_log_sample(
         self,
         *,
@@ -1107,6 +1210,7 @@ class PatchscopeExperiment(BaseExperiment):
             all_personas=self.all_personas,
             sample_source_prompts=getattr(self, '_sample_source_prompts', {}),
             sample_prompts=self._sample_prompts,
+            no_persona_chat_per_layer=self._no_persona_chat_per_layer,
             errors=self._errors,
             elapsed=getattr(self, '_run_elapsed', 0.0),
             n_questions=len(self.questions),

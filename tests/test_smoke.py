@@ -236,6 +236,7 @@ def test_patchscope_helpers():
     assert "user_message_template" in cfg["source_pass"]
     assert "reporting" in cfg
     assert "include_no_reporter_system_sample" in cfg["reporting"]
+    assert "include_no_persona_chat_template_sample_per_layer" in cfg["reporting"]
     assert "opposing_sample_policy" in cfg["reporting"]
     q = {
         "question_text": "Pick one?",

@@ -26,6 +26,7 @@ def write_run_log(
     elapsed: float,
     n_questions: int,
     evaluate_fn: Callable[[], dict],
+    no_persona_chat_per_layer: Optional[dict] = None,
 ) -> None:
     """Write the detailed companion .txt log file.
 
@@ -39,6 +40,8 @@ def write_run_log(
         all_personas: {name: PersonaConfig} dict.
         sample_source_prompts: Sample source prompts captured during Phase 1.
         sample_prompts: Sample reporter prompts captured during Phase 2.
+        no_persona_chat_per_layer: Optional {layer_tag: sample dict} for log-only
+            chat-templated prompts with no custom system (see reporting config).
         errors: List of error messages.
         elapsed: Wall-clock seconds elapsed.
         n_questions: Number of questions loaded.
@@ -222,6 +225,51 @@ def write_run_log(
             ]
             for pline in sample["prompt_text"].splitlines():
                 lines.append(f"  {pline}")
+            lines.append("")
+        lines.append("")
+
+    # ── One no-persona chat-templated example per source→injection layer pair (.txt only)
+    npc = no_persona_chat_per_layer or {}
+    if npc:
+
+        def _layer_tag_sort_key(tag: str) -> tuple[int, int]:
+            try:
+                body = tag[1:] if tag.startswith("L") else tag
+                src_s, inj_s = body.split("to", 1)
+                return (int(src_s), int(inj_s))
+            except (ValueError, IndexError):
+                return (0, 0)
+
+        lines += [
+            sep,
+            "NO-PERSONA CHAT PROMPT (one per layer pair; model default system only)",
+            thin,
+            "  Log-only decodes: apply_chat_template with no custom system message,",
+            "  regardless of patchscope.yaml use_chat_template. Same activation injection",
+            "  as the first 'real' matrix cell seen for that layer pair.",
+            "",
+        ]
+        for layer_tag in sorted(npc.keys(), key=_layer_tag_sort_key):
+            sample = npc[layer_tag]
+            lines += [
+                f"\n--- {layer_tag} ---",
+                f"  template         : {sample.get('template', '')}",
+                f"  question_id      : {sample.get('question_id', '')}",
+                f"  source_persona   : {sample.get('source_persona', '')}",
+                f"  reporter_persona : {sample.get('reporter_persona', '')} (not in system role here)",
+                f"  source_layer     : {sample.get('source_layer', '')}",
+                f"  injection_layer  : {sample.get('injection_layer', '')}",
+                "",
+                "  ── FULL PROMPT (chat template, no persona system) ──",
+            ]
+            for pline in sample.get("interp_prompt_text", "").splitlines():
+                lines.append(f"  {pline}")
+            lines += [
+                "",
+                "  ── MODEL RESPONSE ──",
+            ]
+            for rline in sample.get("generated_text", "").splitlines():
+                lines.append(f"  {rline}")
             lines.append("")
         lines.append("")
 
