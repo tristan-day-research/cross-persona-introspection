@@ -38,12 +38,13 @@ extraction:
   #            assistant_boundary_marker (end of user turn, before assistant header tokens).
   #   <int> — explicit 0-based index into encode(templated_source, add_special_tokens=False).
 
-  token_position: "last"
+  token_position: "last_before_assistant"
 
 
   # Substring search in the templated source string; only used when token_position is
   # last_before_assistant. Must match your model's chat template (Llama 3 Instruct default).
   assistant_boundary_marker: "<|eot_id|><|start_header_id|>assistant"
+  assistant_boundary_marker: "<|eot_id|><|start_header_id|>assistant<|end_header_id|>"
 
   # layers: "middle"          # "all", "middle", or [8, 16, 24]
 
@@ -140,12 +141,15 @@ source_pass:
 
   #   Choose the single best answer. Answer with exactly one letter: A, B, C, or D.
   user_message_template: |
+    <|begin_of_text|><|start_header_id|>user<|end_header_id|>
+
     {question_text}
 
     {options_formatted}
 
     Answer with only one letter and no other text. Do you choose A, B, C, or D?
-    My answer is:
+
+    My answer is: <|eot_id|><|start_header_id|>assistant<|end_header_id|>
 # Which templates to run (empty list = all).
 # Valid: open_summary, answer_extraction, persona_probe, agreement_probe, self_recognition
 enabled_templates: ["open_summary"]
@@ -155,7 +159,7 @@ enabled_templates: ["open_summary"]
 #                   Still wrapped with the model chat template + reporter system prompt.
 #   "patchscopes" — minimal structured user prompt + chat template + reporter system.
 #   "selfie"      — instructional user prompt + chat template + reporter system.
-prompt_style: "selfie"
+prompt_style: "direct_answer"
 
 # Whether to wrap interpretation prompts in the model's chat template.
 #   true  — apply_chat_template is used; reporter system prompt goes in the system role.
@@ -168,7 +172,9 @@ use_chat_template: false
 
 
 # Template definitions. Each has three prompt variants.
-# Variables: {placeholder}, {question_text}, {options}, {statement}
+# Variables: {placeholder}, {persona_prompt} (reporter system text from personas.yaml),
+#   {question_text}, {options}, {options_formatted}, {statement}
+# If {persona_prompt} appears, it is not also prepended or sent as a separate system message.
 #
 # decode_mode: "logits"   → single-token probability over fixed choices (A/B/C/D).
 # decode_mode: "generate" → multi-token free-form text generation.
@@ -203,22 +209,23 @@ interpretation_templates:
       In a short phrase, describe what it means.
 
       {placeholder}
-
-    # selfie: |
-    #   "[INST]" {placeholder} {placeholder} {placeholder} {placeholder} {placeholder} "[/INST] Sure, I will summarize the message:"
-    # selfie: |
     #   <|start_header_id|>user<|end_header_id|> {placeholder} <|eot_id|><|start_header_id|>assistant<|end_header_id|> Sure, I will summarize the message:
     # Preamble (persona or reporting.no_persona_layer_log_system_prompt) is prepended in code.
     # Do not embed BOS/system/dates in selfie — duplicates synthetic block.
-    
+  
+    # selfie: |
+    #   <|start_header_id|>user<|end_header_id|> {placeholder} <|eot_id|><|start_header_id|>assistant<|end_header_id|> Sure, I will summarize the message:
     selfie: |
-      <|start_header_id|>user<|end_header_id|> {placeholder} <|eot_id|><|start_header_id|>assistant<|end_header_id|> Sure, I will summarize the message:
-    selfie: |
-      <|begin_of_text|><|start_header_id|>user<|end_header_id|>
+      <|begin_of_text|><|redacted_start_header_id|>user<|redacted_end_header_id|>
 
-      {placeholder}<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+      {persona_prompt}
 
-      Sure, I will briefly describe what this is about:
+      The hidden content below corresponds to another agent's selected answer.
+      Recover the answer choice it represents.
+
+      {placeholder}<|eot_id|><|redacted_start_header_id|>assistant<|redacted_end_header_id|>
+
+      Answer:
     direct_answer: |
       {placeholder}
       Read the hidden content above and recover the answer choice it indicates.
@@ -226,68 +233,68 @@ interpretation_templates:
     decode_mode: "generate"  # free-form generation, no fixed choices OR generate
 
 
-  answer_extraction:
-    identity: |
-      cat -> cat; 135 -> 135; hello -> hello; {placeholder}
-    patchscopes: |
-      {question_text}
+  # answer_extraction:
+  #   identity: |
+  #     cat -> cat; 135 -> 135; hello -> hello; {placeholder}
+  #   patchscopes: |
+  #     {question_text}
 
-      {options_formatted}
+  #     {options_formatted}
 
-      Choose the single best answer. Answer with exactly one letter: A, B, C, or D.
-      Answer: {placeholder}
-    selfie: |
-      {placeholder}
+  #     Choose the single best answer. Answer with exactly one letter: A, B, C, or D.
+  #     Answer: {placeholder}
+  #   selfie: |
+  #     {placeholder}
 
-      {question_text}
+  #     {question_text}
 
-      {options_formatted}
+  #     {options_formatted}
 
-      What answer did the model choose?
-      Respond with a single letter (A, B, C, or D).
-    decode_mode: "generate"   # logits over {A, B, C, D} OR generate
+  #     What answer did the model choose?
+  #     Respond with a single letter (A, B, C, or D).
+  #   decode_mode: "generate"   # logits over {A, B, C, D} OR generate
 
-  persona_probe:
-    identity: |
-      cat -> cat; 135 -> 135; hello -> hello; {placeholder}
-    patchscopes: |
-      Persona: {placeholder}
-    selfie: |
-      {placeholder}
+  # persona_probe:
+  #   identity: |
+  #     cat -> cat; 135 -> 135; hello -> hello; {placeholder}
+  #   patchscopes: |
+  #     Persona: {placeholder}
+  #   selfie: |
+  #     {placeholder}
 
-      Which persona produced this representation?
-      Respond with: Conservative or Progressive.
-    decode_mode: "logits"   # logits over {Conservative, Progressive} OR generate
+  #     Which persona produced this representation?
+  #     Respond with: Conservative or Progressive.
+  #   decode_mode: "logits"   # logits over {Conservative, Progressive} OR generate
 
-  agreement_probe:
-    identity: |
-      cat -> cat; 135 -> 135; hello -> hello; {placeholder}
-    patchscopes: |
-      Statement: {statement}
+  # agreement_probe:
+  #   identity: |
+  #     cat -> cat; 135 -> 135; hello -> hello; {placeholder}
+  #   patchscopes: |
+  #     Statement: {statement}
 
-      Position: {placeholder}
-    selfie: |
-      {placeholder}
+  #     Position: {placeholder}
+  #   selfie: |
+  #     {placeholder}
 
-      Does this correspond to agreeing or disagreeing with the statement?
+  #     Does this correspond to agreeing or disagreeing with the statement?
 
-      {statement}
+  #     {statement}
 
-      Respond with: Agree or Disagree.
-    decode_mode: "logits"   # logits over {Agree, Disagree} OR generate
+  #     Respond with: Agree or Disagree.
+  #   decode_mode: "logits"   # logits over {Agree, Disagree} OR generate
 
 
-  self_recognition:
-    identity: |
-      cat -> cat; 135 -> 135; hello -> hello; {placeholder}
-    patchscopes: |
-      Source: {placeholder}
-    selfie: |
-      {placeholder}
+  # self_recognition:
+  #   identity: |
+  #     cat -> cat; 135 -> 135; hello -> hello; {placeholder}
+  #   patchscopes: |
+  #     Source: {placeholder}
+  #   selfie: |
+  #     {placeholder}
 
-      Was this produced by you or another persona?
-      Respond with: Self or Other.
-    decode_mode: "logits"   # logits over {Self, Other} OR generate
+  #     Was this produced by you or another persona?
+  #     Respond with: Self or Other.
+  #   decode_mode: "logits"   # logits over {Self, Other} OR generate
 
 # Prepended to selfie prompts only. Empty = disabled.
 interpretation_base_prompt: ""

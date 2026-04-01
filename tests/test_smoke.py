@@ -210,6 +210,7 @@ def test_patchscope_helpers():
         _load_patchscope_config,
         _model_short_name,
         _resolve_layers,
+        build_interpretation_prompt,
         describe_source_extraction_site,
         format_source_pass_user_message,
         reporter_sample_opposing_qualifies,
@@ -255,6 +256,24 @@ def test_patchscope_helpers():
 
     # Extraction site description (no model; local GPT-2 tokenizer)
     tok = GPT2Tokenizer.from_pretrained("gpt2")
+    tmpl = {
+        "selfie": "HEAD {persona_prompt} MID {placeholder} TAIL",
+        "decode_mode": "generate",
+    }
+    interp, _msgs, _ph = build_interpretation_prompt(
+        tok,
+        tmpl,
+        "selfie",
+        "",
+        "?",
+        1,
+        {"question_text": "Q", "options": {}},
+        "I am the persona.",
+        use_chat_template=False,
+    )
+    assert interp.count("I am the persona.") == 1
+    assert "HEAD I am the persona. MID" in interp
+
     text = "Hello world"
     site = describe_source_extraction_site(tok, text, "last")
     assert "token_index" in site and "n_tokens" in site

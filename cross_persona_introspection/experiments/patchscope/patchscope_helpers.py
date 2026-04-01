@@ -463,6 +463,9 @@ def build_interpretation_prompt(
         num_placeholders: How many placeholder tokens to insert.
         question: Question dict with ``question_text`` and ``options``.
         reporter_system_prompt: Reporter persona system prompt; whitespace-only is treated as absent.
+            Templates may include ``{persona_prompt}`` (same text); if present, it is substituted
+            and the persona is not also prepended (plain mode) or duplicated as a separate system
+            message (chat template mode).
         options_override: If given, use these options instead of ``question["options"]``.
         use_chat_template: If True (default), non-identity styles are wrapped with
             ``apply_chat_template`` and the reporter system prompt goes in the system
@@ -500,7 +503,11 @@ def build_interpretation_prompt(
     )
     options_formatted_str = _options_formatted_abcd(opts)
 
-    user_content = prompt_template.strip()
+    raw_template = prompt_template.strip()
+    has_persona_slot = "{persona_prompt}" in raw_template
+
+    user_content = raw_template
+    user_content = user_content.replace("{persona_prompt}", reporter_system)
     user_content = user_content.replace("{placeholder}", _SENTINEL)
     user_content = user_content.replace("{question_text}", question.get("question_text", ""))
     user_content = user_content.replace("{options_formatted}", options_formatted_str)
@@ -509,9 +516,9 @@ def build_interpretation_prompt(
 
     if prompt_style == "identity" or not use_chat_template:
         # Raw continuation mode: no chat template, no special tokens.
-        # Reporter system prompt (if any) is prepended as plain text.
-        if reporter_system:
-            user_content = reporter_system.strip() + "\n\n" + user_content
+        # Legacy: prepend reporter system when the template has no {persona_prompt} slot.
+        if reporter_system and not has_persona_slot:
+            user_content = reporter_system + "\n\n" + user_content
         _ph_char_pos = user_content.find(_SENTINEL)
         user_content = user_content.replace(_SENTINEL, placeholder_str)
         interp_text = user_content
@@ -522,7 +529,7 @@ def build_interpretation_prompt(
             user_content = base_prompt.strip() + "\n\n" + user_content
 
         sentinel_messages = []
-        if reporter_system:
+        if reporter_system and not has_persona_slot:
             sentinel_messages.append({"role": "system", "content": reporter_system})
         sentinel_messages.append({"role": "user", "content": user_content})
 
@@ -533,7 +540,7 @@ def build_interpretation_prompt(
 
         user_content = user_content.replace(_SENTINEL, placeholder_str)
         interp_messages = []
-        if reporter_system:
+        if reporter_system and not has_persona_slot:
             interp_messages.append({"role": "system", "content": reporter_system})
         interp_messages.append({"role": "user", "content": user_content})
 
