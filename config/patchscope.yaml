@@ -50,7 +50,7 @@ injection:
   mode: "replace"           # "replace" or "add"
   alpha: 1.0                # scaling for "add" mode
   # Repeats placeholder_token at {placeholder} for every prompt_style (not hardcoded per style).
-  num_placeholders: 1
+  num_placeholders: 5
   placeholder_token: "_"
 
 
