@@ -1009,7 +1009,7 @@ class PatchscopeExperiment(BaseExperiment):
             and activation is not None
         ):
             try:
-                self._capture_no_persona_chat_template_per_layer(
+                self._capture_no_persona_plain_prompt_per_layer(
                     model=model,
                     tokenizer=tokenizer,
                     device=device,
@@ -1035,10 +1035,10 @@ class PatchscopeExperiment(BaseExperiment):
                 )
             except Exception as e:
                 logger.warning(
-                    f"No-persona chat-template log sample failed for {layer_tag}: {e}"
+                    f"No-persona layer log sample failed for {layer_tag}: {e}"
                 )
 
-    def _capture_no_persona_chat_template_per_layer(
+    def _capture_no_persona_plain_prompt_per_layer(
         self,
         *,
         model,
@@ -1062,7 +1062,12 @@ class PatchscopeExperiment(BaseExperiment):
         prompt_style: str,
         layer_log_system_prompt: str | None = None,
     ) -> None:
-        """One .txt log decode per layer pair: chat template, optional synthetic system (not personas.yaml)."""
+        """One .txt log decode per layer pair: exact plain string sent to the model (no apply_chat_template).
+
+        Same construction as the main matrix with use_chat_template false: optional synthetic
+        preamble from YAML prepended to the interpretation template body only — no personas.yaml
+        reporter text, no extra tokenizer chat wrapper (avoids duplicated system / nested headers).
+        """
         ns_text, ns_msgs, ns_ph = patchscope_helpers.build_interpretation_prompt(
             tokenizer=tokenizer,
             tmpl_cfg=tmpl_cfg,
@@ -1072,7 +1077,7 @@ class PatchscopeExperiment(BaseExperiment):
             num_placeholders=num_placeholders,
             question=interp_question,
             reporter_system_prompt=layer_log_system_prompt,
-            use_chat_template=True,
+            use_chat_template=False,
         )
         decode_mode = tmpl_cfg.get("decode_mode", "generate")
         use_logits = decode_mode == "logits" and tmpl_name in all_choice_token_ids
@@ -1087,7 +1092,7 @@ class PatchscopeExperiment(BaseExperiment):
             placeholder_positions=ns_ph,
             mode=injection_mode,
             alpha=injection_alpha,
-            raw_text=None,
+            raw_text=ns_text,
             decode_mode="logits" if use_logits else "generate",
             max_new_tokens=gen_cfg["max_new_tokens"],
             temperature=gen_cfg["temperature"],

@@ -41,7 +41,7 @@ def write_run_log(
         sample_source_prompts: Sample source prompts captured during Phase 1.
         sample_prompts: Sample reporter prompts captured during Phase 2.
         no_persona_chat_per_layer: Optional {layer_tag: sample dict} for log-only
-            chat-templated prompts with no custom system (see reporting config).
+            plain prompts (synthetic preamble + template; no apply_chat_template).
         errors: List of error messages.
         elapsed: Wall-clock seconds elapsed.
         n_questions: Number of questions loaded.
@@ -228,7 +228,7 @@ def write_run_log(
             lines.append("")
         lines.append("")
 
-    # ── One no-persona chat-templated example per source→injection layer pair (.txt only)
+    # ── One no-persona plain-prompt example per source→injection layer pair (.txt only)
     npc = no_persona_chat_per_layer or {}
     if npc:
 
@@ -242,29 +242,29 @@ def write_run_log(
 
         lines += [
             sep,
-            "NO-PERSONA CHAT PROMPT (one per layer pair; synthetic system from patchscope.yaml)",
+            "NO-PERSONA PROMPT (one per layer pair; exact string tokenized for the model)",
             thin,
-            "  Log-only decodes: apply_chat_template + reporting.no_persona_layer_log_system_prompt",
-            "  (if non-empty), not personas.yaml. Same activation injection as the first 'real'",
-            "  matrix cell for that layer pair. Empty no_persona_layer_log_system_prompt → no",
-            "  explicit system role in messages (tokenizer may still add defaults).",
+            "  Log-only decodes: plain text only — reporting.no_persona_layer_log_system_prompt",
+            "  (if non-empty) then a blank line then the interpretation template from patchscope.yaml.",
+            "  No apply_chat_template wrapper (same as use_chat_template: false). Not personas.yaml.",
+            "  Same activation injection as the first 'real' matrix cell for that layer pair.",
             "",
         ]
         for layer_tag in sorted(npc.keys(), key=_layer_tag_sort_key):
             sample = npc[layer_tag]
             syn = (sample.get("layer_log_system_prompt") or "").strip()
-            syn_note = repr(syn[:200] + ("…" if len(syn) > 200 else "")) if syn else "(empty — tokenizer default system may still apply)"
+            syn_note = repr(syn[:200] + ("…" if len(syn) > 200 else "")) if syn else "(empty — template body only)"
             lines += [
                 f"\n--- {layer_tag} ---",
                 f"  template         : {sample.get('template', '')}",
                 f"  question_id      : {sample.get('question_id', '')}",
                 f"  source_persona   : {sample.get('source_persona', '')}",
-                f"  reporter_persona : {sample.get('reporter_persona', '')} (persona not used as system here)",
+                f"  reporter_persona : {sample.get('reporter_persona', '')} (persona text not prepended here)",
                 f"  source_layer     : {sample.get('source_layer', '')}",
                 f"  injection_layer  : {sample.get('injection_layer', '')}",
-                f"  synthetic system : {syn_note}",
+                f"  synthetic preamble : {syn_note}",
                 "",
-                "  ── FULL PROMPT (chat template) ──",
+                "  ── FULL PROMPT (verbatim; add_special_tokens=false when encoding) ──",
             ]
             for pline in sample.get("interp_prompt_text", "").splitlines():
                 lines.append(f"  {pline}")
