@@ -1132,7 +1132,26 @@ class PatchscopeExperiment(BaseExperiment):
         prompt_style: str,
         sample_key: str,
     ) -> None:
-        """One extra patch_and_decode with no reporter system — .txt log only."""
+        """One extra patch_and_decode without personas.yaml reporter system — .txt log only.
+
+        When use_chat_template is false, dropping the reporter persona removes the long plain
+        preamble; for text_only_baseline the prefix before the placeholder can collapse to
+        nearly nothing and the model decodes garbage. We therefore (1) prepend
+        reporting.no_persona_layer_log_system_prompt when set (same as per-layer log), and
+        (2) if it is unset, force apply_chat_template for this log decode only on
+        text_only_baseline so the prompt is not degenerate.
+        """
+        rep_cfg = self.ps_config.get("reporting") or {}
+        synthetic = (rep_cfg.get("no_persona_layer_log_system_prompt") or "").strip() or None
+        use_ct = self._use_chat_template
+        if (
+            synthetic is None
+            and not use_ct
+            and condition == "text_only_baseline"
+            and prompt_style != "identity"
+        ):
+            use_ct = True
+
         ns_text, ns_msgs, ns_ph = patchscope_helpers.build_interpretation_prompt(
             tokenizer=tokenizer,
             tmpl_cfg=tmpl_cfg,
@@ -1141,8 +1160,8 @@ class PatchscopeExperiment(BaseExperiment):
             placeholder_token=placeholder_token,
             num_placeholders=num_placeholders,
             question=interp_question,
-            reporter_system_prompt=None,
-            use_chat_template=self._use_chat_template,
+            reporter_system_prompt=synthetic,
+            use_chat_template=use_ct,
         )
         effective_raw = None
         if condition == "text_only_baseline" and ns_ph:
@@ -1157,7 +1176,7 @@ class PatchscopeExperiment(BaseExperiment):
                 if not bp.endswith(" "):
                     bp += " "
                 effective_raw = bp
-        elif prompt_style == "identity" or not self._use_chat_template:
+        elif prompt_style == "identity" or not use_ct:
             effective_raw = ns_text
 
         decode_mode = tmpl_cfg.get("decode_mode", "generate")

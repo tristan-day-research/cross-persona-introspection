@@ -328,7 +328,9 @@ def write_run_log(
         if ns:
             lines += [
                 "",
-                "  ── LOG-ONLY: same cell with NO reporter system message (not in JSONL) ──",
+                "  ── LOG-ONLY: no reporter persona from personas.yaml (not in JSONL) ──",
+                "      Uses reporting.no_persona_layer_log_system_prompt when set; if unset and",
+                "      text_only_baseline with use_chat_template false, chat template is forced for this decode only.",
             ]
             for pline in ns["interp_prompt_text"].splitlines():
                 lines.append(f"  {pline}")

@@ -15,6 +15,8 @@ layer_pairs:
   - [25, 1]
   - [25, 3]
   - [25, 5]
+  - [5, 5]
+  - [13, 13]
   - [20, 20]
   - [25, 25]
   - [30, 30]
@@ -103,8 +105,9 @@ controls:
 # Companion .txt log only (does not change JSONL records or metrics).
 # For each (template, condition, source_layer→injection_layer) from layer_pairs, the .txt
 # includes up to two samples: persona_alignment=match (source==reporter) and oppose
-# (see opposing_sample_policy). Each block also runs a log-only decode with no reporter
-# system when include_no_reporter_system_sample is true and the reporter has a system prompt.
+# (see opposing_sample_policy). Each block also runs a log-only decode without the reporter
+# persona when include_no_reporter_system_sample is true and the reporter has a system prompt.
+# That decode uses no_persona_layer_log_system_prompt when set (recommended with use_chat_template false).
 reporting:
   include_no_reporter_system_sample: true
   # .txt only: one apply_chat_template prompt per source→injection layer pair. Not using
@@ -164,8 +167,6 @@ use_chat_template: false
 
 
 
-
-
 # Template definitions. Each has three prompt variants.
 # Variables: {placeholder}, {question_text}, {options}, {statement}
 #
@@ -205,9 +206,10 @@ interpretation_templates:
 
     # selfie: |
     #   "[INST]" {placeholder} {placeholder} {placeholder} {placeholder} {placeholder} "[/INST] Sure, I will summarize the message:"
+    # selfie: |
+    #   <|start_header_id|>user<|end_header_id|> {placeholder} <|eot_id|><|start_header_id|>assistant<|end_header_id|> Sure, I will summarize the message:
     selfie: |
-      <|start_header_id|>user<|end_header_id|> {placeholder} <|eot_id|><|start_header_id|>assistant<|end_header_id|> Sure, I will summarize the message:
-
+      <|begin_of_text|><|start_header_id|>system<|end_header_id|>\nCutting Knowledge Date: December 2023\nToday Date: 26 Jul 2024\n<|eot_id|><|start_header_id|>user<|end_header_id|>{placeholder}<|eot_id|><|start_header_id|>assistant<|end_header_id|> Sure, I will summarize the message:
     direct_answer: |
       {placeholder}
       Read the hidden content above and recover the answer choice it indicates.
