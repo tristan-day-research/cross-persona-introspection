@@ -475,6 +475,9 @@ class PatchscopeExperiment(BaseExperiment):
                         messages.append({"role": "system", "content": source_persona.system_prompt})
                     messages.append({"role": "user", "content": user_msg})
 
+                    _ex_tok = extraction_cfg.get("token_position", "last")
+                    _ex_boundary = extraction_cfg.get("assistant_boundary_marker")
+
                     # Validate extraction position once (first question of first persona)
                     if not hasattr(self, '_extraction_validated'):
                         source_text = tokenizer.apply_chat_template(
@@ -482,15 +485,27 @@ class PatchscopeExperiment(BaseExperiment):
                         )
                         patchscope_helpers.validate_extraction_position(
                             tokenizer, source_text,
-                            extraction_cfg["token_position"],
+                            _ex_tok,
                             tmpl_name=f"source_extraction[{sp_name}]",
+                            boundary_marker=_ex_boundary,
                         )
+                        if isinstance(_ex_tok, str) and _ex_tok.strip().lower().replace(
+                            "-", "_"
+                        ) in ("last_before_assistant", "before_assistant"):
+                            logger.info(
+                                "extraction.token_position is last_before_assistant: hidden state is "
+                                "read at the end of the user turn (before assistant scaffolding). "
+                                "Source direct-answer logits (A/B/C/D) still use the full templated "
+                                "prefix through the last token — comparable to extraction only if you "
+                                "interpret them as different readout sites."
+                            )
                         self._extraction_validated = True
 
                     activations[sp_name][question_idx] = patchscope_patching.extract_activations_multi_layer(
                         model, tokenizer, device, messages,
                         layer_indices=source_layers,
-                        token_position=extraction_cfg["token_position"],
+                        token_position=_ex_tok,
+                        boundary_marker=_ex_boundary,
                     )
 
                     # Direct answer via logits
@@ -532,7 +547,12 @@ class PatchscopeExperiment(BaseExperiment):
                             "question_id": question_id,
                             "prompt_text": _ptext,
                             "extraction_site": patchscope_helpers.describe_source_extraction_site(
-                                tokenizer, _ptext, extraction_cfg["token_position"]
+                                tokenizer,
+                                _ptext,
+                                extraction_cfg.get("token_position", "last"),
+                                boundary_marker=extraction_cfg.get(
+                                    "assistant_boundary_marker"
+                                ),
                             ),
                             "answer": canonical_answer,
                             "shuffled_answer": shuffled_answer,

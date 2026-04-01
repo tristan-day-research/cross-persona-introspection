@@ -27,7 +27,20 @@ layer_pairs:
 
 # Option 3: defaults (used when neither of the above is set)
 extraction:
-  token_position: "last"
+
+  # Where to read hidden state in Phase 1 (same forward as A/B/C/D logits):
+  #   "last" — last token of the full chat-templated string (add_generation_prompt=True).
+  #            Often decodes as "\n\n" after <|eot_id|><|start_header_id|>assistant — template scaffolding,
+  #            not the literal "Answer :" token.
+  #   "last_before_assistant" — last token whose span ends BEFORE the first occurrence of
+  #            assistant_boundary_marker (end of user turn, before assistant header tokens).
+  #   <int> — explicit 0-based index into encode(templated_source, add_special_tokens=False).
+  token_position: "last_before_assistant"
+
+  # Substring search in the templated source string; only used when token_position is
+  # last_before_assistant. Must match your model's chat template (Llama 3 Instruct default).
+  assistant_boundary_marker: "<|eot_id|><|start_header_id|>assistant"
+
   # layers: "middle"          # "all", "middle", or [8, 16, 24]
 
 injection:
@@ -102,7 +115,7 @@ source_pass:
     {options_formatted}
 
     Choose the single best answer. Answer with exactly one letter: A, B, C, or D.
-    Answer :
+    Answer:
 
 # Which templates to run (empty list = all).
 # Valid: open_summary, answer_extraction, persona_probe, agreement_probe, self_recognition

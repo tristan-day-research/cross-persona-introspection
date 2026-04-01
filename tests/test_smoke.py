@@ -212,6 +212,7 @@ def test_patchscope_helpers():
         _resolve_layers,
         describe_source_extraction_site,
         format_source_pass_user_message,
+        resolve_extraction_token_index,
     )
     from transformers import GPT2Tokenizer
 
@@ -227,7 +228,9 @@ def test_patchscope_helpers():
 
     # Config loading
     cfg = _load_patchscope_config("patchscope.yaml")
-    assert cfg["injection"]["layer"] in (3, 8)  # depends on current config
+    inj = cfg.get("injection") or {}
+    if "layer" in inj:
+        assert inj["layer"] in (3, 8)  # optional when using layer_pairs only
     assert "source_pass" in cfg
     assert "user_message_template" in cfg["source_pass"]
     q = {
@@ -250,3 +253,8 @@ def test_patchscope_helpers():
     assert "token_index" in site and "n_tokens" in site
     assert site["token_index"] == site["n_tokens"] - 1
     assert "token_id" in site
+
+    boundary_text = "Hello user.<|eot_id|><|start_header_id|>assistant"
+    pos, meta = resolve_extraction_token_index(tok, boundary_text, "last_before_assistant")
+    assert pos < resolve_extraction_token_index(tok, boundary_text, "last")[0]
+    assert "boundary_char_index" in meta

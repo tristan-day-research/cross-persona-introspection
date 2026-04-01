@@ -128,6 +128,11 @@ def write_run_log(
         thin,
         f"  extraction.token_position : {ex_cfg.get('token_position', 'last')!r}",
         "    → one sequence index per layer; hidden[batch, pos, :] at each hooked layer after one forward.",
+        "  Values: 'last' = final token of the full templated string (often '\\n\\n' after the",
+        "    assistant header — that is normal Llama chat scaffolding, not your MCQ text).",
+        "  'last_before_assistant' = last token before extraction.assistant_boundary_marker",
+        "    (default substring matches Llama 3 user/assistant boundary).",
+        f"  assistant_boundary_marker : {ex_cfg.get('assistant_boundary_marker', '(default in code)')!r}",
         "",
     ]
 
@@ -199,6 +204,13 @@ def write_run_log(
                 lines += [
                     "  ── ACTIVATION EXTRACTION SITE (source prompt; same index at every hooked layer) ──",
                     f"  token_position (config) : {site.get('token_position_spec')!r}",
+                ]
+                if site.get("boundary_marker") is not None:
+                    lines.append(
+                        f"  boundary_marker         : {site.get('boundary_marker')!r} "
+                        f"@ char {site.get('boundary_char_index')}"
+                    )
+                lines += [
                     f"  token_index (0-based)   : {site.get('token_index')}  (sequence length {site.get('n_tokens')} tokens, indices 0..{site.get('n_tokens', 1) - 1})",
                     f"  token_id                  : {site.get('token_id')}",
                     f"  decoded token (repr)      : {site.get('token_decoded_repr')}",

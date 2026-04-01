@@ -595,33 +595,151 @@ def validate_placeholder_positions(
     return True
 
 
+def resolve_extraction_token_index(
+    tokenizer,
+    source_text: str,
+    token_position: str | int,
+    *,
+    boundary_marker: str | None = None,
+) -> tuple[int, dict]:
+    """Map ``extraction.token_position`` to a concrete 0-based token index.
+
+    Supported *token_position* values:
+
+    - ``"last"`` — final token of *source_text* (after chat template + generation prompt).
+    - ``"last_before_assistant"`` — last token whose span ends **before** the first occurrence
+      of *boundary_marker* (default Llama 3--style ``"<|eot_id|><|start_header_id|>assistant"``).  Use this
+      to read out hidden state at the end of the **user** turn instead of after assistant
+      scaffolding (often ``\\n\\n`` as the literal ``last`` token).
+    - A non-negative ``int`` — explicit index.
+
+    Returns:
+        ``(pos, meta)`` where *meta* may include ``boundary_marker``, ``boundary_char_index``.
+
+    Raises:
+        ValueError: unknown spec, marker not found, or tokenizer cannot resolve offsets.
+    """
+    token_ids = tokenizer.encode(source_text, add_special_tokens=False)
+    n_tok = len(token_ids)
+    meta: dict = {}
+
+    if isinstance(token_position, int):
+        pos = token_position
+        if not (0 <= pos < n_tok):
+            raise ValueError(f"extraction token index {pos} out of range for {n_tok} tokens")
+        return pos, meta
+
+    if not isinstance(token_position, str):
+        raise ValueError(f"extraction.token_position must be int or str, got {type(token_position)}")
+
+    spec = token_position.strip().lower().replace("-", "_")
+
+    if spec == "last":
+        return n_tok - 1, meta
+
+    if spec in ("last_before_assistant", "before_assistant"):
+        marker = boundary_marker or "<|eot_id|><|start_header_id|>assistant"
+        meta["boundary_marker"] = marker
+        idx_char = source_text.find(marker)
+        if idx_char < 0:
+            raise ValueError(
+                f"extraction: boundary marker {marker!r} not found in templated source text. "
+                "Set extraction.assistant_boundary_marker to match your chat template, "
+                "or use token_position 'last' / an integer index."
+            )
+        meta["boundary_char_index"] = idx_char
+        pos = _last_token_index_ending_before_char(tokenizer, source_text, idx_char)
+        meta["resolved_via"] = "last_before_assistant"
+        return pos, meta
+
+    if spec.isdigit():
+        pos = int(spec)
+        if not (0 <= pos < n_tok):
+            raise ValueError(f"extraction token index {pos} out of range for {n_tok} tokens")
+        return pos, meta
+
+    raise ValueError(
+        f"Unknown extraction.token_position {token_position!r}. "
+        "Use 'last', 'last_before_assistant', or a non-negative integer."
+    )
+
+
+def _last_token_index_ending_before_char(
+    tokenizer,
+    text: str,
+    char_boundary: int,
+) -> int:
+    """Largest token index i such that token i's char span ends at or before *char_boundary*."""
+    try:
+        enc = tokenizer(
+            text,
+            add_special_tokens=False,
+            return_offsets_mapping=True,
+        )
+    except (TypeError, ValueError, NotImplementedError):
+        enc = None
+
+    if enc is not None and enc.get("offset_mapping"):
+        best = -1
+        for i, (_s, e) in enumerate(enc["offset_mapping"]):
+            if e <= char_boundary:
+                best = i
+        if best >= 0:
+            return best
+
+    # Slow-tokenizer fallback: approximate by cumulative decoded length
+    ids = tokenizer.encode(text, add_special_tokens=False)
+    cumulative = 0
+    best = -1
+    for i, tid in enumerate(ids):
+        piece = tokenizer.decode([tid])
+        end = cumulative + len(piece)
+        if end <= char_boundary:
+            best = i
+        cumulative = end
+    if best < 0:
+        raise ValueError(
+            "Could not map extraction boundary to a token index (no token ends before the marker). "
+            "Try a Fast tokenizer or set an explicit integer token_position."
+        )
+    return best
+
+
 def describe_source_extraction_site(
     tokenizer,
     source_text: str,
     token_position: str | int,
+    *,
+    boundary_marker: str | None = None,
 ) -> dict:
     """Return structured info about where ``extract_activations_multi_layer`` reads hidden states.
 
-    The hook uses ``hidden[0, pos, :]`` with ``pos = -1`` when *token_position* is ``"last"``,
-    else ``int(token_position)``.  This describes that *pos* in the same tokenization as extraction
-    (``encode(source_text, add_special_tokens=False)``).
+    Uses :func:`resolve_extraction_token_index` so ``last_before_assistant`` matches extraction.
 
     Returns:
         Dict with keys ``token_position_spec``, ``token_index``, ``n_tokens``, ``token_id``,
-        ``token_decoded_repr``, and optionally ``error`` if the index is invalid.
+        ``token_decoded_repr``, optional ``boundary_marker`` / ``boundary_char_index``, and
+        ``error`` if resolution fails.
     """
+    try:
+        pos, meta = resolve_extraction_token_index(
+            tokenizer, source_text, token_position, boundary_marker=boundary_marker,
+        )
+    except ValueError as e:
+        return {
+            "token_position_spec": token_position,
+            "error": str(e),
+            "n_tokens": len(tokenizer.encode(source_text, add_special_tokens=False)),
+        }
+
     token_ids = tokenizer.encode(source_text, add_special_tokens=False)
     tokens = [tokenizer.decode([tid]) for tid in token_ids]
-
-    if token_position == "last":
-        pos = len(tokens) - 1
-    else:
-        pos = int(token_position)
 
     base = {
         "token_position_spec": token_position,
         "token_index": pos,
         "n_tokens": len(tokens),
+        **meta,
     }
     if not (0 <= pos < len(tokens)):
         return {**base, "error": f"index {pos} out of range for {len(tokens)} tokens"}
@@ -639,19 +757,23 @@ def validate_extraction_position(
     source_text: str,
     token_position: str | int,
     tmpl_name: str = "",
+    *,
+    boundary_marker: str | None = None,
 ) -> None:
     """Log which token the extraction hook will capture.
 
-    For "last", shows the final token.  For an integer, shows that specific
-    token.  This is a diagnostic — it always logs, never raises.
+    Resolves ``last_before_assistant`` the same way as extraction.  Never raises.
     """
+    try:
+        pos, _meta = resolve_extraction_token_index(
+            tokenizer, source_text, token_position, boundary_marker=boundary_marker,
+        )
+    except ValueError as e:
+        logger.warning(f"Extraction position for {tmpl_name}: {e}")
+        return
+
     token_ids = tokenizer.encode(source_text, add_special_tokens=False)
     tokens = [tokenizer.decode([tid]) for tid in token_ids]
-
-    if token_position == "last":
-        pos = len(tokens) - 1
-    else:
-        pos = int(token_position)
 
     if 0 <= pos < len(tokens):
         # Show a window around the extraction position

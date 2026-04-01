@@ -61,6 +61,7 @@ import torch.nn.functional as F
 
 from cross_persona_introspection.experiments.patchscope.patchscope_helpers import (
     _get_transformer_layers,
+    resolve_extraction_token_index,
 )
 
 
@@ -76,6 +77,7 @@ def extract_activations_multi_layer(
     layer_indices: list[int],
     token_position: str | int = "last",
     raw_text: Optional[str] = None,
+    boundary_marker: Optional[str] = None,
 ) -> dict[int, torch.Tensor]:
     """Run ONE forward pass and capture hidden states at multiple layers.
 
@@ -88,8 +90,11 @@ def extract_activations_multi_layer(
         device: Target device for input tensors.
         messages: Chat-formatted source prompt.  Ignored when *raw_text* is set.
         layer_indices: Transformer layers to hook (0-indexed, post-embedding).
-        token_position: ``"last"`` or an integer token index.
+        token_position: ``"last"``, ``"last_before_assistant"``, or an integer index
+            (see ``resolve_extraction_token_index`` in patchscope_helpers).
         raw_text: If given, used verbatim as model input (skips chat template).
+        boundary_marker: Used when *token_position* is ``last_before_assistant``;
+            substring to search for in the templated string (default in resolver).
 
     Returns:
         Dict mapping layer index to a 1-D tensor of shape ``(d_model,)``.
@@ -100,6 +105,9 @@ def extract_activations_multi_layer(
         input_text = tokenizer.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True
         )
+    resolved_pos, _ = resolve_extraction_token_index(
+        tokenizer, input_text, token_position, boundary_marker=boundary_marker,
+    )
     input_ids = tokenizer.encode(
         input_text, return_tensors="pt", add_special_tokens=False
     ).to(device)
@@ -110,8 +118,7 @@ def extract_activations_multi_layer(
     def make_hook(layer_idx):
         def hook_fn(module, input, output):
             hidden = output[0] if isinstance(output, tuple) else output
-            pos = -1 if token_position == "last" else int(token_position)
-            captured[layer_idx] = hidden[0, pos, :].detach().clone()
+            captured[layer_idx] = hidden[0, resolved_pos, :].detach().clone()
         return hook_fn
 
     handles = []
