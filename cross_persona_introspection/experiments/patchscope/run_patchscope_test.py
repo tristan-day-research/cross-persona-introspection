@@ -44,6 +44,7 @@ RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 sys.path.insert(0, str(ROOT))
 from cross_persona_introspection.experiments.patchscope.patchscope_helpers import (
     _get_transformer_layers,
+    _model_short_name,
 )
 
 
@@ -280,7 +281,7 @@ def main():
     gen_cfg = cfg["generation"]
     results = []
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    model_short = model_name.split("/")[-1].lower().replace(".", "-")
+    model_short = _model_short_name(model_name)
 
     # ── Helper to resolve a target config into (text, inject_pos, display) ──
     def resolve_target(tgt_cfg):
@@ -418,7 +419,7 @@ def main():
                 })
 
     # ── Save results ─────────────────────────────────────────────────
-    jsonl_path = RESULTS_DIR / f"patchscope_{model_short}_{timestamp}_test.jsonl"
+    jsonl_path = RESULTS_DIR / f"ps_{model_short}_{timestamp}_test.jsonl"
     with open(jsonl_path, "w") as f:
         for r in results:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")

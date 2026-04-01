@@ -84,7 +84,14 @@ def _load_questions(
 
 
 def _model_short_name(model_name: str) -> str:
-    """Extract a short name for file naming, e.g. 'meta-llama/Llama-3.1-8B-Instruct' -> 'llama31-8b'."""
+    """Extract a short name for result files (e.g. ``ps_l8b_<timestamp>_...``).
+
+    Llama 8B family checkpoints (3.x / Instruct / etc.) map to ``l8b``; others get a
+    compact slug from the final path segment.
+    """
+    lower = model_name.lower()
+    if "llama" in lower and "8b" in lower.replace(" ", ""):
+        return "l8b"
     name = model_name.split("/")[-1].lower()
     name = re.sub(r"[^a-z0-9]+", "-", name)
     name = name.strip("-")

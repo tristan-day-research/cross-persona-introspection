@@ -224,7 +224,7 @@ def test_patchscope_helpers():
     assert _resolve_layers([4, 8, 12], 32) == [4, 8, 12]
 
     # Model short name
-    assert "llama" in _model_short_name("meta-llama/Llama-3.1-8B-Instruct")
+    assert _model_short_name("meta-llama/Llama-3.1-8B-Instruct") == "l8b"
     assert "tinyllama" in _model_short_name("TinyLlama/TinyLlama-1.1B-Chat-v1.0")
 
     # Config loading

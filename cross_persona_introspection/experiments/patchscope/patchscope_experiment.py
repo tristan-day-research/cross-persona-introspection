@@ -199,7 +199,7 @@ class PatchscopeExperiment(BaseExperiment):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         model_short = patchscope_helpers._model_short_name(self.config.model_name)
         detail = self._run_filename_suffix()
-        self._base_name = f"patchscope_{model_short}_{timestamp}_{detail}"
+        self._base_name = f"ps_{model_short}_{timestamp}_{detail}"
         logger.info(f"Run output basename: {self._base_name}")
         out_dir = Path(self.config.output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
