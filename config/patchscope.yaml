@@ -43,7 +43,7 @@ extraction:
   # last_before_assistant. Must match your model's chat template (Llama 3 Instruct default).
   assistant_boundary_marker: "<|eot_id|><|start_header_id|>assistant"
 
-  layers: "middle"          # "all", "middle", or [8, 16, 24]
+  # layers: "middle"          # "all", "middle", or [8, 16, 24]
 
 injection:
   # layer: 8
@@ -186,7 +186,7 @@ interpretation_templates:
       {placeholder}
 
     selfie: |
-      [INST] {placeholder} [/INST] Briefly, this means:
+      What do you think {placeholder} is?
     decode_mode: "generate"  # free-form generation, no fixed choices OR generate
 
 
