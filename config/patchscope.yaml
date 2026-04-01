@@ -146,7 +146,7 @@ interpretation_templates:
       cat -> cat
       135 -> 135
       hello -> hello
-      ___ ->
+      {placeholder} ->
     patchscopes: |
       Representation: {placeholder}
     selfie: |
