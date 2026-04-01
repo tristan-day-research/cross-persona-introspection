@@ -19,7 +19,6 @@ layer_pairs:
   - [25, 25]
   - [30, 30]
 
-
 # Option 2: full cross-product sweep (uncomment, remove layer_pairs above)
 # layer_sweep:
 #   enabled: true
