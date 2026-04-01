@@ -483,14 +483,24 @@ class PatchscopeExperiment(BaseExperiment):
                         messages.append({"role": "system", "content": source_persona.system_prompt})
                     messages.append({"role": "user", "content": user_msg})
 
+                    # Build raw text for source pass when chat template is disabled.
+                    # This keeps source and reporter in the same regime.
+                    source_raw_text = None
+                    if not self._use_chat_template:
+                        sys_text = (source_persona.system_prompt or "").strip()
+                        source_raw_text = (sys_text + "\n\n" + user_msg) if sys_text else user_msg
+
                     _ex_tok = extraction_cfg.get("token_position", "last")
                     _ex_boundary = extraction_cfg.get("assistant_boundary_marker")
 
                     # Validate extraction position once (first question of first persona)
                     if not hasattr(self, '_extraction_validated'):
-                        source_text = tokenizer.apply_chat_template(
-                            messages, tokenize=False, add_generation_prompt=True
-                        )
+                        if source_raw_text is not None:
+                            source_text = source_raw_text
+                        else:
+                            source_text = tokenizer.apply_chat_template(
+                                messages, tokenize=False, add_generation_prompt=True
+                            )
                         patchscope_helpers.validate_extraction_position(
                             tokenizer, source_text,
                             _ex_tok,
@@ -514,17 +524,25 @@ class PatchscopeExperiment(BaseExperiment):
                         layer_indices=source_layers,
                         token_position=_ex_tok,
                         boundary_marker=_ex_boundary,
+                        raw_text=source_raw_text,
                     )
 
                     # Direct answer via logits
-                    source_result = self.backend.get_choice_probs_and_logits(
-                        messages, ["A", "B", "C", "D"], save_logprobs=save_logprobs,
-                    )
-                    if save_logprobs:
-                        probs, logits_dict, logprobs_dict, total_cp = source_result
-                    else:
-                        probs, logits_dict = source_result
+                    if source_raw_text is not None:
+                        # from_text variant doesn't support save_logprobs
+                        probs, logits_dict = self.backend.get_choice_probs_and_logits_from_text(
+                            source_raw_text, ["A", "B", "C", "D"],
+                        )
                         logprobs_dict, total_cp = None, None
+                    else:
+                        source_result = self.backend.get_choice_probs_and_logits(
+                            messages, ["A", "B", "C", "D"], save_logprobs=save_logprobs,
+                        )
+                        if save_logprobs:
+                            probs, logits_dict, logprobs_dict, total_cp = source_result
+                        else:
+                            probs, logits_dict = source_result
+                            logprobs_dict, total_cp = None, None
 
                     shuffled_answer = max(probs, key=probs.get)
                     canonical_answer = remap.get(shuffled_answer, shuffled_answer)
@@ -547,8 +565,10 @@ class PatchscopeExperiment(BaseExperiment):
                     }
 
                     if sp_name not in self._sample_source_prompts:
-                        _ptext = tokenizer.apply_chat_template(
-                            messages, tokenize=False, add_generation_prompt=True
+                        _ptext = source_raw_text if source_raw_text is not None else (
+                            tokenizer.apply_chat_template(
+                                messages, tokenize=False, add_generation_prompt=True
+                            )
                         )
                         self._sample_source_prompts[sp_name] = {
                             "persona": sp_name,
