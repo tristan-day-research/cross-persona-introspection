@@ -207,8 +207,10 @@ interpretation_templates:
     #   "[INST]" {placeholder} {placeholder} {placeholder} {placeholder} {placeholder} "[/INST] Sure, I will summarize the message:"
     # selfie: |
     #   <|start_header_id|>user<|end_header_id|> {placeholder} <|eot_id|><|start_header_id|>assistant<|end_header_id|> Sure, I will summarize the message:
+    # Preamble (persona or reporting.no_persona_layer_log_system_prompt) is prepended in code.
+    # Do not embed BOS/system/dates in selfie — duplicates synthetic block.
     selfie: |
-      <|begin_of_text|><|start_header_id|>system<|end_header_id|>\nCutting Knowledge Date: December 2023\nToday Date: 26 Jul 2024\n<|eot_id|><|start_header_id|>user<|end_header_id|>{placeholder}<|eot_id|><|start_header_id|>assistant<|end_header_id|> Sure, I will summarize the message:
+      <|redacted_start_header_id|>user<|redacted_end_header_id|> {placeholder} <|eot_id|><|redacted_start_header_id|>assistant<|redacted_end_header_id|> Sure, I will summarize the message:
     direct_answer: |
       {placeholder}
       Read the hidden content above and recover the answer choice it indicates.
