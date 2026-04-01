@@ -36,7 +36,7 @@ extraction:
   #            assistant_boundary_marker (end of user turn, before assistant header tokens).
   #   <int> — explicit 0-based index into encode(templated_source, add_special_tokens=False).
 
-  token_position: "last"
+  token_position: "last_before_assistant"
 
 
   # Substring search in the templated source string; only used when token_position is
@@ -145,7 +145,7 @@ prompt_style: "selfie"
 #   false — no chat template for any style; reporter system prompt is prepended as plain
 #           text followed by a blank line (e.g. "You are a conservative...\n\ncat -> cat; ___").
 #           Keeps the model in base-model continuation mode regardless of prompt_style.
-use_chat_template: false
+use_chat_template: true
 
 
 # Template definitions. Each has three prompt variants.
