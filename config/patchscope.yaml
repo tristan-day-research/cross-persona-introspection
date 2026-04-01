@@ -148,7 +148,10 @@ interpretation_templates:
     #   hello -> hello
     #   {placeholder} ->
     identity: |
-      What does {placeholder} represent? Answer in a short phrase.
+      The placeholder below stands for an internal representation.
+      In a short phrase, describe what it means.
+
+      {placeholder}
     patchscopes: |
       Representation: {placeholder}
     selfie: |
