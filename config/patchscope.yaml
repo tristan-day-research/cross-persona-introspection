@@ -19,13 +19,14 @@ layer_pairs:
   - [25, 25]
   - [30, 30]
 
+
 # Option 2: full cross-product sweep (uncomment, remove layer_pairs above)
 # layer_sweep:
 #   enabled: true
 #   source_layers: [4, 8, 12, 16, 20, 24, 28, 31]
 #   injection_layers: [1, 3, 5, 8]
 
-# Option 3: defaults (used when neither of the above is set)
+
 extraction:
 
   # Where to read hidden state in Phase 1 (same forward as A/B/C/D logits):
