@@ -114,10 +114,11 @@ reporting:
   # Optional synthetic preamble below + interpretation template from this file; not personas.yaml.
   # Runs even when use_chat_template is false for the main matrix. Skipped for prompt_style identity.
   include_no_persona_chat_template_sample_per_layer: true
-  # Prepended to that plain prompt with a blank line (repo-local). Empty = template body only.
-  no_persona_layer_log_system_prompt: |
-    Cutting Knowledge Date: December 2023
-    Today Date: 26 Jul 2024
+  # .txt per-layer sample: if set, replaces interpretation_templates.*.{prompt_style} for THAT decode only.
+  # Use {placeholder}, {question_text}, {options_formatted}, …  Empty = use normal template (e.g. selfie).
+  no_persona_layer_log_body: "{placeholder}"
+  # Prepended before the body with a blank line. Empty string = no preamble (bare prompt = body only).
+  no_persona_layer_log_system_prompt: ""
   # oppose bucket: cross_ideology = only persona_conservative ↔ persona_progressive;
   # any_mismatch = first source≠reporter seen for that layer pair (e.g. includes neutral_evaluator).
   opposing_sample_policy: "cross_ideology"

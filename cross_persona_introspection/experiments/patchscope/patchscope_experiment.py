@@ -1001,10 +1001,11 @@ class PatchscopeExperiment(BaseExperiment):
         ):
             _try_reporter_sample("oppose")
 
+        body_ov = (rep_cfg.get("no_persona_layer_log_body") or "").strip()
         if (
             rep_cfg.get("include_no_persona_chat_template_sample_per_layer", False)
             and condition == "real"
-            and prompt_style != "identity"
+            and (prompt_style != "identity" or body_ov)
             and layer_tag not in self._no_persona_chat_per_layer
             and activation is not None
         ):
@@ -1031,6 +1032,9 @@ class PatchscopeExperiment(BaseExperiment):
                     prompt_style=prompt_style,
                     layer_log_system_prompt=(
                         (rep_cfg.get("no_persona_layer_log_system_prompt") or "").strip() or None
+                    ),
+                    layer_log_body_override=(
+                        (rep_cfg.get("no_persona_layer_log_body") or "").strip() or None
                     ),
                 )
             except Exception as e:
@@ -1061,16 +1065,21 @@ class PatchscopeExperiment(BaseExperiment):
         num_placeholders: int,
         prompt_style: str,
         layer_log_system_prompt: str | None = None,
+        layer_log_body_override: str | None = None,
     ) -> None:
         """One .txt log decode per layer pair: exact plain string sent to the model (no apply_chat_template).
 
-        Same construction as the main matrix with use_chat_template false: optional synthetic
-        preamble from YAML prepended to the interpretation template body only — no personas.yaml
-        reporter text, no extra tokenizer chat wrapper (avoids duplicated system / nested headers).
+        If ``reporting.no_persona_layer_log_body`` is set, it replaces the normal template body
+        for this decode only (still supports {placeholder}, {question_text}, …). Optional
+        ``no_persona_layer_log_system_prompt`` prepends plain text; omit both for a bare line.
         """
+        tmpl_cfg_use = dict(tmpl_cfg)
+        if layer_log_body_override:
+            tmpl_cfg_use[prompt_style] = layer_log_body_override
+
         ns_text, ns_msgs, ns_ph = patchscope_helpers.build_interpretation_prompt(
             tokenizer=tokenizer,
-            tmpl_cfg=tmpl_cfg,
+            tmpl_cfg=tmpl_cfg_use,
             prompt_style=prompt_style,
             base_prompt=base_prompt,
             placeholder_token=placeholder_token,
@@ -1109,6 +1118,7 @@ class PatchscopeExperiment(BaseExperiment):
             "source_layer": record.source_layer,
             "injection_layer": inj_layer,
             "layer_log_system_prompt": layer_log_system_prompt or "",
+            "layer_log_body_override": layer_log_body_override or "",
             "interp_prompt_text": ns_text,
             "generated_text": result["generated_text"],
         }

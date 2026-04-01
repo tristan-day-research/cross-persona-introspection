@@ -238,6 +238,7 @@ def test_patchscope_helpers():
     assert "include_no_reporter_system_sample" in cfg["reporting"]
     assert "include_no_persona_chat_template_sample_per_layer" in cfg["reporting"]
     assert "no_persona_layer_log_system_prompt" in cfg["reporting"]
+    assert "no_persona_layer_log_body" in cfg["reporting"]
     assert "opposing_sample_policy" in cfg["reporting"]
     q = {
         "question_text": "Pick one?",

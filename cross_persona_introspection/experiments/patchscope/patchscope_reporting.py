@@ -244,16 +244,21 @@ def write_run_log(
             sep,
             "NO-PERSONA PROMPT (one per layer pair; exact string tokenized for the model)",
             thin,
-            "  Log-only decodes: plain text only — reporting.no_persona_layer_log_system_prompt",
-            "  (if non-empty) then a blank line then the interpretation template from patchscope.yaml.",
-            "  No apply_chat_template wrapper (same as use_chat_template: false). Not personas.yaml.",
-            "  Same activation injection as the first 'real' matrix cell for that layer pair.",
+            "  Log-only: encode with add_special_tokens=false. Optional preamble:",
+            "  reporting.no_persona_layer_log_system_prompt. Body: reporting.no_persona_layer_log_body",
+            "  if set, else the normal interpretation template for prompt_style.",
+            "  Not personas.yaml. Same activation as the first 'real' cell for that layer pair.",
+            "",
+            "  Token strings like <|redacted_start_header_id|> are Hugging Face export names for",
+            "  Llama chat role/special tokens (see tokenizer.json); they are not from this repo.",
             "",
         ]
         for layer_tag in sorted(npc.keys(), key=_layer_tag_sort_key):
             sample = npc[layer_tag]
             syn = (sample.get("layer_log_system_prompt") or "").strip()
-            syn_note = repr(syn[:200] + ("…" if len(syn) > 200 else "")) if syn else "(empty — template body only)"
+            syn_note = repr(syn[:200] + ("…" if len(syn) > 200 else "")) if syn else "(empty)"
+            bod = (sample.get("layer_log_body_override") or "").strip()
+            bod_note = repr(bod[:120] + ("…" if len(bod) > 120 else "")) if bod else "(empty — use normal template body)"
             lines += [
                 f"\n--- {layer_tag} ---",
                 f"  template         : {sample.get('template', '')}",
@@ -262,7 +267,8 @@ def write_run_log(
                 f"  reporter_persona : {sample.get('reporter_persona', '')} (persona text not prepended here)",
                 f"  source_layer     : {sample.get('source_layer', '')}",
                 f"  injection_layer  : {sample.get('injection_layer', '')}",
-                f"  synthetic preamble : {syn_note}",
+                f"  preamble (reporting.no_persona_layer_log_system_prompt) : {syn_note}",
+                f"  body override (reporting.no_persona_layer_log_body)     : {bod_note}",
                 "",
                 "  ── FULL PROMPT (verbatim; add_special_tokens=false when encoding) ──",
             ]
