@@ -99,6 +99,10 @@ controls:
   shuffled_activation: true
   control_sample_rate: 0.5      # 1.0 = run controls for every cell (needed for matched source_gain)
 
+# Companion .txt log only: for each template×condition sample, also run one decode with no
+# reporter system message (does not change JSONL records or metrics).
+reporting:
+  include_no_reporter_system_sample: true
 
 
 # ═══════════════════════════════════════════════════════════════════════

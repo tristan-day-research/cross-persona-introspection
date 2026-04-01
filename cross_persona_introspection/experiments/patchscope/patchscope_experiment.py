@@ -380,6 +380,10 @@ class PatchscopeExperiment(BaseExperiment):
                     save_logprobs=save_logprobs,
                     shuffle_remap=cell["shuffle_remap"],
                     baseline_cache=baseline_cache,
+                    interp_question=cell["interp_question"],
+                    base_prompt=base_prompt,
+                    placeholder_token=placeholder_token,
+                    num_placeholders=num_placeholders,
                 )
             except Exception as e:
                 msg = (
@@ -706,6 +710,10 @@ class PatchscopeExperiment(BaseExperiment):
                                         "tmpl_cfg": tmpl_cfg,
                                         "inj_layer": inj_layer,
                                         "shuffle_remap": shuffle_remap,
+                                        "interp_question": {
+                                            "question_text": question.get("question_text", ""),
+                                            "options": dict(shuffled_options),
+                                        },
                                     }
 
     # ── Phase 2: single-cell execution ────────────────────────────────────
@@ -731,6 +739,10 @@ class PatchscopeExperiment(BaseExperiment):
         save_logprobs: bool,
         shuffle_remap: dict,
         baseline_cache: dict,
+        interp_question: dict,
+        base_prompt: str,
+        placeholder_token: str,
+        num_placeholders: int,
     ) -> None:
 
         """Inject an activation and decode the reporter's response for one matrix cell.
@@ -915,6 +927,118 @@ class PatchscopeExperiment(BaseExperiment):
                 "generated_text": record.generated_text,
                 "question_id": record.question_id,
             }
+            rep_cfg = self.ps_config.get("reporting") or {}
+            if rep_cfg.get("include_no_reporter_system_sample", True) and (
+                record.reporter_system_prompt or ""
+            ).strip():
+                try:
+                    self._capture_no_system_log_sample(
+                        model=model,
+                        tokenizer=tokenizer,
+                        device=device,
+                        record=record,
+                        condition=condition,
+                        activation=activation,
+                        tmpl_name=tmpl_name,
+                        tmpl_cfg=tmpl_cfg,
+                        inj_layer=inj_layer,
+                        injection_mode=injection_mode,
+                        injection_alpha=injection_alpha,
+                        gen_cfg=gen_cfg,
+                        all_choice_token_ids=all_choice_token_ids,
+                        save_logprobs=save_logprobs,
+                        interp_question=interp_question,
+                        base_prompt=base_prompt,
+                        placeholder_token=placeholder_token,
+                        num_placeholders=num_placeholders,
+                        prompt_style=prompt_style,
+                        sample_key=sample_key,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"No-system log sample failed for {sample_key}: {e}"
+                    )
+
+    def _capture_no_system_log_sample(
+        self,
+        *,
+        model,
+        tokenizer,
+        device,
+        record,
+        condition: str,
+        activation,
+        tmpl_name: str,
+        tmpl_cfg: dict,
+        inj_layer: int,
+        injection_mode: str,
+        injection_alpha: float,
+        gen_cfg: dict,
+        all_choice_token_ids: dict,
+        save_logprobs: bool,
+        interp_question: dict,
+        base_prompt: str,
+        placeholder_token: str,
+        num_placeholders: int,
+        prompt_style: str,
+        sample_key: str,
+    ) -> None:
+        """One extra patch_and_decode with no reporter system — .txt log only."""
+        ns_text, ns_msgs, ns_ph = patchscope_helpers.build_interpretation_prompt(
+            tokenizer=tokenizer,
+            tmpl_cfg=tmpl_cfg,
+            prompt_style=prompt_style,
+            base_prompt=base_prompt,
+            placeholder_token=placeholder_token,
+            num_placeholders=num_placeholders,
+            question=interp_question,
+            reporter_system_prompt=None,
+        )
+        effective_raw = None
+        if condition == "text_only_baseline" and ns_ph:
+            interp_ids = tokenizer.encode(ns_text, add_special_tokens=False)
+            first_ph_idx = ns_ph[0]
+            char_offset = sum(
+                len(tokenizer.decode([interp_ids[i]]))
+                for i in range(min(first_ph_idx, len(interp_ids)))
+            )
+            if char_offset > 0:
+                bp = ns_text[:char_offset].rstrip()
+                if not bp.endswith(" "):
+                    bp += " "
+                effective_raw = bp
+
+        decode_mode = tmpl_cfg.get("decode_mode", "generate")
+        use_logits = decode_mode == "logits" and tmpl_name in all_choice_token_ids
+
+        result = patchscope_patching.patch_and_decode(
+            model,
+            tokenizer,
+            device,
+            ns_msgs,
+            activation,
+            injection_layer=inj_layer,
+            placeholder_positions=ns_ph,
+            mode=injection_mode,
+            alpha=injection_alpha,
+            raw_text=effective_raw,
+            decode_mode="logits" if use_logits else "generate",
+            max_new_tokens=gen_cfg["max_new_tokens"],
+            temperature=gen_cfg["temperature"],
+            do_sample=gen_cfg.get("do_sample", False),
+            use_cache=gen_cfg.get("use_cache", True),
+            choice_token_ids=all_choice_token_ids.get(tmpl_name),
+            save_logprobs=save_logprobs,
+        )
+        log_prompt = (
+            effective_raw
+            if (condition == "text_only_baseline" and effective_raw)
+            else ns_text
+        )
+        self._sample_prompts[sample_key]["no_reporter_system"] = {
+            "interp_prompt_text": log_prompt,
+            "generated_text": result["generated_text"],
+        }
 
     # ── Evaluate & save ───────────────────────────────────────────────────
 

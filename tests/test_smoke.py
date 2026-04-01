@@ -233,6 +233,8 @@ def test_patchscope_helpers():
         assert inj["layer"] in (3, 8)  # optional when using layer_pairs only
     assert "source_pass" in cfg
     assert "user_message_template" in cfg["source_pass"]
+    assert "reporting" in cfg
+    assert "include_no_reporter_system_sample" in cfg["reporting"]
     q = {
         "question_text": "Pick one?",
         "options": {"A": "First", "C": "Third"},

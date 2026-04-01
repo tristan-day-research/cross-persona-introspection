@@ -249,6 +249,21 @@ def write_run_log(
         for rline in sample["generated_text"].splitlines():
             lines.append(f"  {rline}")
         lines.append("")
+        ns = sample.get("no_reporter_system")
+        if ns:
+            lines += [
+                "",
+                "  ── LOG-ONLY: same cell with NO reporter system message (not in JSONL) ──",
+            ]
+            for pline in ns["interp_prompt_text"].splitlines():
+                lines.append(f"  {pline}")
+            lines += [
+                "",
+                "  ── MODEL RESPONSE (no reporter system) ──",
+            ]
+            for rline in ns["generated_text"].splitlines():
+                lines.append(f"  {rline}")
+            lines.append("")
     lines.append("")
 
     # ── Source override results (Phase 3)
