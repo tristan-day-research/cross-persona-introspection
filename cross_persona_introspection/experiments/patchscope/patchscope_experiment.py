@@ -1029,6 +1029,9 @@ class PatchscopeExperiment(BaseExperiment):
                     placeholder_token=placeholder_token,
                     num_placeholders=num_placeholders,
                     prompt_style=prompt_style,
+                    layer_log_system_prompt=(
+                        (rep_cfg.get("no_persona_layer_log_system_prompt") or "").strip() or None
+                    ),
                 )
             except Exception as e:
                 logger.warning(
@@ -1057,8 +1060,9 @@ class PatchscopeExperiment(BaseExperiment):
         placeholder_token: str,
         num_placeholders: int,
         prompt_style: str,
+        layer_log_system_prompt: str | None = None,
     ) -> None:
-        """One .txt log decode per layer pair: chat template, no custom system (persona)."""
+        """One .txt log decode per layer pair: chat template, optional synthetic system (not personas.yaml)."""
         ns_text, ns_msgs, ns_ph = patchscope_helpers.build_interpretation_prompt(
             tokenizer=tokenizer,
             tmpl_cfg=tmpl_cfg,
@@ -1067,7 +1071,7 @@ class PatchscopeExperiment(BaseExperiment):
             placeholder_token=placeholder_token,
             num_placeholders=num_placeholders,
             question=interp_question,
-            reporter_system_prompt=None,
+            reporter_system_prompt=layer_log_system_prompt,
             use_chat_template=True,
         )
         decode_mode = tmpl_cfg.get("decode_mode", "generate")
@@ -1099,6 +1103,7 @@ class PatchscopeExperiment(BaseExperiment):
             "reporter_persona": record.reporter_persona,
             "source_layer": record.source_layer,
             "injection_layer": inj_layer,
+            "layer_log_system_prompt": layer_log_system_prompt or "",
             "interp_prompt_text": ns_text,
             "generated_text": result["generated_text"],
         }

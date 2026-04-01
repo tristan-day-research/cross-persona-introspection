@@ -107,10 +107,15 @@ controls:
 # system when include_no_reporter_system_sample is true and the reporter has a system prompt.
 reporting:
   include_no_reporter_system_sample: true
-  # .txt only: one apply_chat_template prompt per source→injection layer pair with no custom
-  # system (model default only: <|begin_of_text|>, Cutting Knowledge Date, etc.). Runs even
-  # when use_chat_template is false for the main matrix. Skipped for prompt_style identity.
+  # .txt only: one apply_chat_template prompt per source→injection layer pair. Not using
+  # personas.yaml reporter/source personas — optional synthetic system below. Runs even when
+  # use_chat_template is false for the main matrix. Skipped for prompt_style identity.
   include_no_persona_chat_template_sample_per_layer: true
+  # Verbatim system message for those decodes (repo-local). Empty = no explicit system
+  # message in the chat dict (tokenizer template may still add its own default block).
+  no_persona_layer_log_system_prompt: |
+    Cutting Knowledge Date: December 2023
+    Today Date: 26 Jul 2024
   # oppose bucket: cross_ideology = only persona_conservative ↔ persona_progressive;
   # any_mismatch = first source≠reporter seen for that layer pair (e.g. includes neutral_evaluator).
   opposing_sample_policy: "cross_ideology"
