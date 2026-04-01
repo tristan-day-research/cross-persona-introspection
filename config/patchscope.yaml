@@ -122,8 +122,6 @@ source_pass:
     {options_formatted}
 
     Choose the single best answer. Answer with exactly one letter: A, B, C, or D.
-    Your favorite choice is:
-
 # Which templates to run (empty list = all).
 # Valid: open_summary, answer_extraction, persona_probe, agreement_probe, self_recognition
 enabled_templates: ["open_summary"]
