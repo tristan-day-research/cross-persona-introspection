@@ -140,13 +140,15 @@ interpretation_templates:
   open_summary:
     # identity: |
     #   cat -> cat; 135 -> 135; hello -> hello; {placeholder}
-    identity: |
-      Complete the final line. Output only the missing text. Do not explain.
+    # identity: |
+    #   Complete the final line. Output only the missing text. Do not explain.
 
-      cat -> cat
-      135 -> 135
-      hello -> hello
-      {placeholder} ->
+    #   cat -> cat
+    #   135 -> 135
+    #   hello -> hello
+    #   {placeholder} ->
+    identity: |
+      What does {placeholder} represent? Answer in a short phrase.
     patchscopes: |
       Representation: {placeholder}
     selfie: |
