@@ -146,7 +146,7 @@ interpretation_templates:
   open_summary:
     identity: |
       Complete this pattern with one letter or word:
-      cat -> cat; 135 -> 135; hello -> hello; {placeholder} -> 
+      cat -> cat; 135 -> 135; hello -> hello; {placeholder} 
     # identity: |
     #   Complete the final line. Output only the missing text. Do not explain.
 
