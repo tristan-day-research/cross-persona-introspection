@@ -143,7 +143,7 @@ enabled_templates: ["open_summary"]
 #                   Still wrapped with the model chat template + reporter system prompt.
 #   "patchscopes" — minimal structured user prompt + chat template + reporter system.
 #   "selfie"      — instructional user prompt + chat template + reporter system.
-prompt_style: "direct_answer"
+prompt_style: "selfie"
 
 # Whether to wrap interpretation prompts in the model's chat template.
 #   true  — apply_chat_template is used; reporter system prompt goes in the system role.
@@ -192,7 +192,7 @@ interpretation_templates:
       {placeholder}
 
     selfie: |
-      What is {placeholder}?
+      "[INST]" {placeholder} {placeholder} {placeholder} {placeholder} {placeholder} "[/INST] Sure, I will summarize the message:"
 
     direct_answer: |
       {placeholder}
