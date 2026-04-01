@@ -121,6 +121,16 @@ def write_run_log(
         "",
     ]
 
+    ex_cfg = ps.get("extraction") or {}
+    lines += [
+        thin,
+        "SOURCE ACTIVATION EXTRACTION (Phase 1 — see patchscope_patching.extract_activations_multi_layer)",
+        thin,
+        f"  extraction.token_position : {ex_cfg.get('token_position', 'last')!r}",
+        "    → one sequence index per layer; hidden[batch, pos, :] at each hooked layer after one forward.",
+        "",
+    ]
+
     # ── Run parameters
     cfg = run_config
     lines += [sep, "RUN PARAMETERS (from experiments.yaml)", thin]
@@ -177,6 +187,25 @@ def write_run_log(
                 f"  option_order  : {sample.get('option_order', 'ABCD')}",
                 f"  source_answer : {sample['answer']} (shuffled: {sample.get('shuffled_answer', '?')})",
                 "",
+            ]
+            site = sample.get("extraction_site") or {}
+            if site.get("error"):
+                lines += [
+                    "  ── ACTIVATION EXTRACTION SITE (source prompt; same index at every hooked layer) ──",
+                    f"  ERROR: {site['error']}",
+                    "",
+                ]
+            elif site:
+                lines += [
+                    "  ── ACTIVATION EXTRACTION SITE (source prompt; same index at every hooked layer) ──",
+                    f"  token_position (config) : {site.get('token_position_spec')!r}",
+                    f"  token_index (0-based)   : {site.get('token_index')}  (sequence length {site.get('n_tokens')} tokens, indices 0..{site.get('n_tokens', 1) - 1})",
+                    f"  token_id                  : {site.get('token_id')}",
+                    f"  decoded token (repr)      : {site.get('token_decoded_repr')}",
+                    f"  decoded token (strip)     : {site.get('token_decoded_strip')!r}",
+                    "",
+                ]
+            lines += [
                 "  ── FULL SOURCE PROMPT (exact tokens sent to model) ──",
             ]
             for pline in sample["prompt_text"].splitlines():

@@ -55,6 +55,7 @@ Three phases
 import json
 import logging
 import random
+import re
 import time
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -139,17 +140,65 @@ class PatchscopeExperiment(BaseExperiment):
 
     # ── Output / checkpointing ────────────────────────────────────────────
 
+    def _run_filename_suffix(self) -> str:
+        """Filesystem-safe slug: prompt style, templates, layer mode, placeholder."""
+        ps = self.ps_config
+
+        def slug(s: str, max_len: int = 40) -> str:
+            raw = str(s).lower().replace("_", "u")
+            out = re.sub(r"[^a-z0-9]+", "-", raw).strip("-")
+            out = out[:max_len].rstrip("-")
+            return out or "na"
+
+        style = (
+            ps.get("prompt_style")
+            or ps.get("injection", {}).get("placeholder_style")
+            or "patchscopes"
+        )
+        style_s = slug(style, 20)
+
+        enabled = ps.get("enabled_templates") or []
+        all_templates = ps.get("interpretation_templates") or {}
+        if enabled:
+            names = [t for t in sorted(enabled) if t in all_templates]
+            joined = "+".join(slug(t, 22) for t in names)
+            tmpl_s = joined if joined else "notmpl"
+            if len(tmpl_s) > 50:
+                tmpl_s = f"{len(names)}tmpl"
+        else:
+            tmpl_s = f"all{len(all_templates)}tmpl"
+
+        if ps.get("layer_sweep", {}).get("enabled"):
+            sw = ps["layer_sweep"]
+            layer_s = f"sw{len(sw['source_layers'])}x{len(sw['injection_layers'])}"
+        elif ps.get("layer_pairs"):
+            layer_s = f"pairs{len(ps['layer_pairs'])}"
+        else:
+            ex = ps.get("extraction", {}).get("layers", "middle")
+            inj_layer = int(ps.get("injection", {}).get("layer", 0))
+            ex_s = (
+                slug(str(ex), 12)
+                if isinstance(ex, str)
+                else f"L{len(ex)}"
+            )
+            layer_s = f"ex{ex_s}-inj{inj_layer}"
+
+        ph = (ps.get("injection") or {}).get("placeholder_token") or ""
+        tail = f"-ph{slug(ph, 8)}" if ph else ""
+
+        out = f"{style_s}_{tmpl_s}_{layer_s}{tail}"
+        if len(out) > 120:
+            out = out[:120].rstrip("-_")
+        return out
+
     def _init_output_paths(self) -> None:
         if self._jsonl_path is not None:
             return
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         model_short = patchscope_helpers._model_short_name(self.config.model_name)
-        exp_type = (
-            "layer_sweep"
-            if self.ps_config.get("layer_sweep", {}).get("enabled", False)
-            else "matrix"
-        )
-        self._base_name = f"patchscope_{model_short}_{timestamp}_{exp_type}"
+        detail = self._run_filename_suffix()
+        self._base_name = f"patchscope_{model_short}_{timestamp}_{detail}"
+        logger.info(f"Run output basename: {self._base_name}")
         out_dir = Path(self.config.output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
         self._jsonl_path = out_dir / f"{self._base_name}.jsonl"
@@ -209,8 +258,8 @@ class PatchscopeExperiment(BaseExperiment):
         injection_alpha = float(injection_cfg["alpha"])
 
         # Resolve prompt style
-        style = ps_config.get("prompt_style") or injection_cfg.get("placeholder_style", "patchscopes")
-        configured_placeholder = injection_cfg.get("placeholder_token", "?")
+        style = ps_config["prompt_style"]
+        configured_placeholder = injection_cfg["placeholder_token"]
         num_placeholders = int(injection_cfg.get("num_placeholders", 1))
 
         placeholder_token_id = patchscope_helpers._get_placeholder_token_id(tokenizer, configured_placeholder)
@@ -417,7 +466,10 @@ class PatchscopeExperiment(BaseExperiment):
                     )
                     shuffle_maps[(question_id, sp_name)] = (shuffled_question, remap)
 
-                    user_msg = patchscope_helpers._format_question_for_source(shuffled_question)
+                    _src_tpl = self.ps_config["source_pass"]["user_message_template"]
+                    user_msg = patchscope_helpers.format_source_pass_user_message(
+                        shuffled_question, _src_tpl
+                    )
                     messages = []
                     if source_persona.system_prompt:
                         messages.append({"role": "system", "content": source_persona.system_prompt})
@@ -472,11 +524,15 @@ class PatchscopeExperiment(BaseExperiment):
                     }
 
                     if sp_name not in self._sample_source_prompts:
+                        _ptext = tokenizer.apply_chat_template(
+                            messages, tokenize=False, add_generation_prompt=True
+                        )
                         self._sample_source_prompts[sp_name] = {
                             "persona": sp_name,
                             "question_id": question_id,
-                            "prompt_text": tokenizer.apply_chat_template(
-                                messages, tokenize=False, add_generation_prompt=True
+                            "prompt_text": _ptext,
+                            "extraction_site": patchscope_helpers.describe_source_extraction_site(
+                                tokenizer, _ptext, extraction_cfg["token_position"]
                             ),
                             "answer": canonical_answer,
                             "shuffled_answer": shuffled_answer,
@@ -613,7 +669,9 @@ class PatchscopeExperiment(BaseExperiment):
                                         source_answer_probs=source_direct["probs"],
                                         question_text=question.get("question_text", ""),
                                         question_options=question.get("options"),
-                                        reporter_system_prompt=reporter_persona.system_prompt or "",
+                                        reporter_system_prompt=(
+                                            (reporter_persona.system_prompt or "").strip()
+                                        ),
                                     )
 
                                     yield {
@@ -671,7 +729,7 @@ class PatchscopeExperiment(BaseExperiment):
         """
 
         # ── 1. Build prompt for this condition ──────────────────
-        raw_text = interp_text if prompt_style == "identity" else None
+        raw_text = None  # never bypass chat template — system prompt must always be used
 
         # For text_only_baseline: strip everything from the first placeholder
         # token onward, so the model predicts the next token from context alone.

@@ -28,7 +28,7 @@ layer_pairs:
 # Option 3: defaults (used when neither of the above is set)
 extraction:
   token_position: "last"
-  layers: "middle"          # "all", "middle", or [8, 16, 24]
+  # layers: "middle"          # "all", "middle", or [8, 16, 24]
 
 injection:
   layer: 8
@@ -67,7 +67,8 @@ source_personas:
   - persona_conservative
   - persona_progressive
 
-# Reporter personas (ignored for identity style — no chat template)
+# Reporter personas: their system prompts are applied via the chat template
+# for every prompt_style (including identity).
 reporter_personas:
   - persona_conservative
   - persona_progressive
@@ -89,14 +90,28 @@ controls:
 # PROMPTS
 # ═══════════════════════════════════════════════════════════════════════
 
+# Phase 1 — source forward pass: user message only (source persona system prompt
+# is still applied in code from personas.yaml). Edit this to change MCQ layout
+# or instructions without touching Python.
+# Placeholders: {question_text}, {options_formatted} (A–D lines, present options only).
+source_pass:
+  user_message_template: |
+    {question_text}
+
+    {options_formatted}
+
+    Choose the single best answer. Answer with exactly one letter: A, B, C, or D.
+    Answer :
+
 # Which templates to run (empty list = all).
 # Valid: open_summary, answer_extraction, persona_probe, agreement_probe, self_recognition
 enabled_templates: ["open_summary"]
 
 # Prompt style — selects which variant to use from each template below.
-#   "identity"    — raw pattern completion (X -> X; ? ->). No chat template.
-#   "patchscopes" — minimal structured prompt, chat-templated with reporter persona.
-#   "selfie"      — instructional prompt, chat-templated with reporter persona.
+#   "identity"    — pattern-completion user text (e.g. cat -> cat; {placeholder}).
+#                   Still wrapped with the model chat template + reporter system prompt.
+#   "patchscopes" — minimal structured user prompt + chat template + reporter system.
+#   "selfie"      — instructional user prompt + chat template + reporter system.
 prompt_style: "identity"
 
 

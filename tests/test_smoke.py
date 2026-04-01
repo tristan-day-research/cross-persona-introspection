@@ -173,6 +173,7 @@ def test_config_loading():
         ps_config = yaml.safe_load(f)
     assert "extraction" in ps_config
     assert "injection" in ps_config
+    assert "source_pass" in ps_config
     assert "interpretation_templates" in ps_config
 
 
@@ -209,7 +210,10 @@ def test_patchscope_helpers():
         _load_patchscope_config,
         _model_short_name,
         _resolve_layers,
+        describe_source_extraction_site,
+        format_source_pass_user_message,
     )
+    from transformers import GPT2Tokenizer
 
     # Layer resolution
     assert _resolve_layers("all", 32) == list(range(32))
@@ -224,7 +228,25 @@ def test_patchscope_helpers():
     # Config loading
     cfg = _load_patchscope_config("patchscope.yaml")
     assert cfg["injection"]["layer"] in (3, 8)  # depends on current config
+    assert "source_pass" in cfg
+    assert "user_message_template" in cfg["source_pass"]
+    q = {
+        "question_text": "Pick one?",
+        "options": {"A": "First", "C": "Third"},
+    }
+    out = format_source_pass_user_message(q, cfg["source_pass"]["user_message_template"])
+    assert "Pick one?" in out
+    assert "A) First" in out and "C) Third" in out
+    assert "B)" not in out
     assert "open_summary" in cfg["interpretation_templates"]
     # Templates should have both patchscopes and selfie styles
     assert "patchscopes" in cfg["interpretation_templates"]["open_summary"]
     assert "selfie" in cfg["interpretation_templates"]["open_summary"]
+
+    # Extraction site description (no model; local GPT-2 tokenizer)
+    tok = GPT2Tokenizer.from_pretrained("gpt2")
+    text = "Hello world"
+    site = describe_source_extraction_site(tok, text, "last")
+    assert "token_index" in site and "n_tokens" in site
+    assert site["token_index"] == site["n_tokens"] - 1
+    assert "token_id" in site

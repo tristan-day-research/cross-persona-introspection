@@ -173,45 +173,36 @@ def _get_transformer_layers(model):
 # ── Placeholder & token utilities ─────────────────────────────────────────
 
 
-def _get_placeholder_token_id(tokenizer, configured_token: str = "auto") -> int:
-    """Resolve the placeholder token to a single token ID.
+def _get_placeholder_token_id(tokenizer, configured_token: str) -> int:
+    """Encode the configured placeholder token to a single token ID.
 
     Args:
         tokenizer: HuggingFace tokenizer.
-        configured_token: From config — "auto", "?", "<unk>", or any literal string.
+        configured_token: Literal token string from config (e.g. "___", "?").
+            Special values "<unk>" and "<pad>" resolve to the tokenizer's
+            built-in IDs.
 
-    Patchscopes uses "?" (single token at position i*).
-    SelfIE uses unk_token (multiple filler tokens).
+    Raises:
+        ValueError: If the token encodes to zero or multiple token IDs.
     """
-    if configured_token == "auto":
-        # Try "?" first (Patchscopes default)
-        ids = tokenizer.encode("?", add_special_tokens=False)
-        if len(ids) == 1:
-            return ids[0]
-        # Fall back to unk
-        if tokenizer.unk_token_id is not None and tokenizer.unk_token_id != tokenizer.eos_token_id:
-            return tokenizer.unk_token_id
-        if tokenizer.pad_token_id is not None and tokenizer.pad_token_id != tokenizer.eos_token_id:
-            return tokenizer.pad_token_id
-        return 1
-
-    # Explicit token string from config
-    if configured_token == "<unk>" and tokenizer.unk_token_id is not None:
+    if configured_token == "<unk>":
+        if tokenizer.unk_token_id is None:
+            raise ValueError("Config uses <unk> but tokenizer has no unk_token_id")
         return tokenizer.unk_token_id
-    if configured_token == "<pad>" and tokenizer.pad_token_id is not None:
+    if configured_token == "<pad>":
+        if tokenizer.pad_token_id is None:
+            raise ValueError("Config uses <pad> but tokenizer has no pad_token_id")
         return tokenizer.pad_token_id
 
-    # Try encoding the literal string
     ids = tokenizer.encode(configured_token, add_special_tokens=False)
     if len(ids) == 1:
         return ids[0]
 
-    # Multi-token — warn and use first token
-    logger.warning(
-        f"Placeholder token '{configured_token}' encodes to {len(ids)} tokens "
-        f"({ids}); using first token ID {ids[0]}"
+    raise ValueError(
+        f"Placeholder token '{configured_token}' encodes to {len(ids)} token(s) "
+        f"({ids}); it must encode to exactly 1 token. "
+        f"Fix injection.placeholder_token in your patchscope config."
     )
-    return ids[0] if ids else 1
 
 
 def find_token_position(tokenizer, text: str, word: str, strategy: str = "last") -> int:
@@ -282,23 +273,33 @@ def _shuffle_options(question: dict, seed: int, qid: str, persona: str) -> tuple
     return shuffled_q, remap
 
 
-def _format_options_lines(options: dict) -> str:
-    """Format options as one per line: A) ..., B) ..., matching source prompt format."""
-    return "\n".join(f"{k}) {v}" for k, v in options.items())
-
-
-def _format_question_for_source(question: dict) -> str:
-    """Format a question dict into a user-facing MCQ string for the source pass."""
-    lines = [question["question_text"], ""]
+def _options_formatted_abcd(options: dict) -> str:
+    """Options as lines A)–D) in fixed order (only labels present in *options*)."""
+    lines = []
     for letter in ["A", "B", "C", "D"]:
-        if letter in question.get("options", {}):
-            lines.append(f"{letter}) {question['options'][letter]}")
-    lines.append("")
-    lines.append(
-        "Choose the single best answer. "
-        "Answer with exactly one letter: A, B, C, or D."
-    )
+        if letter in options:
+            lines.append(f"{letter}) {options[letter]}")
     return "\n".join(lines)
+
+
+def format_source_pass_user_message(
+    question: dict,
+    user_message_template: str,
+) -> str:
+    """Build the Phase 1 source user message using ``source_pass.user_message_template`` from config.
+
+    Placeholders: ``{question_text}``, ``{options_formatted}`` (A–D lines).
+    """
+    template = user_message_template.strip()
+    if not template:
+        raise ValueError(
+            "source_pass.user_message_template is empty. Set it in patchscope.yaml."
+        )
+    options_formatted = _options_formatted_abcd(question.get("options", {}))
+    return template.format(
+        question_text=question.get("question_text", ""),
+        options_formatted=options_formatted,
+    )
 
 
 # ── Constrained answer parsing ────────────────────────────────────────────
@@ -423,27 +424,34 @@ def build_interpretation_prompt(
         placeholder_token: Decoded placeholder token string (e.g. ``"?"``).
         num_placeholders: How many placeholder tokens to insert.
         question: Question dict with ``question_text`` and ``options``.
-        reporter_system_prompt: Reporter persona system prompt (may be None/empty).
+        reporter_system_prompt: Reporter persona system prompt; whitespace-only is treated as absent.
         options_override: If given, use these options instead of ``question["options"]``.
 
     Returns:
         ``(interp_text, interp_messages, placeholder_positions)`` where
-        *interp_text* is the fully rendered string (with special tokens for
-        non-identity styles), *interp_messages* is the chat message list, and
+        *interp_text* is the fully rendered string from ``apply_chat_template``,
+        *interp_messages* is the chat message list (system + user when configured), and
         *placeholder_positions* is a list of token indices.
     """
     _SENTINEL = "\x00PH\x00"
 
+    reporter_system = (reporter_system_prompt or "").strip()
+
     prompt_template = tmpl_cfg.get(prompt_style)
     if not prompt_template:
-        prompt_template = tmpl_cfg.get("patchscopes") or tmpl_cfg.get("selfie", "")
+        raise ValueError(
+            f"No prompt template for style '{prompt_style}' in template config. "
+            f"Available keys: {[k for k in tmpl_cfg if k != 'decode_mode']}"
+        )
 
     placeholder_str = (placeholder_token + " ") * num_placeholders
     placeholder_str = placeholder_str.strip()
 
     opts = options_override if options_override is not None else question.get("options", {})
-    options_str = ", ".join(f"{k}) {v}" for k, v in opts.items())
-    options_formatted_str = _format_options_lines(opts)
+    options_str = ", ".join(
+        f"{k}) {opts[k]}" for k in ["A", "B", "C", "D"] if k in opts
+    )
+    options_formatted_str = _options_formatted_abcd(opts)
 
     user_content = prompt_template.strip()
     user_content = user_content.replace("{placeholder}", _SENTINEL)
@@ -452,38 +460,33 @@ def build_interpretation_prompt(
     user_content = user_content.replace("{options}", options_str)
     user_content = user_content.replace("{statement}", question.get("question_text", ""))
 
-    if prompt_style == "identity":
-        _ph_char_pos = user_content.find(_SENTINEL)
-        user_content = user_content.replace(_SENTINEL, placeholder_str)
-        interp_text = user_content
-        interp_messages = [{"role": "user", "content": user_content}]
-        interp_ids = tokenizer.encode(interp_text, return_tensors="pt", add_special_tokens=False)
-    else:
-        if base_prompt.strip():
-            user_content = base_prompt.strip() + "\n\n" + user_content
+    # All styles use the same path: chat template with system prompt.
+    # The only difference between styles is the template text from the YAML.
+    if base_prompt.strip():
+        user_content = base_prompt.strip() + "\n\n" + user_content
 
-        # Build with sentinel first to find char position
-        sentinel_messages = []
-        if reporter_system_prompt:
-            sentinel_messages.append({"role": "system", "content": reporter_system_prompt})
-        sentinel_messages.append({"role": "user", "content": user_content})
+    # Build with sentinel first to find char position
+    sentinel_messages = []
+    if reporter_system:
+        sentinel_messages.append({"role": "system", "content": reporter_system})
+    sentinel_messages.append({"role": "user", "content": user_content})
 
-        sentinel_text = tokenizer.apply_chat_template(
-            sentinel_messages, tokenize=False, add_generation_prompt=True
-        )
-        _ph_char_pos = sentinel_text.find(_SENTINEL)
+    sentinel_text = tokenizer.apply_chat_template(
+        sentinel_messages, tokenize=False, add_generation_prompt=True
+    )
+    _ph_char_pos = sentinel_text.find(_SENTINEL)
 
-        # Replace sentinel with actual placeholder
-        user_content = user_content.replace(_SENTINEL, placeholder_str)
-        interp_messages = []
-        if reporter_system_prompt:
-            interp_messages.append({"role": "system", "content": reporter_system_prompt})
-        interp_messages.append({"role": "user", "content": user_content})
+    # Replace sentinel with actual placeholder
+    user_content = user_content.replace(_SENTINEL, placeholder_str)
+    interp_messages = []
+    if reporter_system:
+        interp_messages.append({"role": "system", "content": reporter_system})
+    interp_messages.append({"role": "user", "content": user_content})
 
-        interp_text = tokenizer.apply_chat_template(
-            interp_messages, tokenize=False, add_generation_prompt=True
-        )
-        interp_ids = tokenizer.encode(interp_text, return_tensors="pt", add_special_tokens=False)
+    interp_text = tokenizer.apply_chat_template(
+        interp_messages, tokenize=False, add_generation_prompt=True
+    )
+    interp_ids = tokenizer.encode(interp_text, return_tensors="pt", add_special_tokens=False)
 
     # Map char offset → token indices
     placeholder_positions = []
@@ -590,6 +593,45 @@ def validate_placeholder_positions(
     pos_tokens = [f"[{p}]={repr(tokens[p].strip())}" for p in placeholder_positions]
     logger.info(f"Placeholder validation OK for template={tmpl_name}: {', '.join(pos_tokens)}")
     return True
+
+
+def describe_source_extraction_site(
+    tokenizer,
+    source_text: str,
+    token_position: str | int,
+) -> dict:
+    """Return structured info about where ``extract_activations_multi_layer`` reads hidden states.
+
+    The hook uses ``hidden[0, pos, :]`` with ``pos = -1`` when *token_position* is ``"last"``,
+    else ``int(token_position)``.  This describes that *pos* in the same tokenization as extraction
+    (``encode(source_text, add_special_tokens=False)``).
+
+    Returns:
+        Dict with keys ``token_position_spec``, ``token_index``, ``n_tokens``, ``token_id``,
+        ``token_decoded_repr``, and optionally ``error`` if the index is invalid.
+    """
+    token_ids = tokenizer.encode(source_text, add_special_tokens=False)
+    tokens = [tokenizer.decode([tid]) for tid in token_ids]
+
+    if token_position == "last":
+        pos = len(tokens) - 1
+    else:
+        pos = int(token_position)
+
+    base = {
+        "token_position_spec": token_position,
+        "token_index": pos,
+        "n_tokens": len(tokens),
+    }
+    if not (0 <= pos < len(tokens)):
+        return {**base, "error": f"index {pos} out of range for {len(tokens)} tokens"}
+
+    return {
+        **base,
+        "token_id": int(token_ids[pos]),
+        "token_decoded_repr": repr(tokens[pos]),
+        "token_decoded_strip": tokens[pos].strip(),
+    }
 
 
 def validate_extraction_position(
