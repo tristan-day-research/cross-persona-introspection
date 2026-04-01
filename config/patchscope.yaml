@@ -186,6 +186,11 @@ interpretation_templates:
 
     selfie: |
       What is {placeholder}?
+
+    direct_answer: |
+      {placeholder}
+      Read the hidden content above and recover the answer choice it indicates.
+      Output exactly one letter: A, B, C, or D.
     decode_mode: "generate"  # free-form generation, no fixed choices OR generate
 
 
