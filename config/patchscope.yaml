@@ -213,7 +213,7 @@ interpretation_templates:
     # selfie: |
     #   <|redacted_start_header_id|>user<|redacted_end_header_id|> {placeholder} <|eot_id|><|redacted_start_header_id|>assistant<|redacted_end_header_id|> Sure, I will summarize the message:
     selfie: |
-      <start_header_id>user<end_header_id> {placeholder} <eot_id><start_header_id>assistant<end_header_id> Sure, I will summarize the message:
+      <|start_header_id|>user<|end_header_id|> {placeholder} <|eot_id|><|start_header_id|>assistant<|end_header_id|> Sure, I will summarize the message:
     direct_answer: |
       {placeholder}
       Read the hidden content above and recover the answer choice it indicates.
