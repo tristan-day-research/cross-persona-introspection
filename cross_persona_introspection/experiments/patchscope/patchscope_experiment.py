@@ -913,12 +913,19 @@ class PatchscopeExperiment(BaseExperiment):
                 "predicted": record.predicted,
             }
 
-        # Capture one sample prompt per template+condition for the .txt log
-        sample_key = f"{tmpl_name}_{condition}"
-        if sample_key not in self._sample_prompts:
+        # .txt log: one match + one oppose sample per (template, condition, layer pair)
+        rep_cfg = self.ps_config.get("reporting") or {}
+        oppose_pol = rep_cfg.get("opposing_sample_policy", "cross_ideology")
+        layer_tag = f"L{record.source_layer}to{inj_layer}"
+
+        def _try_reporter_sample(persona_alignment: str) -> None:
+            sample_key = f"{tmpl_name}_{condition}_{layer_tag}_{persona_alignment}"
+            if sample_key in self._sample_prompts:
+                return
             self._sample_prompts[sample_key] = {
                 "template": tmpl_name,
                 "condition": condition,
+                "persona_alignment": persona_alignment,
                 "source_persona": record.source_persona,
                 "reporter_persona": record.reporter_persona,
                 "source_layer": record.source_layer,
@@ -927,7 +934,6 @@ class PatchscopeExperiment(BaseExperiment):
                 "generated_text": record.generated_text,
                 "question_id": record.question_id,
             }
-            rep_cfg = self.ps_config.get("reporting") or {}
             if rep_cfg.get("include_no_reporter_system_sample", True) and (
                 record.reporter_system_prompt or ""
             ).strip():
@@ -958,6 +964,13 @@ class PatchscopeExperiment(BaseExperiment):
                     logger.warning(
                         f"No-system log sample failed for {sample_key}: {e}"
                     )
+
+        if record.source_persona == record.reporter_persona:
+            _try_reporter_sample("match")
+        if patchscope_helpers.reporter_sample_opposing_qualifies(
+            record.source_persona, record.reporter_persona, oppose_pol
+        ):
+            _try_reporter_sample("oppose")
 
     def _capture_no_system_log_sample(
         self,

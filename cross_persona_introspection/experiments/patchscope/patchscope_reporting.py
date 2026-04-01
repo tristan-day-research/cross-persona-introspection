@@ -225,13 +225,36 @@ def write_run_log(
             lines.append("")
         lines.append("")
 
-    # ── Sample reporter prompts (verbatim, one per template+condition)
-    lines += [sep, "SAMPLE REPORTER PROMPTS AND RESPONSES (verbatim, including special tokens)", thin]
-    for sample_key, sample in sorted(sample_prompts.items()):
+    # ── Sample reporter prompts (match + oppose per template×condition×layer pair; + no-system)
+    lines += [
+        sep,
+        "SAMPLE REPORTER PROMPTS AND RESPONSES (verbatim, including special tokens)",
+        thin,
+        "  One *match* (source==reporter) and one *oppose* sample per layer pair, per template×condition,",
+        "  when such cells occur in the matrix. Keys look like: {template}_{condition}_L{src}to{inj}_{match|oppose}.",
+        "  Each block may include a log-only decode with no reporter system (see reporting config).",
+        "",
+    ]
+
+    def _reporter_sample_sort_key(item: tuple[str, dict]) -> tuple:
+        _k, s = item
+        align = s.get("persona_alignment")
+        align_rank = {"match": 0, "oppose": 1}.get(align, 2)
+        return (
+            s.get("template", ""),
+            s.get("condition", ""),
+            int(s.get("source_layer", 0)),
+            int(s.get("injection_layer", 0)),
+            align_rank,
+            _k,
+        )
+
+    for sample_key, sample in sorted(sample_prompts.items(), key=_reporter_sample_sort_key):
         lines += [
             f"\n--- {sample_key} ---",
             f"  template          : {sample['template']}",
             f"  condition         : {sample['condition']}",
+            f"  persona_alignment : {sample.get('persona_alignment', '(n/a)')}",
             f"  source_persona    : {sample['source_persona']}",
             f"  reporter_persona  : {sample['reporter_persona']}",
             f"  source_layer      : {sample['source_layer']}",

@@ -221,6 +221,14 @@ def patch_and_decode(
     handle = None
 
     if activation is not None:
+        if not placeholder_positions:
+            raise ValueError(
+                "patch_and_decode: activation is set but placeholder_positions is empty — "
+                "injection would be a no-op. Ensure interpretation_templates include the "
+                "literal {placeholder} token (YAML), and injection.placeholder_token encodes "
+                "to token(s) that validate_placeholder_positions can find in the chat-templated "
+                "string."
+            )
         act = activation.to(device)
 
         # With use_cache=True during generate(), later decode steps often forward

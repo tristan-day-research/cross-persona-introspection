@@ -282,6 +282,35 @@ def _options_formatted_abcd(options: dict) -> str:
     return "\n".join(lines)
 
 
+_IDEOLOGY_PERSONAS = frozenset({"persona_conservative", "persona_progressive"})
+
+
+def reporter_sample_opposing_qualifies(
+    source_persona: str,
+    reporter_persona: str,
+    policy: str,
+) -> bool:
+    """Whether a matrix cell should fill the .txt log *oppose* sample bucket.
+
+    *policy*:
+      - ``any_mismatch`` — any cell with source != reporter.
+      - ``cross_ideology`` — only conservative vs progressive (both names in the pair).
+    """
+    if source_persona == reporter_persona:
+        return False
+    if policy == "any_mismatch":
+        return True
+    if policy == "cross_ideology":
+        return (
+            source_persona in _IDEOLOGY_PERSONAS
+            and reporter_persona in _IDEOLOGY_PERSONAS
+        )
+    raise ValueError(
+        f"Unknown reporting.opposing_sample_policy {policy!r}; "
+        "use 'cross_ideology' or 'any_mismatch'."
+    )
+
+
 def format_source_pass_user_message(
     question: dict,
     user_message_template: str,

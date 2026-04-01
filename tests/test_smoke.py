@@ -212,6 +212,7 @@ def test_patchscope_helpers():
         _resolve_layers,
         describe_source_extraction_site,
         format_source_pass_user_message,
+        reporter_sample_opposing_qualifies,
         resolve_extraction_token_index,
     )
     from transformers import GPT2Tokenizer
@@ -235,6 +236,7 @@ def test_patchscope_helpers():
     assert "user_message_template" in cfg["source_pass"]
     assert "reporting" in cfg
     assert "include_no_reporter_system_sample" in cfg["reporting"]
+    assert "opposing_sample_policy" in cfg["reporting"]
     q = {
         "question_text": "Pick one?",
         "options": {"A": "First", "C": "Third"},
@@ -260,3 +262,13 @@ def test_patchscope_helpers():
     pos, meta = resolve_extraction_token_index(tok, boundary_text, "last_before_assistant")
     assert pos < resolve_extraction_token_index(tok, boundary_text, "last")[0]
     assert "boundary_char_index" in meta
+
+    assert reporter_sample_opposing_qualifies(
+        "persona_conservative", "persona_progressive", "cross_ideology"
+    )
+    assert not reporter_sample_opposing_qualifies(
+        "persona_conservative", "neutral_evaluator", "cross_ideology"
+    )
+    assert reporter_sample_opposing_qualifies(
+        "persona_conservative", "neutral_evaluator", "any_mismatch"
+    )
