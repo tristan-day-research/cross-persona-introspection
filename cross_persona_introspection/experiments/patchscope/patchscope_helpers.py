@@ -435,14 +435,16 @@ def build_interpretation_prompt(
     question: dict,
     reporter_system_prompt: str | None,
     options_override: dict | None = None,
+    *,
+    use_chat_template: bool = True,
 ) -> tuple[str, list[dict], list[int]]:
     """Build an interpretation prompt and locate placeholder token positions.
 
     This is the shared prompt-construction logic used by both the main
     experiment matrix (Phase 2) and source overrides (Phase 3).
 
-    Uses a null-byte sentinel to track placeholder character position through
-    chat-template wrapping, then maps that position back to token indices.
+    Uses a null-byte sentinel to find the placeholder in the user string, then
+    maps that character span to token indices.
 
     Args:
         tokenizer: HuggingFace tokenizer.
@@ -455,12 +457,21 @@ def build_interpretation_prompt(
         question: Question dict with ``question_text`` and ``options``.
         reporter_system_prompt: Reporter persona system prompt; whitespace-only is treated as absent.
         options_override: If given, use these options instead of ``question["options"]``.
+        use_chat_template: If True (default), non-identity styles are wrapped with
+            ``apply_chat_template`` and the reporter system prompt goes in the system
+            role. ``identity`` style always skips the chat template regardless of this
+            flag. If False, ALL styles skip the chat template: the reporter system
+            prompt (if any) is prepended as plain text followed by a blank line, keeping
+            the model in raw continuation mode.
 
     Returns:
         ``(interp_text, interp_messages, placeholder_positions)`` where
-        *interp_text* is the fully rendered string from ``apply_chat_template``,
-        *interp_messages* is the chat message list (system + user when configured), and
-        *placeholder_positions* is a list of token indices.
+        *interp_text* is the string passed to the model: plain text when
+        ``prompt_style == "identity"`` or ``use_chat_template=False``; output of
+        ``apply_chat_template`` otherwise.
+        *interp_messages* is the chat message list (system + user when configured).
+        *placeholder_positions* are token indices into *interp_text* as encoded by
+        the tokenizer with ``add_special_tokens=False``.
     """
     _SENTINEL = "\x00PH\x00"
 
@@ -489,33 +500,40 @@ def build_interpretation_prompt(
     user_content = user_content.replace("{options}", options_str)
     user_content = user_content.replace("{statement}", question.get("question_text", ""))
 
-    # All styles use the same path: chat template with system prompt.
-    # The only difference between styles is the template text from the YAML.
-    if base_prompt.strip():
-        user_content = base_prompt.strip() + "\n\n" + user_content
+    if prompt_style == "identity" or not use_chat_template:
+        # Raw continuation mode: no chat template, no special tokens.
+        # Reporter system prompt (if any) is prepended as plain text.
+        if reporter_system:
+            user_content = reporter_system.strip() + "\n\n" + user_content
+        _ph_char_pos = user_content.find(_SENTINEL)
+        user_content = user_content.replace(_SENTINEL, placeholder_str)
+        interp_text = user_content
+        interp_messages = [{"role": "user", "content": user_content}]
+        interp_ids = tokenizer.encode(interp_text, return_tensors="pt", add_special_tokens=False)
+    else:
+        if base_prompt.strip():
+            user_content = base_prompt.strip() + "\n\n" + user_content
 
-    # Build with sentinel first to find char position
-    sentinel_messages = []
-    if reporter_system:
-        sentinel_messages.append({"role": "system", "content": reporter_system})
-    sentinel_messages.append({"role": "user", "content": user_content})
+        sentinel_messages = []
+        if reporter_system:
+            sentinel_messages.append({"role": "system", "content": reporter_system})
+        sentinel_messages.append({"role": "user", "content": user_content})
 
-    sentinel_text = tokenizer.apply_chat_template(
-        sentinel_messages, tokenize=False, add_generation_prompt=True
-    )
-    _ph_char_pos = sentinel_text.find(_SENTINEL)
+        sentinel_text = tokenizer.apply_chat_template(
+            sentinel_messages, tokenize=False, add_generation_prompt=True
+        )
+        _ph_char_pos = sentinel_text.find(_SENTINEL)
 
-    # Replace sentinel with actual placeholder
-    user_content = user_content.replace(_SENTINEL, placeholder_str)
-    interp_messages = []
-    if reporter_system:
-        interp_messages.append({"role": "system", "content": reporter_system})
-    interp_messages.append({"role": "user", "content": user_content})
+        user_content = user_content.replace(_SENTINEL, placeholder_str)
+        interp_messages = []
+        if reporter_system:
+            interp_messages.append({"role": "system", "content": reporter_system})
+        interp_messages.append({"role": "user", "content": user_content})
 
-    interp_text = tokenizer.apply_chat_template(
-        interp_messages, tokenize=False, add_generation_prompt=True
-    )
-    interp_ids = tokenizer.encode(interp_text, return_tensors="pt", add_special_tokens=False)
+        interp_text = tokenizer.apply_chat_template(
+            interp_messages, tokenize=False, add_generation_prompt=True
+        )
+        interp_ids = tokenizer.encode(interp_text, return_tensors="pt", add_special_tokens=False)
 
     # Map char offset → token indices
     placeholder_positions = []

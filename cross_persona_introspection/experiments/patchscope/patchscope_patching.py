@@ -372,6 +372,7 @@ def compute_relevancy_scores(
     alpha: float,
     generated_token_ids: list[int],
     max_tokens: int = 64,
+    raw_text: Optional[str] = None,
 ) -> list[float]:
     """Per-token relevancy: P(token | WITH patch) - P(token | WITHOUT).
 
@@ -379,12 +380,18 @@ def compute_relevancy_scores(
     Two full forward passes for prefill (with/without patching), then two
     incremental single-token steps per generated token.
 
+    If *raw_text* is set (identity-style plain prompts), it is used as the
+    prompt string; otherwise *messages* are rendered with ``apply_chat_template``.
+
     Returns:
         List of floats, one per token (up to *max_tokens*).
     """
-    input_text = tokenizer.apply_chat_template(
-        messages, tokenize=False, add_generation_prompt=True
-    )
+    if raw_text is not None:
+        input_text = raw_text
+    else:
+        input_text = tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
     base_ids = tokenizer.encode(
         input_text, return_tensors="pt", add_special_tokens=False
     ).to(device)

@@ -44,7 +44,7 @@ extraction:
   # last_before_assistant. Must match your model's chat template (Llama 3 Instruct default).
   assistant_boundary_marker: "<|eot_id|><|start_header_id|>assistant"
 
-  # layers: "middle"          # "all", "middle", or [8, 16, 24]
+  layers: "middle"          # "all", "middle", or [8, 16, 24]
 
 injection:
   # layer: 8
@@ -138,6 +138,14 @@ enabled_templates: ["open_summary"]
 #   "patchscopes" — minimal structured user prompt + chat template + reporter system.
 #   "selfie"      — instructional user prompt + chat template + reporter system.
 prompt_style: "identity"
+
+# Whether to wrap interpretation prompts in the model's chat template.
+#   true  — apply_chat_template is used; reporter system prompt goes in the system role.
+#           identity style always bypasses this (it is a raw continuation prompt by design).
+#   false — no chat template for any style; reporter system prompt is prepended as plain
+#           text followed by a blank line (e.g. "You are a conservative...\n\ncat -> cat; ___").
+#           Keeps the model in base-model continuation mode regardless of prompt_style.
+use_chat_template: false
 
 
 # Template definitions. Each has three prompt variants.

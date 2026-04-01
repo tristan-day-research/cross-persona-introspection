@@ -102,6 +102,7 @@ class PatchscopeExperiment(BaseExperiment):
         self._log_path: Optional[Path] = None
         self._base_name: str = ""
         self._last_flush: int = 0
+        self._use_chat_template: bool = True
 
     # ── Setup ─────────────────────────────────────────────────────────────
 
@@ -246,6 +247,9 @@ class PatchscopeExperiment(BaseExperiment):
             logger.info(f"Running all templates: {list(templates.keys())}")
 
         base_prompt = ps_config["interpretation_base_prompt"]
+        self._use_chat_template = bool(
+            ps_config.get("use_chat_template", True)
+        )
         source_persona_names = ps_config["source_personas"]
         reporter_persona_names = ps_config["reporter_personas"]
 
@@ -645,6 +649,7 @@ class PatchscopeExperiment(BaseExperiment):
                                         question=question,
                                         reporter_system_prompt=reporter_persona.system_prompt,
                                         options_override=shuffled_options,
+                                        use_chat_template=self._use_chat_template,
                                     )
                                 )
 
@@ -761,7 +766,9 @@ class PatchscopeExperiment(BaseExperiment):
         """
 
         # ── 1. Build prompt for this condition ──────────────────
-        raw_text = None  # never bypass chat template — system prompt must always be used
+        # identity-style prompts are plain completion strings (no chat template); they must
+        # be passed via raw_text so patch_and_decode matches build_interpretation_prompt.
+        raw_text = interp_text if (prompt_style == "identity" or not self._use_chat_template) else None
 
         # For text_only_baseline: strip everything from the first placeholder
         # token onward, so the model predicts the next token from context alone.
@@ -839,7 +846,7 @@ class PatchscopeExperiment(BaseExperiment):
             max_new_tokens=gen_cfg["max_new_tokens"],
             temperature=gen_cfg["temperature"],
             do_sample=gen_cfg.get("do_sample", False),
-            use_cache=gen_cfg.get("use_cache", True),
+            use_cache=gen_cfg.get("use_cache", False),
             choice_token_ids=all_choice_token_ids.get(tmpl_name),
             save_logprobs=save_logprobs,
         )
@@ -892,6 +899,7 @@ class PatchscopeExperiment(BaseExperiment):
                         alpha=injection_alpha,
                         generated_token_ids=gen_token_ids,
                         max_tokens=relevancy_cfg.get("max_tokens", 64),
+                        raw_text=interp_text if (prompt_style == "identity" or not self._use_chat_template) else None,
                     )
                     record.relevancy_scores = rel_scores
                     record.mean_relevancy = (
@@ -1006,6 +1014,7 @@ class PatchscopeExperiment(BaseExperiment):
             num_placeholders=num_placeholders,
             question=interp_question,
             reporter_system_prompt=None,
+            use_chat_template=self._use_chat_template,
         )
         effective_raw = None
         if condition == "text_only_baseline" and ns_ph:
@@ -1020,6 +1029,8 @@ class PatchscopeExperiment(BaseExperiment):
                 if not bp.endswith(" "):
                     bp += " "
                 effective_raw = bp
+        elif prompt_style == "identity" or not self._use_chat_template:
+            effective_raw = ns_text
 
         decode_mode = tmpl_cfg.get("decode_mode", "generate")
         use_logits = decode_mode == "logits" and tmpl_name in all_choice_token_ids
