@@ -242,15 +242,12 @@ def write_run_log(
 
         lines += [
             sep,
-            "NO-PERSONA PROMPT (one per layer pair; exact string tokenized for the model)",
+            "NO-PERSONA PROMPT (one per layer pair; same template as matrix, no reporter persona)",
             thin,
-            "  Log-only: encode with add_special_tokens=false. Optional preamble:",
-            "  reporting.no_persona_layer_log_system_prompt. Body: reporting.no_persona_layer_log_body",
-            "  if set, else the normal interpretation template for prompt_style.",
-            "  Not personas.yaml. Same activation as the first 'real' cell for that layer pair.",
-            "",
-            "  Token strings like <|redacted_start_header_id|> are Hugging Face export names for",
-            "  Llama chat role/special tokens (see tokenizer.json); they are not from this repo.",
+            "  Exact string encoded with add_special_tokens=false. Body = interpretation_templates",
+            "  for this template×prompt_style, unless reporting.no_persona_layer_log_body is set.",
+            "  Optional preamble: reporting.no_persona_layer_log_system_prompt (usually empty).",
+            "  Same activation as the first 'real' cell for that layer pair.",
             "",
         ]
         for layer_tag in sorted(npc.keys(), key=_layer_tag_sort_key):
@@ -258,7 +255,7 @@ def write_run_log(
             syn = (sample.get("layer_log_system_prompt") or "").strip()
             syn_note = repr(syn[:200] + ("…" if len(syn) > 200 else "")) if syn else "(empty)"
             bod = (sample.get("layer_log_body_override") or "").strip()
-            bod_note = repr(bod[:120] + ("…" if len(bod) > 120 else "")) if bod else "(empty — use normal template body)"
+            bod_note = repr(bod[:120] + ("…" if len(bod) > 120 else "")) if bod else "(empty — same body as matrix template)"
             lines += [
                 f"\n--- {layer_tag} ---",
                 f"  template         : {sample.get('template', '')}",

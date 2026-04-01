@@ -114,10 +114,10 @@ reporting:
   # Optional synthetic preamble below + interpretation template from this file; not personas.yaml.
   # Runs even when use_chat_template is false for the main matrix. Skipped for prompt_style identity.
   include_no_persona_chat_template_sample_per_layer: true
-  # .txt per-layer sample: if set, replaces interpretation_templates.*.{prompt_style} for THAT decode only.
-  # Use {placeholder}, {question_text}, {options_formatted}, …  Empty = use normal template (e.g. selfie).
-  no_persona_layer_log_body: "{placeholder}"
-  # Prepended before the body with a blank line. Empty string = no preamble (bare prompt = body only).
+  # Per-layer NO-PERSONA .txt sample uses the SAME string as interpretation_templates.*.{prompt_style}
+  # (e.g. open_summary.selfie). Only set no_persona_layer_log_body if you need a *different* body for that log only.
+  no_persona_layer_log_body: ""
+  # Prepended above the template body with a blank line. Empty = nothing added (same as matrix minus persona).
   no_persona_layer_log_system_prompt: ""
   # oppose bucket: cross_ideology = only persona_conservative ↔ persona_progressive;
   # any_mismatch = first source≠reporter seen for that layer pair (e.g. includes neutral_evaluator).
