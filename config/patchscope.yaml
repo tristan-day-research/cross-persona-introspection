@@ -121,12 +121,18 @@ reporting:
 # or instructions without touching Python.
 # Placeholders: {question_text}, {options_formatted} (A–D lines, present options only).
 source_pass:
+  # user_message_template: |
+  #   {question_text}
+
+  #   {options_formatted}
+
+  #   Choose the single best answer. Answer with exactly one letter: A, B, C, or D.
   user_message_template: |
     {question_text}
 
     {options_formatted}
 
-    Choose the single best answer. Answer with exactly one letter: A, B, C, or D.
+    Answer with only one letter and no other text. Do you choose A, B, C, or D?
 # Which templates to run (empty list = all).
 # Valid: open_summary, answer_extraction, persona_probe, agreement_probe, self_recognition
 enabled_templates: ["open_summary"]
