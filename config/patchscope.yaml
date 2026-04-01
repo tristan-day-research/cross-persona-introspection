@@ -138,8 +138,8 @@ prompt_style: "identity"
 interpretation_templates:
 
   open_summary:
-    # identity: |
-    #   cat -> cat; 135 -> 135; hello -> hello; {placeholder}
+    identity: |
+      cat -> cat; 135 -> 135; hello -> hello; {placeholder}
     # identity: |
     #   Complete the final line. Output only the missing text. Do not explain.
 
@@ -147,11 +147,11 @@ interpretation_templates:
     #   135 -> 135
     #   hello -> hello
     #   {placeholder} ->
-    identity: |
-      The placeholder below stands for an internal representation.
-      In a short phrase, describe what it means.
+    # identity: |
+    #   The placeholder below stands for an internal representation.
+    #   In a short phrase, describe what it means.
 
-      {placeholder}
+    #   {placeholder}
     patchscopes: |
       Representation: {placeholder}
     selfie: |
