@@ -127,7 +127,6 @@ source_pass:
     {options_formatted}
 
     Choose the single best answer. Answer with exactly one letter: A, B, C, or D.
-    Answer:
 # Which templates to run (empty list = all).
 # Valid: open_summary, answer_extraction, persona_probe, agreement_probe, self_recognition
 enabled_templates: ["open_summary"]
@@ -186,7 +185,7 @@ interpretation_templates:
       {placeholder}
 
     selfie: |
-      What do you think {placeholder} is?
+      What is {placeholder}?
     decode_mode: "generate"  # free-form generation, no fixed choices OR generate
 
 
