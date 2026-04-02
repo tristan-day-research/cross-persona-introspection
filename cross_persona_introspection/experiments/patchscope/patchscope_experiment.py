@@ -743,7 +743,7 @@ class PatchscopeExperiment(BaseExperiment):
                                 "extraction_mode": f"prefill_{_tok_spec}",
                                 "extraction_token_index": site.get("token_index"),
                                 "extraction_token_id": site.get("token_id"),
-                                "extraction_token_text": site.get("token_decoded_strip"),
+                                "extraction_token_text": site.get("token_decoded_repr") or site.get("token_decoded_strip"),
                             }
 
                         def _gen_meta() -> dict:
@@ -752,7 +752,10 @@ class PatchscopeExperiment(BaseExperiment):
                                 "extraction_mode": "during_generation",
                                 "extraction_token_index": None,  # position is dynamic (generated)
                                 "extraction_token_id": m.get("activation_token_id"),
-                                "extraction_token_text": m.get("activation_token_decoded_strip"),
+                                "extraction_token_text": (
+                                    m.get("activation_token_decoded_strip")
+                                    or (repr(tokenizer.decode([m["activation_token_id"]])) if m.get("activation_token_id") is not None else None)
+                                ),
                             }
 
                         if _use_both:
@@ -1031,6 +1034,8 @@ class PatchscopeExperiment(BaseExperiment):
                                             extraction_token_text=_emeta.get("extraction_token_text"),
                                             question_text=question.get("question_text", ""),
                                             question_options=question.get("options"),
+                                            category_id=question.get("category_id"),
+                                            category_name=question.get("category_name"),
                                             reporter_system_prompt=(
                                                 (reporter_persona.system_prompt or "").strip()
                                             ),
@@ -1209,11 +1214,19 @@ class PatchscopeExperiment(BaseExperiment):
             if tmpl_name == "answer_extraction" and record.source_direct_answer:
                 record.is_correct = record.predicted == record.source_direct_answer
         else:
-            # Free-form generation: optionally parse structured answer from text
+            # Free-form generation: parse structured answer from text
             if tmpl_name in patchscope_helpers.TEMPLATE_CHOICES:
                 record.parsed_answer, record.parse_success = (
                     patchscope_helpers._parse_constrained(tmpl_name, result["generated_text"])
                 )
+            else:
+                # Fallback: try to extract a single A/B/C/D letter from generated text.
+                # Covers templates like open_summary where the model is asked to
+                # repeat the activation content (often a single answer letter).
+                _gen = result["generated_text"].strip()
+                if _gen and _gen[0] in "ABCD":
+                    record.parsed_answer = _gen[0]
+                    record.parse_success = True
 
             # Remap shuffled letter back to canonical space so it can be
             # compared against source_direct_answer (which is already canonical).

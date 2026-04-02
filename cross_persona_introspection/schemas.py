@@ -229,6 +229,8 @@ class PatchscopeRecord:
     # Original question data
     question_text: Optional[str] = None
     question_options: Optional[dict[str, str]] = None
+    category_id: Optional[str] = None
+    category_name: Optional[str] = None
     # Meta
     error: Optional[str] = None
     timestamp: Optional[str] = None
