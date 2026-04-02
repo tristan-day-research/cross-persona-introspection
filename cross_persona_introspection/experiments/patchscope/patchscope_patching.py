@@ -150,6 +150,7 @@ def extract_activations_during_decode(
     temperature: float = 0.0,
     do_sample: bool = False,
     raw_text: Optional[str] = None,
+    stop_tokens: Optional[list[str]] = None,
 ) -> tuple[dict[int, torch.Tensor], dict[str, Any]]:
     """Prefill the source prompt, then run *decode_steps* single-token forwards; capture hidden[-1].
 
@@ -163,6 +164,10 @@ def extract_activations_during_decode(
     Args:
         decode_steps: Must be >= 1. Greedy (``do_sample=False``) or sampled next token each step.
         max_decode_steps: ``decode_steps`` is clamped to this ceiling.
+        stop_tokens: Optional list of token strings (e.g. ``["A", "B", "C", "D"]``). When
+            provided, decoding stops at the first generated token whose stripped text matches
+            one of these strings, and activations are captured at that step. ``decode_steps``
+            is treated as ``max_decode_steps`` in this mode.
 
     Returns:
         (activations, meta) where activations maps layer index to ``(d_model,)`` tensor from the
@@ -195,6 +200,15 @@ def extract_activations_during_decode(
     captured: dict[int, torch.Tensor] = {}
     generated_ids: list[int] = []
 
+    # When stop_tokens is set, we register hooks on every step (last capture wins)
+    # and break as soon as a generated token matches.
+    _stop_set: frozenset[str] | None = None
+    if stop_tokens:
+        _stop_set = frozenset(t.strip() for t in stop_tokens)
+    _use_stop = _stop_set is not None
+    _stopped_early = False
+    capture_step: int = steps  # updated below when stop_tokens fires
+
     with torch.no_grad():
         out = model(input_ids, use_cache=True)
         past = out.past_key_values
@@ -213,7 +227,11 @@ def extract_activations_during_decode(
             generated_ids.append(int(next_id.item()))
             next_token = next_id.view(1, 1).to(device=device, dtype=torch.long)
 
-            if step == steps - 1:
+            # Register hooks when this is the designated capture step:
+            # - stop_tokens mode: every step (overwrite captured each time)
+            # - fixed mode: only the final step
+            need_hooks = _use_stop or (step == steps - 1)
+            if need_hooks:
                 handles = []
 
                 def make_hook(layer_idx):
@@ -246,6 +264,23 @@ def extract_activations_during_decode(
             past = out.past_key_values
             logits = out.logits[0, -1, :]
 
+            # Check stop condition
+            if _stop_set is not None:
+                decoded = tokenizer.decode([generated_ids[-1]], skip_special_tokens=False).strip()
+                if decoded in _stop_set:
+                    capture_step = step + 1
+                    _stopped_early = True
+                    break
+
+        if _use_stop and not _stopped_early:
+            capture_step = steps
+            logger.warning(
+                "stop_tokens %s not found in %d decode steps; "
+                "capturing at final step.",
+                stop_tokens,
+                steps,
+            )
+
     decoded_pieces = [
         tokenizer.decode([tid], skip_special_tokens=False) for tid in generated_ids
     ]
@@ -254,7 +289,8 @@ def extract_activations_during_decode(
         "generated_decode_concat": "".join(decoded_pieces),
         "generated_decode_pieces": decoded_pieces,
         "generated_token_repr": [repr(p) for p in decoded_pieces],
-        "capture_at_step": steps,
+        "capture_at_step": capture_step,
+        "stopped_on_token": _stopped_early,
     }
     return captured, meta
 

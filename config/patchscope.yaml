@@ -36,8 +36,9 @@ extraction:
   # readout: "prefill"           # prompt-only positions via token_position below
 
   autoregressive:
-    decode_steps: 1          # post-prefill decode forwards before capture (>= 1)
-    max_decode_steps: 64     # clamp for decode_steps
+    decode_steps: "until_answer"   # "until_answer" or integer >= 1
+    answer_tokens: ["A", "B", "C", "D"]  # stop when generated token matches one of these
+    max_decode_steps: 64     # safety cap (also used as step limit for until_answer)
     temperature: 0.0         # with do_sample: sampling temperature (0.0 still samples if do_sample true)
     do_sample: false         # false = greedy argmax each decode step
 
@@ -169,7 +170,7 @@ enabled_templates: ["open_summary"]
 #                   Still wrapped with the model chat template + reporter system prompt.
 #   "patchscopes" — minimal structured user prompt + chat template + reporter system.
 #   "selfie"      — instructional user prompt + chat template + reporter system.
-prompt_style: "direct_answer"
+prompt_style: "identity"
 
 # Whether to wrap interpretation prompts in the model's chat template.
 #   true  — apply_chat_template is used; reporter system prompt goes in the system role.
@@ -205,15 +206,14 @@ interpretation_templates:
     #   In a short phrase, describe what it means.
 
     #   {placeholder}
-    identity: |
-      The placeholder below stands for an internal representation from a language model.
-      Describe briefly what it represents.
+    # identity: |
+    #   The placeholder below stands for an internal representation from a language model.
+    #   Describe briefly what it represents.
 
-      Paris -> city
-      7 -> number
-      running -> action
-      {placeholder} -> 
-
+    #   Paris -> city
+    #   7 -> number
+    #   running -> action
+    #   {placeholder} -> 
     patchscopes: |
       The placeholder below stands for an internal representation.
       In a short phrase, describe what it means.
@@ -225,17 +225,17 @@ interpretation_templates:
   
     # selfie: |
     #   <|start_header_id|>user<|end_header_id|> {placeholder} <|eot_id|><|start_header_id|>assistant<|end_header_id|> Sure, I will summarize the message:
-    selfie: |
-      <|begin_of_text|><|redacted_start_header_id|>user<|redacted_end_header_id|>
+    # selfie: |
+    #   <|begin_of_text|><|redacted_start_header_id|>user<|redacted_end_header_id|>
 
-      {persona_prompt}
+    #   {persona_prompt}
 
-      The hidden content below corresponds to another agent's selected answer.
-      Recover the answer choice it represents.
+    #   The hidden content below corresponds to another agent's selected answer.
+    #   Recover the answer choice it represents.
 
-      {placeholder}<|eot_id|><|redacted_start_header_id|>assistant<|redacted_end_header_id|>
+    #   {placeholder}<|eot_id|><|redacted_start_header_id|>assistant<|redacted_end_header_id|>
 
-      Answer:
+    #   Answer:
     direct_answer: |
       {placeholder}
       Read the hidden content above and recover the answer choice it indicates.

@@ -495,7 +495,13 @@ class PatchscopeExperiment(BaseExperiment):
                     _ex_boundary = extraction_cfg.get("assistant_boundary_marker")
                     _readout = (extraction_cfg.get("readout") or "prefill").strip().lower()
                     _ar = extraction_cfg.get("autoregressive") or {}
-                    _ar_steps = int(_ar.get("decode_steps", 1))
+                    _raw_steps = _ar.get("decode_steps", 1)
+                    _ar_stop_tokens: list[str] | None = None
+                    if isinstance(_raw_steps, str) and _raw_steps.strip().lower() == "until_answer":
+                        _ar_stop_tokens = _ar.get("answer_tokens", ["A", "B", "C", "D"])
+                        _ar_steps = int(_ar.get("max_decode_steps", 64))
+                    else:
+                        _ar_steps = int(_raw_steps)
                     _ar_max = int(_ar.get("max_decode_steps", 64))
                     _ar_temp = float(_ar.get("temperature", 0.0))
                     _ar_sample = bool(_ar.get("do_sample", False))
@@ -519,13 +525,22 @@ class PatchscopeExperiment(BaseExperiment):
                                 messages, tokenize=False, add_generation_prompt=True
                             )
                         if use_ar_extract:
-                            logger.info(
-                                "Generation-time Phase-1 extraction (decode_steps=%s): activations are "
-                                "hidden[:, -1, :] after that many post-prefill decode forwards — from "
-                                "generated tokens, not from extraction.token_position / "
-                                "last_before_assistant.",
-                                _ar_steps,
-                            )
+                            if _ar_stop_tokens is not None:
+                                logger.info(
+                                    "Generation-time Phase-1 extraction (until_answer, stop_tokens=%s, "
+                                    "max_steps=%s): activations captured at the decode step that produces "
+                                    "a matching answer token.",
+                                    _ar_stop_tokens,
+                                    _ar_steps,
+                                )
+                            else:
+                                logger.info(
+                                    "Generation-time Phase-1 extraction (decode_steps=%s): activations are "
+                                    "hidden[:, -1, :] after that many post-prefill decode forwards — from "
+                                    "generated tokens, not from extraction.token_position / "
+                                    "last_before_assistant.",
+                                    _ar_steps,
+                                )
                         else:
                             patchscope_helpers.validate_extraction_position(
                                 tokenizer, source_text,
@@ -558,6 +573,7 @@ class PatchscopeExperiment(BaseExperiment):
                                 temperature=_ar_temp,
                                 do_sample=_ar_sample,
                                 raw_text=source_raw_text,
+                                stop_tokens=_ar_stop_tokens,
                             )
                         )
                         activations[sp_name][question_idx] = _ar_caps
