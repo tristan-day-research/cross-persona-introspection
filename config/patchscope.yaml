@@ -69,10 +69,6 @@ generation:
   temperature: 0.0
   do_sample: false
   use_cache: false                 # applies to both generate() and model(...) decode paths
-  # decode_mode is now per-template (set in interpretation_templates above)
-  # When true, save full-vocab log-softmax at each choice token position
-  # (choice_logprobs + total_choice_prob). Costs ~nothing extra compute
-  # since we already have the full logit vector; just stores more per record.
   save_logprobs: true
 
 relevancy:
