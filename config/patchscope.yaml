@@ -21,12 +21,6 @@ layer_pairs:
   - [25, 25]
   - [30, 30]
 
-# Option 2: full cross-product sweep (uncomment, remove layer_pairs above)
-# layer_sweep:
-#   enabled: true
-#   source_layers: [4, 8, 12, 16, 20, 24, 28, 31]
-#   injection_layers: [1, 3, 5, 8]
-
 
 extraction:
 
@@ -50,8 +44,7 @@ extraction:
   #            assistant_boundary_marker (end of user turn, before assistant header tokens).
   #   <int> — explicit 0-based index into encode(templated_source, add_special_tokens=False).
 
-  token_position: "last_before_assistant"
-  # Alternative: token_position: "during_generation" (same as readout: during_generation).
+  token_position: "during_generation"  # Alternative: token_position: "during_generation" (same as readout: during_generation).
 
   # Substring search in the templated source string; only used when token_position is
   # last_before_assistant. Must match your model's chat template (Llama 3 Instruct default).
