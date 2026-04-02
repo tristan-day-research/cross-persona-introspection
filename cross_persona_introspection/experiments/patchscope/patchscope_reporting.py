@@ -130,11 +130,13 @@ def write_run_log(
         "SOURCE ACTIVATION EXTRACTION (Phase 1 — patchscope_patching)",
         thin,
         f"  extraction.readout : {ex_cfg.get('readout', 'prefill')!r}",
-        "    prefill = one forward at token_position; autoregressive = prefill then decode_steps",
-        "    single-token forwards, capture hidden[batch,-1,:] on the last decode forward.",
+        "    prefill = one forward at token_position (prompt-only; NOT assistant-generated text).",
+        "    during_generation / autoregressive = prefill then decode_steps single-token forwards,",
+        "    capture hidden[batch,-1,:] on the last decode forward (generated-token activations).",
         f"  extraction.token_position : {ex_cfg.get('token_position', 'last')!r}",
-        "    → used only when readout is prefill (or autoregressive with decode_steps < 1).",
-        "  Values: 'last' = final token of templated string; 'last_before_assistant' = before marker.",
+        "    → prefill only when readout is prefill. Use token_position: during_generation OR",
+        "    readout: during_generation for activations while the model generates its answer.",
+        "  Prefill values: 'last', 'last_before_assistant' (end of user turn, often whitespace), int index.",
         f"  assistant_boundary_marker : {ex_cfg.get('assistant_boundary_marker', '(default in code)')!r}",
         "",
     ]
@@ -203,9 +205,13 @@ def write_run_log(
                     f"  ERROR: {site['error']}",
                     "",
                 ]
-            elif site.get("readout") == "autoregressive":
+            elif site.get("capture_mode") == "during_generation" or site.get("readout") in (
+                "autoregressive",
+                "during_generation",
+                "while_generating",
+            ):
                 lines += [
-                    "  ── ACTIVATION EXTRACTION (autoregressive readout) ──",
+                    "  ── ACTIVATION EXTRACTION (during generation — not prefill token_position) ──",
                     f"  decode_steps     : {site.get('decode_steps')}",
                     f"  max_decode_steps : {site.get('max_decode_steps')}",
                     f"  temperature      : {site.get('temperature')}",
@@ -243,8 +249,16 @@ def write_run_log(
                     f"  token_id                  : {site.get('token_id')}",
                     f"  decoded token (repr)      : {site.get('token_decoded_repr')}",
                     f"  decoded token (strip)     : {site.get('token_decoded_strip')!r}",
-                    "",
                 ]
+                _ts = site.get("token_decoded_strip")
+                if _ts is not None and str(_ts).strip() == "":
+                    lines.append(
+                        "  note                      : Whitespace-only (or empty-after-strip) token is "
+                        "typical for last_before_assistant — end of user turn before assistant header, "
+                        "not the MCQ letter. For activations at generated answer tokens, set "
+                        "extraction.readout: during_generation (or token_position: during_generation)."
+                    )
+                lines.append("")
             lines += [
                 "  ── FULL SOURCE PROMPT (exact tokens sent to model) ──",
             ]

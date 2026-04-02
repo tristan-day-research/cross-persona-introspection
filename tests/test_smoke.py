@@ -4,6 +4,8 @@ import json
 import tempfile
 from pathlib import Path
 
+import pytest
+
 
 def test_imports():
     """All modules should import without error."""
@@ -173,7 +175,12 @@ def test_config_loading():
         ps_config = yaml.safe_load(f)
     assert "extraction" in ps_config
     ext = ps_config["extraction"]
-    assert ext.get("readout", "prefill") in ("prefill", "autoregressive")
+    assert ext.get("readout", "prefill") in (
+        "prefill",
+        "autoregressive",
+        "during_generation",
+        "while_generating",
+    )
     assert "autoregressive" in ext
     assert "decode_steps" in ext["autoregressive"]
     assert "injection" in ps_config
@@ -216,6 +223,7 @@ def test_patchscope_helpers():
         _resolve_layers,
         build_interpretation_prompt,
         describe_source_extraction_site,
+        extraction_uses_generation_time_capture,
         format_source_pass_user_message,
         reporter_sample_opposing_qualifies,
         resolve_extraction_token_index,
@@ -235,8 +243,19 @@ def test_patchscope_helpers():
     # Config loading
     cfg = _load_patchscope_config("patchscope.yaml")
     ext = cfg.get("extraction") or {}
-    assert ext.get("readout", "prefill") in ("prefill", "autoregressive")
+    assert ext.get("readout", "prefill") in (
+        "prefill",
+        "autoregressive",
+        "during_generation",
+        "while_generating",
+    )
     assert isinstance(ext.get("autoregressive"), dict)
+    assert extraction_uses_generation_time_capture(
+        {"readout": "prefill", "token_position": "during_generation"}
+    )
+    assert not extraction_uses_generation_time_capture(
+        {"readout": "prefill", "token_position": "last"}
+    )
     inj = cfg.get("injection") or {}
     if "layer" in inj:
         assert inj["layer"] in (3, 8)  # optional when using layer_pairs only
@@ -291,6 +310,9 @@ def test_patchscope_helpers():
     pos, meta = resolve_extraction_token_index(tok, boundary_text, "last_before_assistant")
     assert pos < resolve_extraction_token_index(tok, boundary_text, "last")[0]
     assert "boundary_char_index" in meta
+
+    with pytest.raises(ValueError, match="during_generation"):
+        resolve_extraction_token_index(tok, "x", "during_generation")
 
     assert reporter_sample_opposing_qualifies(
         "persona_conservative", "persona_progressive", "cross_ideology"

@@ -499,7 +499,16 @@ class PatchscopeExperiment(BaseExperiment):
                     _ar_max = int(_ar.get("max_decode_steps", 64))
                     _ar_temp = float(_ar.get("temperature", 0.0))
                     _ar_sample = bool(_ar.get("do_sample", False))
-                    use_ar_extract = _readout == "autoregressive" and _ar_steps >= 1
+                    _wants_gen_capture = patchscope_helpers.extraction_uses_generation_time_capture(
+                        extraction_cfg
+                    )
+                    if _wants_gen_capture and _ar_steps < 1:
+                        logger.warning(
+                            "Generation-time extraction requested but autoregressive.decode_steps < 1; "
+                            "using decode_steps=1."
+                        )
+                        _ar_steps = 1
+                    use_ar_extract = _wants_gen_capture and _ar_steps >= 1
 
                     # Validate extraction position once (first question of first persona)
                     if not hasattr(self, '_extraction_validated'):
@@ -511,9 +520,10 @@ class PatchscopeExperiment(BaseExperiment):
                             )
                         if use_ar_extract:
                             logger.info(
-                                "extraction.readout=autoregressive, decode_steps=%s: Phase-1 activations "
-                                "are hidden[:, -1, :] after that many post-prefill decode forwards "
-                                "(not extraction.token_position).",
+                                "Generation-time Phase-1 extraction (decode_steps=%s): activations are "
+                                "hidden[:, -1, :] after that many post-prefill decode forwards — from "
+                                "generated tokens, not from extraction.token_position / "
+                                "last_before_assistant.",
                                 _ar_steps,
                             )
                         else:
@@ -608,7 +618,8 @@ class PatchscopeExperiment(BaseExperiment):
                         )
                         if use_ar_extract:
                             _site = {
-                                "readout": "autoregressive",
+                                "readout": _readout,
+                                "capture_mode": "during_generation",
                                 "decode_steps": _ar_steps,
                                 "max_decode_steps": _ar_max,
                                 "temperature": _ar_temp,

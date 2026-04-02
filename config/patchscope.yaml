@@ -30,20 +30,18 @@ layer_pairs:
 
 extraction:
 
-  # Phase-1 activation readout:
-  #   "prefill" (default) — one forward over the full source string; read hidden at token_position below.
-  #   "autoregressive" — prefill without hooks, then autoregressive.decode_steps single-token forwards;
-  #            capture hidden[batch, -1, :] on the last of those forwards (while the model is generating).
-  #            token_position does not select the captured vector (direct-answer logits still use full prefix).
-  readout: "prefill"
+  # Phase-1: prefill = prompt-only (token_position). during_generation = activations from generated tokens.
+  # Aliases: readout autoregressive / while_generating; or token_position during_generation (same idea).
+  readout: "during_generation"   # Phase-1: hidden states from generated tokens (see autoregressive.*)
+  # readout: "prefill"           # prompt-only positions via token_position below
 
   autoregressive:
-    decode_steps: 1          # >= 1 when readout is autoregressive
+    decode_steps: 1          # post-prefill decode forwards before capture (>= 1)
     max_decode_steps: 64     # clamp for decode_steps
     temperature: 0.0         # with do_sample: sampling temperature (0.0 still samples if do_sample true)
     do_sample: false         # false = greedy argmax each decode step
 
-  # Where to read hidden state when readout is prefill:
+  # Prefill-only when readout is prefill (ignored when readout is during_generation):
   #   "last" — last token of the full chat-templated string (add_generation_prompt=True).
   #            Often decodes as "\n\n" after <|eot_id|><|start_header_id|>assistant — template scaffolding,
   #            not the literal "Answer :" token.
@@ -52,6 +50,7 @@ extraction:
   #   <int> — explicit 0-based index into encode(templated_source, add_special_tokens=False).
 
   token_position: "last_before_assistant"
+  # Alternative: token_position: "during_generation" (same as readout: during_generation).
 
   # Substring search in the templated source string; only used when token_position is
   # last_before_assistant. Must match your model's chat template (Llama 3 Instruct default).

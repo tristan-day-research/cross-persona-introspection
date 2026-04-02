@@ -719,10 +719,43 @@ def resolve_extraction_token_index(
             raise ValueError(f"extraction token index {pos} out of range for {n_tok} tokens")
         return pos, meta
 
+    if spec in ("during_generation", "while_generating", "on_generation", "generated"):
+        raise ValueError(
+            f"extraction.token_position {token_position!r} selects activations from tokens the model "
+            "generates after the prompt (post-prefill decode), not a prefill index. "
+            "Phase-1 uses extract_activations_during_decode when this is set — ensure "
+            "extraction.autoregressive.decode_steps >= 1 and that the experiment enables "
+            "generation-time capture (readout or token_position). "
+            "This error means resolve_extraction_token_index was called for a prefill-only path; "
+            "check configuration."
+        )
+
     raise ValueError(
         f"Unknown extraction.token_position {token_position!r}. "
-        "Use 'last', 'last_before_assistant', or a non-negative integer."
+        "Use 'last', 'last_before_assistant', a non-negative integer, or for generated-token "
+        "activations use readout: during_generation (or token_position: during_generation)."
     )
+
+
+_GEN_READOUT_MODES = frozenset({"autoregressive", "during_generation", "while_generating"})
+_GEN_TOKEN_POSITION_SPECS = frozenset(
+    {"during_generation", "while_generating", "on_generation", "generated"}
+)
+
+
+def _norm_extraction_key(s: str) -> str:
+    return s.strip().lower().replace("-", "_")
+
+
+def extraction_uses_generation_time_capture(extraction_cfg: dict) -> bool:
+    """True when Phase-1 activations should come from post-prefill decode (generated tokens)."""
+    readout = _norm_extraction_key(str(extraction_cfg.get("readout") or "prefill"))
+    if readout in _GEN_READOUT_MODES:
+        return True
+    tp = extraction_cfg.get("token_position", "last")
+    if isinstance(tp, str) and _norm_extraction_key(tp) in _GEN_TOKEN_POSITION_SPECS:
+        return True
+    return False
 
 
 def _last_token_index_ending_before_char(
