@@ -170,7 +170,7 @@ enabled_templates: ["open_summary"]
 #                   Still wrapped with the model chat template + reporter system prompt.
 #   "patchscopes" — minimal structured user prompt + chat template + reporter system.
 #   "selfie"      — instructional user prompt + chat template + reporter system.
-prompt_style: "identity"
+prompt_style: "selfie"
 
 # Whether to wrap interpretation prompts in the model's chat template.
 #   true  — apply_chat_template is used; reporter system prompt goes in the system role.
