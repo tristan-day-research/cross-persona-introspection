@@ -208,12 +208,12 @@ class PatchscopeRecord:
     choice_logprobs: Optional[dict[str, float]] = None  # log-softmax over full vocab at choice tokens
     total_choice_prob: Optional[float] = None           # sum of full-vocab probs on choice tokens
     predicted: Optional[str] = None                     # argmax choice
-    is_correct: Optional[bool] = None                   # predicted == source_direct_answer
+    is_correct: Optional[bool] = None                   # predicted == source_last_prefill_answer
     # Relevancy scores (SelfIE Section 3.2)
     relevancy_scores: Optional[list[float]] = None
     mean_relevancy: Optional[float] = None
     # Ground truth (from source's direct answer under that persona)
-    source_direct_answer: Optional[str] = None          # from prefill logits (canonical)
+    source_last_prefill_answer: Optional[str] = None          # from prefill logits (canonical)
     source_generated_answer: Optional[str] = None       # from actual generation during decode (canonical)
     source_answer_probs: Optional[dict[str, float]] = None
     # Source confidence metrics

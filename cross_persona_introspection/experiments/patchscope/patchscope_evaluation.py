@@ -41,12 +41,12 @@ def compute_metrics(records: list[PatchscopeRecord]) -> dict:
             r for r in constrained
             if r.template_name == "answer_extraction"
             and r.condition == condition
-            and r.source_direct_answer is not None
+            and r.source_last_prefill_answer is not None
         ]
         if recs:
             correct = sum(
                 1 for r in recs
-                if r.reporter_parsed_answer and r.reporter_parsed_answer[0] == r.source_direct_answer
+                if r.reporter_parsed_answer and r.reporter_parsed_answer[0] == r.source_last_prefill_answer
             )
             metrics[f"answer_extraction_{condition}_accuracy"] = round(
                 correct / len(recs), 4

@@ -1037,7 +1037,7 @@ class PatchscopeExperiment(BaseExperiment):
                                             source_layer=src_layer,
                                             injection_layer=inj_layer,
                                             injection_mode=injection_mode,
-                                            source_direct_answer=source_direct["answer"],
+                                            source_last_prefill_answer=source_direct["answer"],
                                             source_generated_answer=source_direct.get("source_generated_answer"),
                                             source_answer_probs=source_direct["probs"],
                                             source_chosen_prob=source_direct.get("source_chosen_prob"),
@@ -1166,8 +1166,8 @@ class PatchscopeExperiment(BaseExperiment):
             record.choice_logprobs = cached.get("choice_logprobs")
             record.total_choice_prob = cached.get("total_choice_prob")
             record.predicted = cached.get("predicted")
-            if tmpl_name == "answer_extraction" and record.source_direct_answer:
-                record.is_correct = record.predicted == record.source_direct_answer
+            if tmpl_name == "answer_extraction" and record.source_last_prefill_answer:
+                record.is_correct = record.predicted == record.source_last_prefill_answer
             return
 
         # ── 3. Patch activation + decode ─────────────────────────────────
@@ -1225,8 +1225,8 @@ class PatchscopeExperiment(BaseExperiment):
             record.total_choice_prob = result.get("total_choice_prob")
             record.reporter_parsed_answer = record.predicted
             record.parse_success = True
-            if tmpl_name == "answer_extraction" and record.source_direct_answer:
-                record.is_correct = record.predicted == record.source_direct_answer
+            if tmpl_name == "answer_extraction" and record.source_last_prefill_answer:
+                record.is_correct = record.predicted == record.source_last_prefill_answer
         else:
             # Free-form generation: parse structured answer from text
             if tmpl_name in patchscope_helpers.TEMPLATE_CHOICES:
@@ -1243,7 +1243,7 @@ class PatchscopeExperiment(BaseExperiment):
                     record.parse_success = True
 
             # Remap shuffled letter back to canonical space so it can be
-            # compared against source_direct_answer (which is already canonical).
+            # compared against source_last_prefill_answer (which is already canonical).
             if shuffle_remap and record.reporter_parsed_answer:
                 record.reporter_parsed_answer = shuffle_remap.get(
                     record.reporter_parsed_answer, record.reporter_parsed_answer

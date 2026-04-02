@@ -143,7 +143,7 @@ def run_source_overrides(
                         source_layer=src_layer,
                         injection_layer=inj_layer,
                         injection_mode=injection_mode,
-                        source_direct_answer=None,
+                        source_last_prefill_answer=None,
                         source_answer_probs=None,
                         question_text=so_raw_text,
                         question_options=None,
