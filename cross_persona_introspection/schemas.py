@@ -219,6 +219,7 @@ class PatchscopeRecord:
     # Source confidence metrics
     source_chosen_prob: Optional[float] = None       # P(source's top answer)
     source_margin: Optional[float] = None            # top1_prob - top2_prob
+    source_answer_entropy: Optional[float] = None    # entropy of source_answer_probs
     # Reporter confidence metrics
     reporter_chosen_prob: Optional[float] = None     # P(reporter's predicted answer)
     reporter_margin: Optional[float] = None          # top1_prob - top2_prob
@@ -232,6 +233,8 @@ class PatchscopeRecord:
     question_options: Optional[dict[str, str]] = None
     category_id: Optional[str] = None
     category_name: Optional[str] = None
+    expected_disagreement: Optional[str] = None      # from task JSON
+    neutral_reference_answer: Optional[str] = None   # ground truth from task JSON
     # Meta
     error: Optional[str] = None
     timestamp: Optional[str] = None

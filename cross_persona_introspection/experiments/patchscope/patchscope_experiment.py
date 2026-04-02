@@ -794,6 +794,10 @@ class PatchscopeExperiment(BaseExperiment):
                         )
 
                         _sorted_cp = sorted(canonical_probs.values(), reverse=True)
+                        import math
+                        _entropy = -sum(
+                            p * math.log(p + 1e-10) for p in canonical_probs.values()
+                        ) if canonical_probs else None
 
                         # Source generated answer: the token actually produced
                         # during autoregressive decode, remapped to canonical.
@@ -817,6 +821,7 @@ class PatchscopeExperiment(BaseExperiment):
                             "option_order": [remap.get(l, l) for l in ["A", "B", "C", "D"]],
                             "source_chosen_prob": _sorted_cp[0] if _sorted_cp else None,
                             "source_margin": (_sorted_cp[0] - _sorted_cp[1]) if len(_sorted_cp) > 1 else None,
+                            "source_answer_entropy": _entropy,
                             "source_generated_answer": _gen_answer_canonical,
                         }
 
@@ -1042,6 +1047,7 @@ class PatchscopeExperiment(BaseExperiment):
                                             source_answer_probs=source_direct["probs"],
                                             source_chosen_prob=source_direct.get("source_chosen_prob"),
                                             source_margin=source_direct.get("source_margin"),
+                                            source_answer_entropy=source_direct.get("source_answer_entropy"),
                                             extraction_mode=_emeta.get("extraction_mode"),
                                             extraction_token_index=_emeta.get("extraction_token_index"),
                                             extraction_token_id=_emeta.get("extraction_token_id"),
@@ -1050,6 +1056,8 @@ class PatchscopeExperiment(BaseExperiment):
                                             question_options=question.get("options"),
                                             category_id=question.get("category_id"),
                                             category_name=question.get("category_name"),
+                                            expected_disagreement=question.get("expected_disagreement"),
+                                            neutral_reference_answer=question.get("neutral_reference_answer"),
                                             reporter_system_prompt=(
                                                 (reporter_persona.system_prompt or "").strip()
                                             ),
