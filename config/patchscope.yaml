@@ -30,7 +30,20 @@ layer_pairs:
 
 extraction:
 
-  # Where to read hidden state in Phase 1 (same forward as A/B/C/D logits):
+  # Phase-1 activation readout:
+  #   "prefill" (default) — one forward over the full source string; read hidden at token_position below.
+  #   "autoregressive" — prefill without hooks, then autoregressive.decode_steps single-token forwards;
+  #            capture hidden[batch, -1, :] on the last of those forwards (while the model is generating).
+  #            token_position does not select the captured vector (direct-answer logits still use full prefix).
+  readout: "prefill"
+
+  autoregressive:
+    decode_steps: 1          # >= 1 when readout is autoregressive
+    max_decode_steps: 64     # clamp for decode_steps
+    temperature: 0.0         # with do_sample: sampling temperature (0.0 still samples if do_sample true)
+    do_sample: false         # false = greedy argmax each decode step
+
+  # Where to read hidden state when readout is prefill:
   #   "last" — last token of the full chat-templated string (add_generation_prompt=True).
   #            Often decodes as "\n\n" after <|eot_id|><|start_header_id|>assistant — template scaffolding,
   #            not the literal "Answer :" token.
@@ -40,10 +53,8 @@ extraction:
 
   token_position: "last_before_assistant"
 
-
   # Substring search in the templated source string; only used when token_position is
   # last_before_assistant. Must match your model's chat template (Llama 3 Instruct default).
-  assistant_boundary_marker: "<|eot_id|><|start_header_id|>assistant"
   assistant_boundary_marker: "<|eot_id|><|start_header_id|>assistant<|end_header_id|>"
 
   # layers: "middle"          # "all", "middle", or [8, 16, 24]
@@ -99,8 +110,8 @@ samples_per_category: null      # null = all in category
 
 # Controls
 controls:
-  text_only_baseline: true
-  shuffled_activation: true
+  text_only_baseline: false
+  shuffled_activation: false
   control_sample_rate: 0.5      # 1.0 = run controls for every cell (needed for matched source_gain)
 
 # Companion .txt log only (does not change JSONL records or metrics).

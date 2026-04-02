@@ -127,14 +127,14 @@ def write_run_log(
     ex_cfg = ps.get("extraction") or {}
     lines += [
         thin,
-        "SOURCE ACTIVATION EXTRACTION (Phase 1 — see patchscope_patching.extract_activations_multi_layer)",
+        "SOURCE ACTIVATION EXTRACTION (Phase 1 — patchscope_patching)",
         thin,
+        f"  extraction.readout : {ex_cfg.get('readout', 'prefill')!r}",
+        "    prefill = one forward at token_position; autoregressive = prefill then decode_steps",
+        "    single-token forwards, capture hidden[batch,-1,:] on the last decode forward.",
         f"  extraction.token_position : {ex_cfg.get('token_position', 'last')!r}",
-        "    → one sequence index per layer; hidden[batch, pos, :] at each hooked layer after one forward.",
-        "  Values: 'last' = final token of the full templated string (often '\\n\\n' after the",
-        "    assistant header — that is normal Llama chat scaffolding, not your MCQ text).",
-        "  'last_before_assistant' = last token before extraction.assistant_boundary_marker",
-        "    (default substring matches Llama 3 user/assistant boundary).",
+        "    → used only when readout is prefill (or autoregressive with decode_steps < 1).",
+        "  Values: 'last' = final token of templated string; 'last_before_assistant' = before marker.",
         f"  assistant_boundary_marker : {ex_cfg.get('assistant_boundary_marker', '(default in code)')!r}",
         "",
     ]
@@ -203,6 +203,31 @@ def write_run_log(
                     f"  ERROR: {site['error']}",
                     "",
                 ]
+            elif site.get("readout") == "autoregressive":
+                lines += [
+                    "  ── ACTIVATION EXTRACTION (autoregressive readout) ──",
+                    f"  decode_steps     : {site.get('decode_steps')}",
+                    f"  max_decode_steps : {site.get('max_decode_steps')}",
+                    f"  temperature      : {site.get('temperature')}",
+                    f"  do_sample        : {site.get('do_sample')}",
+                    f"  capture          : {site.get('token_position_spec')!r}",
+                    f"  prefill_tokens   : {site.get('n_tokens')}",
+                ]
+                gids = site.get("generated_token_ids")
+                if gids is not None:
+                    lines.append(f"  generated_ids    : {gids}")
+                gtext = site.get("generated_decode_concat")
+                if gtext is not None:
+                    lines.append(f"  generated_text   : {gtext!r}")
+                pieces = site.get("generated_decode_pieces") or []
+                trepr = site.get("generated_token_repr") or []
+                if pieces:
+                    lines.append("  per-step tokens  :")
+                    for i, piece in enumerate(pieces):
+                        tid = gids[i] if gids and i < len(gids) else "?"
+                        r = trepr[i] if i < len(trepr) else repr(piece)
+                        lines.append(f"    step {i + 1}: id={tid} {r} -> {piece!r}")
+                lines.append("")
             elif site:
                 lines += [
                     "  ── ACTIVATION EXTRACTION SITE (source prompt; same index at every hooked layer) ──",

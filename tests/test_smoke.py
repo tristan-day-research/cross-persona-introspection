@@ -172,6 +172,10 @@ def test_config_loading():
     with open(config_dir / "patchscope.yaml") as f:
         ps_config = yaml.safe_load(f)
     assert "extraction" in ps_config
+    ext = ps_config["extraction"]
+    assert ext.get("readout", "prefill") in ("prefill", "autoregressive")
+    assert "autoregressive" in ext
+    assert "decode_steps" in ext["autoregressive"]
     assert "injection" in ps_config
     assert "source_pass" in ps_config
     assert "interpretation_templates" in ps_config
@@ -230,6 +234,9 @@ def test_patchscope_helpers():
 
     # Config loading
     cfg = _load_patchscope_config("patchscope.yaml")
+    ext = cfg.get("extraction") or {}
+    assert ext.get("readout", "prefill") in ("prefill", "autoregressive")
+    assert isinstance(ext.get("autoregressive"), dict)
     inj = cfg.get("injection") or {}
     if "layer" in inj:
         assert inj["layer"] in (3, 8)  # optional when using layer_pairs only

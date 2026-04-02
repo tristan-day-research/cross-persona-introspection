@@ -54,7 +54,8 @@ reads their cached K/V.  So the patch's effect persists through the cache
 without the hook needing to fire again.
 """
 
-from typing import Optional
+import logging
+from typing import Any, Optional
 
 import torch
 import torch.nn.functional as F
@@ -63,6 +64,8 @@ from cross_persona_introspection.experiments.patchscope.patchscope_helpers impor
     _get_transformer_layers,
     resolve_extraction_token_index,
 )
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -133,6 +136,127 @@ def extract_activations_multi_layer(
             h.remove()
 
     return captured
+
+
+def extract_activations_during_decode(
+    model,
+    tokenizer,
+    device,
+    messages: list[dict],
+    layer_indices: list[int],
+    decode_steps: int,
+    *,
+    max_decode_steps: int = 64,
+    temperature: float = 0.0,
+    do_sample: bool = False,
+    raw_text: Optional[str] = None,
+) -> tuple[dict[int, torch.Tensor], dict[str, Any]]:
+    """Prefill the source prompt, then run *decode_steps* single-token forwards; capture hidden[-1].
+
+    Use this when ``extraction.readout: autoregressive`` so activations come from the model
+    **after** it has begun generating (e.g. after the first answer letter), instead of from a
+    fixed prefill index (often ``Answer:`` scaffolding).
+
+    The hook runs on the **last** decode forward; ``hidden[batch, -1, :]`` is the representation
+    at the position of the **last** generated token in this rollout (not the prefill prefix).
+
+    Args:
+        decode_steps: Must be >= 1. Greedy (``do_sample=False``) or sampled next token each step.
+        max_decode_steps: ``decode_steps`` is clamped to this ceiling.
+
+    Returns:
+        (activations, meta) where activations maps layer index to ``(d_model,)`` tensor from the
+        last decode forward only, and meta includes ``generated_token_ids`` and decoded strings
+        for logging.
+    """
+    if decode_steps < 1:
+        raise ValueError("extract_activations_during_decode requires decode_steps >= 1")
+
+    if raw_text is not None:
+        input_text = raw_text
+    else:
+        input_text = tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+    input_ids = tokenizer.encode(
+        input_text, return_tensors="pt", add_special_tokens=False
+    ).to(device)
+
+    steps = min(int(decode_steps), int(max_decode_steps))
+    if steps < decode_steps:
+        logger.warning(
+            "extraction.autoregressive.decode_steps=%s exceeds max_decode_steps=%s; using %s",
+            decode_steps,
+            max_decode_steps,
+            steps,
+        )
+
+    transformer_layers = _get_transformer_layers(model)
+    captured: dict[int, torch.Tensor] = {}
+    generated_ids: list[int] = []
+
+    with torch.no_grad():
+        out = model(input_ids, use_cache=True)
+        past = out.past_key_values
+        logits = out.logits[0, -1, :]
+
+        for step in range(steps):
+            if do_sample:
+                if temperature and temperature > 0:
+                    probs = F.softmax(logits / temperature, dim=-1)
+                else:
+                    probs = F.softmax(logits, dim=-1)
+                next_id = torch.multinomial(probs, num_samples=1).squeeze(-1)
+            else:
+                next_id = logits.argmax(dim=-1)
+
+            generated_ids.append(int(next_id.item()))
+            next_token = next_id.view(1, 1).to(device=device, dtype=torch.long)
+
+            if step == steps - 1:
+                handles = []
+
+                def make_hook(layer_idx):
+                    def hook_fn(module, input, output):
+                        hidden = output[0] if isinstance(output, tuple) else output
+                        captured[layer_idx] = hidden[0, -1, :].detach().clone()
+
+                    return hook_fn
+
+                for idx in layer_indices:
+                    handles.append(
+                        transformer_layers[idx].register_forward_hook(make_hook(idx))
+                    )
+                try:
+                    out = model(
+                        next_token,
+                        past_key_values=past,
+                        use_cache=True,
+                    )
+                finally:
+                    for h in handles:
+                        h.remove()
+            else:
+                out = model(
+                    next_token,
+                    past_key_values=past,
+                    use_cache=True,
+                )
+
+            past = out.past_key_values
+            logits = out.logits[0, -1, :]
+
+    decoded_pieces = [
+        tokenizer.decode([tid], skip_special_tokens=False) for tid in generated_ids
+    ]
+    meta: dict[str, Any] = {
+        "generated_token_ids": generated_ids,
+        "generated_decode_concat": "".join(decoded_pieces),
+        "generated_decode_pieces": decoded_pieces,
+        "generated_token_repr": [repr(p) for p in decoded_pieces],
+        "capture_at_step": steps,
+    }
+    return captured, meta
 
 
 # ---------------------------------------------------------------------------

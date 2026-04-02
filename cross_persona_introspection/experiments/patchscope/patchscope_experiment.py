@@ -493,6 +493,13 @@ class PatchscopeExperiment(BaseExperiment):
 
                     _ex_tok = extraction_cfg.get("token_position", "last")
                     _ex_boundary = extraction_cfg.get("assistant_boundary_marker")
+                    _readout = (extraction_cfg.get("readout") or "prefill").strip().lower()
+                    _ar = extraction_cfg.get("autoregressive") or {}
+                    _ar_steps = int(_ar.get("decode_steps", 1))
+                    _ar_max = int(_ar.get("max_decode_steps", 64))
+                    _ar_temp = float(_ar.get("temperature", 0.0))
+                    _ar_sample = bool(_ar.get("do_sample", False))
+                    use_ar_extract = _readout == "autoregressive" and _ar_steps >= 1
 
                     # Validate extraction position once (first question of first persona)
                     if not hasattr(self, '_extraction_validated'):
@@ -502,31 +509,59 @@ class PatchscopeExperiment(BaseExperiment):
                             source_text = tokenizer.apply_chat_template(
                                 messages, tokenize=False, add_generation_prompt=True
                             )
-                        patchscope_helpers.validate_extraction_position(
-                            tokenizer, source_text,
-                            _ex_tok,
-                            tmpl_name=f"source_extraction[{sp_name}]",
-                            boundary_marker=_ex_boundary,
-                        )
-                        if isinstance(_ex_tok, str) and _ex_tok.strip().lower().replace(
-                            "-", "_"
-                        ) in ("last_before_assistant", "before_assistant"):
+                        if use_ar_extract:
                             logger.info(
-                                "extraction.token_position is last_before_assistant: hidden state is "
-                                "read at the end of the user turn (before assistant scaffolding). "
-                                "Source direct-answer logits (A/B/C/D) still use the full templated "
-                                "prefix through the last token — comparable to extraction only if you "
-                                "interpret them as different readout sites."
+                                "extraction.readout=autoregressive, decode_steps=%s: Phase-1 activations "
+                                "are hidden[:, -1, :] after that many post-prefill decode forwards "
+                                "(not extraction.token_position).",
+                                _ar_steps,
                             )
+                        else:
+                            patchscope_helpers.validate_extraction_position(
+                                tokenizer, source_text,
+                                _ex_tok,
+                                tmpl_name=f"source_extraction[{sp_name}]",
+                                boundary_marker=_ex_boundary,
+                            )
+                            if isinstance(_ex_tok, str) and _ex_tok.strip().lower().replace(
+                                "-", "_"
+                            ) in ("last_before_assistant", "before_assistant"):
+                                logger.info(
+                                    "extraction.token_position is last_before_assistant: hidden state is "
+                                    "read at the end of the user turn (before assistant scaffolding). "
+                                    "Source direct-answer logits (A/B/C/D) still use the full templated "
+                                    "prefix through the last token — comparable to extraction only if you "
+                                    "interpret them as different readout sites."
+                                )
                         self._extraction_validated = True
 
-                    activations[sp_name][question_idx] = patchscope_patching.extract_activations_multi_layer(
-                        model, tokenizer, device, messages,
-                        layer_indices=source_layers,
-                        token_position=_ex_tok,
-                        boundary_marker=_ex_boundary,
-                        raw_text=source_raw_text,
-                    )
+                    if use_ar_extract:
+                        _ar_caps, _ar_meta = (
+                            patchscope_patching.extract_activations_during_decode(
+                                model,
+                                tokenizer,
+                                device,
+                                messages,
+                                layer_indices=source_layers,
+                                decode_steps=_ar_steps,
+                                max_decode_steps=_ar_max,
+                                temperature=_ar_temp,
+                                do_sample=_ar_sample,
+                                raw_text=source_raw_text,
+                            )
+                        )
+                        activations[sp_name][question_idx] = _ar_caps
+                    else:
+                        _ar_meta = None
+                        activations[sp_name][question_idx] = (
+                            patchscope_patching.extract_activations_multi_layer(
+                                model, tokenizer, device, messages,
+                                layer_indices=source_layers,
+                                token_position=_ex_tok,
+                                boundary_marker=_ex_boundary,
+                                raw_text=source_raw_text,
+                            )
+                        )
 
                     # Direct answer via logits
                     if source_raw_text is not None:
@@ -571,18 +606,35 @@ class PatchscopeExperiment(BaseExperiment):
                                 messages, tokenize=False, add_generation_prompt=True
                             )
                         )
-                        self._sample_source_prompts[sp_name] = {
-                            "persona": sp_name,
-                            "question_id": question_id,
-                            "prompt_text": _ptext,
-                            "extraction_site": patchscope_helpers.describe_source_extraction_site(
+                        if use_ar_extract:
+                            _site = {
+                                "readout": "autoregressive",
+                                "decode_steps": _ar_steps,
+                                "max_decode_steps": _ar_max,
+                                "temperature": _ar_temp,
+                                "do_sample": _ar_sample,
+                                "token_position_spec": (
+                                    f"last_seq_position_after_{_ar_steps}_post_prefill_decode_forward(s)"
+                                ),
+                                "n_tokens": len(
+                                    tokenizer.encode(_ptext, add_special_tokens=False)
+                                ),
+                                **(_ar_meta or {}),
+                            }
+                        else:
+                            _site = patchscope_helpers.describe_source_extraction_site(
                                 tokenizer,
                                 _ptext,
                                 extraction_cfg.get("token_position", "last"),
                                 boundary_marker=extraction_cfg.get(
                                     "assistant_boundary_marker"
                                 ),
-                            ),
+                            )
+                        self._sample_source_prompts[sp_name] = {
+                            "persona": sp_name,
+                            "question_id": question_id,
+                            "prompt_text": _ptext,
+                            "extraction_site": _site,
                             "answer": canonical_answer,
                             "shuffled_answer": shuffled_answer,
                             "option_order": [remap.get(l, l) for l in ["A", "B", "C", "D"]],
