@@ -95,7 +95,7 @@ relevancy:
 # Source mode: "questions" (default, MCQ from task file) or "manual" (free-form prompts below).
 # When "manual", the manual_prompts section is used instead of the task file questions.
 # Extraction uses prefill readout at the specified target_word regardless of extraction.readout.
-source_mode: "manual"
+source_mode: "questions"
 
 source_personas:
   - persona_conservative
