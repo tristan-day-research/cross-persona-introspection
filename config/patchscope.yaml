@@ -86,7 +86,7 @@ relevancy:
 
 # Source mode: "questions" (default, MCQ from task file) or "manual" (free-form prompts below).
 # Extraction uses prefill readout at the specified target_word regardless of extraction.readout.
-source_mode: "questions"
+source_mode: "manual"
 
 source_personas:
   - persona_conservative
@@ -186,7 +186,7 @@ enabled_templates: ["open_summary"]
 #                   Still wrapped with the model chat template + reporter system prompt.
 #   "patchscopes" — minimal structured user prompt + chat template + reporter system.
 #   "selfie"      — instructional user prompt + chat template + reporter system.
-prompt_style: "repeat_word"
+prompt_style: "selfie"
 
 # Whether to wrap interpretation prompts in the model's chat template.
 #   true  — apply_chat_template is used; reporter system prompt goes in the system role.
