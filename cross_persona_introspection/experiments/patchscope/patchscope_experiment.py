@@ -128,17 +128,43 @@ class PatchscopeExperiment(BaseExperiment):
         logger.info(f"Loading model: {self.config.model_name}  dtype={self.config.model_dtype or 'auto'}")
         self.backend = HFBackend(self.config.model_name, device="auto", torch_dtype=torch_dtype)
 
-        task_file = self.config.task_file
-        if not task_file:
-            raise ValueError("patchscope experiment requires 'task_file' in experiment config")
-        self.questions = patchscope_helpers._load_questions(
-            task_file,
-            sample_size=self.config.sample_size,
-            seed=self.config.seed,
-            categories=self.ps_config.get("categories") or None,
-            samples_per_category=self.ps_config.get("samples_per_category"),
-        )
-        logger.info(f"Loaded {len(self.questions)} questions from {task_file}")
+        self._source_mode = (self.ps_config.get("source_mode") or "questions").strip().lower()
+        self._manual_prompts: list[dict] = []
+
+        if self._source_mode == "manual":
+            raw_manual = self.ps_config.get("manual_prompts") or []
+            if not raw_manual:
+                raise ValueError(
+                    "source_mode is 'manual' but no manual_prompts defined in patchscope config"
+                )
+            self._manual_prompts = raw_manual
+            # Build synthetic question dicts so Phase 2 can iterate unchanged
+            self.questions = [
+                {
+                    "question_id": p["id"],
+                    "question_text": p["text"],
+                    "options": {},
+                    "_manual_target_word": p["target_word"],
+                    "_manual_target_strategy": p.get("target_strategy", "last"),
+                }
+                for p in raw_manual
+            ]
+            logger.info(
+                "Manual source mode: %d prompts loaded from patchscope config",
+                len(self.questions),
+            )
+        else:
+            task_file = self.config.task_file
+            if not task_file:
+                raise ValueError("patchscope experiment requires 'task_file' in experiment config")
+            self.questions = patchscope_helpers._load_questions(
+                task_file,
+                sample_size=self.config.sample_size,
+                seed=self.config.seed,
+                categories=self.ps_config.get("categories") or None,
+                samples_per_category=self.ps_config.get("samples_per_category"),
+            )
+            logger.info(f"Loaded {len(self.questions)} questions from {task_file}")
 
     # ── Output / checkpointing ────────────────────────────────────────────
 
@@ -469,203 +495,292 @@ class PatchscopeExperiment(BaseExperiment):
             )):
                 try:
                     question_id = question.get("question_id", f"q{question_idx}")
+                    _is_manual = self._source_mode == "manual"
 
-                    shuffled_question, remap = patchscope_helpers._shuffle_options(
-                        question, self.config.seed, question_id, sp_name
-                    )
-                    shuffle_maps[(question_id, sp_name)] = (shuffled_question, remap)
+                    if _is_manual:
+                        # ── Manual prompt mode: free-form text, extract at target_word ──
+                        _target_word = question["_manual_target_word"]
+                        _target_strategy = question.get("_manual_target_strategy", "last")
+                        prompt_text = question["question_text"]
 
-                    _src_tpl = self.ps_config["source_pass"]["user_message_template"]
-                    user_msg = patchscope_helpers.format_source_pass_user_message(
-                        shuffled_question, _src_tpl
-                    )
-                    messages = []
-                    if source_persona.system_prompt:
-                        messages.append({"role": "system", "content": source_persona.system_prompt})
-                    messages.append({"role": "user", "content": user_msg})
-
-                    # Build raw text for source pass when chat template is disabled.
-                    # This keeps source and reporter in the same regime.
-                    source_raw_text = None
-                    if not self._use_chat_template:
+                        # Build raw source text with persona system prompt
                         sys_text = (source_persona.system_prompt or "").strip()
-                        source_raw_text = (sys_text + "\n\n" + user_msg) if sys_text else user_msg
+                        source_raw_text = (sys_text + "\n\n" + prompt_text) if sys_text else prompt_text
 
-                    _ex_tok = extraction_cfg.get("token_position", "last")
-                    _ex_boundary = extraction_cfg.get("assistant_boundary_marker")
-                    _readout = (extraction_cfg.get("readout") or "prefill").strip().lower()
-                    _ar = extraction_cfg.get("autoregressive") or {}
-                    _raw_steps = _ar.get("decode_steps", 1)
-                    _ar_stop_tokens: list[str] | None = None
-                    if isinstance(_raw_steps, str) and _raw_steps.strip().lower() == "until_answer":
-                        _ar_stop_tokens = _ar.get("answer_tokens", ["A", "B", "C", "D"])
-                        _ar_steps = int(_ar.get("max_decode_steps", 64))
-                    else:
-                        _ar_steps = int(_raw_steps)
-                    _ar_max = int(_ar.get("max_decode_steps", 64))
-                    _ar_temp = float(_ar.get("temperature", 0.0))
-                    _ar_sample = bool(_ar.get("do_sample", False))
-                    _wants_gen_capture = patchscope_helpers.extraction_uses_generation_time_capture(
-                        extraction_cfg
-                    )
-                    if _wants_gen_capture and _ar_steps < 1:
-                        logger.warning(
-                            "Generation-time extraction requested but autoregressive.decode_steps < 1; "
-                            "using decode_steps=1."
+                        # Resolve target word to token index in the full source text
+                        _tok_pos = patchscope_helpers.find_token_position(
+                            tokenizer, source_raw_text, _target_word, strategy=_target_strategy,
                         )
-                        _ar_steps = 1
-                    use_ar_extract = _wants_gen_capture and _ar_steps >= 1
 
-                    # Validate extraction position once (first question of first persona)
-                    if not hasattr(self, '_extraction_validated'):
-                        if source_raw_text is not None:
-                            source_text = source_raw_text
-                        else:
-                            source_text = tokenizer.apply_chat_template(
-                                messages, tokenize=False, add_generation_prompt=True
-                            )
-                        if use_ar_extract:
-                            if _ar_stop_tokens is not None:
-                                logger.info(
-                                    "Generation-time Phase-1 extraction (until_answer, stop_tokens=%s, "
-                                    "max_steps=%s): activations captured at the decode step that produces "
-                                    "a matching answer token.",
-                                    _ar_stop_tokens,
-                                    _ar_steps,
-                                )
-                            else:
-                                logger.info(
-                                    "Generation-time Phase-1 extraction (decode_steps=%s): activations are "
-                                    "hidden[:, -1, :] after that many post-prefill decode forwards — from "
-                                    "generated tokens, not from extraction.token_position / "
-                                    "last_before_assistant.",
-                                    _ar_steps,
-                                )
-                        else:
-                            patchscope_helpers.validate_extraction_position(
-                                tokenizer, source_text,
-                                _ex_tok,
-                                tmpl_name=f"source_extraction[{sp_name}]",
-                                boundary_marker=_ex_boundary,
-                            )
-                            if isinstance(_ex_tok, str) and _ex_tok.strip().lower().replace(
-                                "-", "_"
-                            ) in ("last_before_assistant", "before_assistant"):
-                                logger.info(
-                                    "extraction.token_position is last_before_assistant: hidden state is "
-                                    "read at the end of the user turn (before assistant scaffolding). "
-                                    "Source direct-answer logits (A/B/C/D) still use the full templated "
-                                    "prefix through the last token — comparable to extraction only if you "
-                                    "interpret them as different readout sites."
-                                )
-                        self._extraction_validated = True
-
-                    if use_ar_extract:
-                        _ar_caps, _ar_meta = (
-                            patchscope_patching.extract_activations_during_decode(
-                                model,
-                                tokenizer,
-                                device,
-                                messages,
-                                layer_indices=source_layers,
-                                decode_steps=_ar_steps,
-                                max_decode_steps=_ar_max,
-                                temperature=_ar_temp,
-                                do_sample=_ar_sample,
-                                raw_text=source_raw_text,
-                                stop_tokens=_ar_stop_tokens,
-                            )
-                        )
-                        activations[sp_name][question_idx] = _ar_caps
-                    else:
-                        _ar_meta = None
+                        # Always use prefill extraction for manual prompts
                         activations[sp_name][question_idx] = (
                             patchscope_patching.extract_activations_multi_layer(
-                                model, tokenizer, device, messages,
+                                model, tokenizer, device,
+                                messages=[],  # unused when raw_text is provided
                                 layer_indices=source_layers,
-                                token_position=_ex_tok,
-                                boundary_marker=_ex_boundary,
+                                token_position=_tok_pos,
                                 raw_text=source_raw_text,
                             )
                         )
 
-                    # Direct answer via logits
-                    if source_raw_text is not None:
-                        # from_text variant doesn't support save_logprobs
-                        probs, logits_dict = self.backend.get_choice_probs_and_logits_from_text(
-                            source_raw_text, ["A", "B", "C", "D"],
-                        )
-                        logprobs_dict, total_cp = None, None
-                    else:
-                        source_result = self.backend.get_choice_probs_and_logits(
-                            messages, ["A", "B", "C", "D"], save_logprobs=save_logprobs,
-                        )
-                        if save_logprobs:
-                            probs, logits_dict, logprobs_dict, total_cp = source_result
-                        else:
-                            probs, logits_dict = source_result
-                            logprobs_dict, total_cp = None, None
+                        # No MCQ direct answer for manual prompts
+                        direct_answers[sp_name][question_idx] = {
+                            "answer": None, "probs": {}, "logits": {},
+                            "logprobs": None, "total_choice_prob": None,
+                            "raw": f"[manual] target_word={_target_word!r}",
+                            "shuffled_answer": None,
+                            "option_order": [],
+                        }
+                        # Identity remap (no shuffling)
+                        remap = {}
+                        shuffle_maps[(question_id, sp_name)] = (question, remap)
 
-                    shuffled_answer = max(probs, key=probs.get)
-                    canonical_answer = remap.get(shuffled_answer, shuffled_answer)
-                    canonical_probs = {remap.get(k, k): v for k, v in probs.items()}
-                    canonical_logits = {remap.get(k, k): v for k, v in logits_dict.items()}
-                    canonical_logprobs = (
-                        {remap.get(k, k): v for k, v in logprobs_dict.items()}
-                        if logprobs_dict else None
-                    )
-
-                    direct_answers[sp_name][question_idx] = {
-                        "answer": canonical_answer,
-                        "probs": canonical_probs,
-                        "logits": canonical_logits,
-                        "logprobs": canonical_logprobs,
-                        "total_choice_prob": total_cp,
-                        "raw": f"[logits] {canonical_answer}",
-                        "shuffled_answer": shuffled_answer,
-                        "option_order": [remap.get(l, l) for l in ["A", "B", "C", "D"]],
-                    }
-
-                    if sp_name not in self._sample_source_prompts:
-                        _ptext = source_raw_text if source_raw_text is not None else (
-                            tokenizer.apply_chat_template(
-                                messages, tokenize=False, add_generation_prompt=True
-                            )
-                        )
-                        if use_ar_extract:
+                        # Sample prompt for log
+                        if sp_name not in self._sample_source_prompts:
+                            token_ids = tokenizer.encode(source_raw_text, add_special_tokens=False)
+                            tokens = [tokenizer.decode([tid]) for tid in token_ids]
                             _site = {
-                                "readout": _readout,
-                                "capture_mode": "during_generation",
-                                "decode_steps": _ar_steps,
-                                "max_decode_steps": _ar_max,
-                                "temperature": _ar_temp,
-                                "do_sample": _ar_sample,
-                                "token_position_spec": (
-                                    f"last_seq_position_after_{_ar_steps}_post_prefill_decode_forward(s)"
-                                ),
-                                "n_tokens": len(
-                                    tokenizer.encode(_ptext, add_special_tokens=False)
-                                ),
-                                **(_ar_meta or {}),
+                                "readout": "prefill",
+                                "capture_mode": "manual_target_word",
+                                "target_word": _target_word,
+                                "target_strategy": _target_strategy,
+                                "token_position_spec": f"find_token_position({_target_word!r}, strategy={_target_strategy!r})",
+                                "token_index": _tok_pos,
+                                "n_tokens": len(tokens),
+                                "token_id": int(token_ids[_tok_pos]) if 0 <= _tok_pos < len(token_ids) else None,
+                                "token_decoded_repr": repr(tokens[_tok_pos]) if 0 <= _tok_pos < len(tokens) else None,
+                                "token_decoded_strip": tokens[_tok_pos].strip() if 0 <= _tok_pos < len(tokens) else None,
                             }
+                            self._sample_source_prompts[sp_name] = {
+                                "persona": sp_name,
+                                "question_id": question_id,
+                                "prompt_text": source_raw_text,
+                                "extraction_site": _site,
+                                "answer": None,
+                                "shuffled_answer": None,
+                                "option_order": [],
+                            }
+
+                    else:
+                        # ── Questions mode: existing MCQ flow ──
+                        shuffled_question, remap = patchscope_helpers._shuffle_options(
+                            question, self.config.seed, question_id, sp_name
+                        )
+                        shuffle_maps[(question_id, sp_name)] = (shuffled_question, remap)
+
+                        _src_tpl = self.ps_config["source_pass"]["user_message_template"]
+                        user_msg = patchscope_helpers.format_source_pass_user_message(
+                            shuffled_question, _src_tpl
+                        )
+                        messages = []
+                        if source_persona.system_prompt:
+                            messages.append({"role": "system", "content": source_persona.system_prompt})
+                        messages.append({"role": "user", "content": user_msg})
+
+                        # Build raw text for source pass when chat template is disabled.
+                        source_raw_text = None
+                        if not self._use_chat_template:
+                            sys_text = (source_persona.system_prompt or "").strip()
+                            source_raw_text = (sys_text + "\n\n" + user_msg) if sys_text else user_msg
+
+                        _ex_tok = extraction_cfg.get("token_position", "last")
+                        _ex_boundary = extraction_cfg.get("assistant_boundary_marker")
+                        _readout = (extraction_cfg.get("readout") or "prefill").strip().lower()
+                        _ar = extraction_cfg.get("autoregressive") or {}
+                        _raw_steps = _ar.get("decode_steps", 1)
+                        _ar_stop_tokens: list[str] | None = None
+                        if isinstance(_raw_steps, str) and _raw_steps.strip().lower() == "until_answer":
+                            _ar_stop_tokens = _ar.get("answer_tokens", ["A", "B", "C", "D"])
+                            _ar_steps = int(_ar.get("max_decode_steps", 64))
                         else:
-                            _site = patchscope_helpers.describe_source_extraction_site(
-                                tokenizer,
-                                _ptext,
-                                extraction_cfg.get("token_position", "last"),
-                                boundary_marker=extraction_cfg.get(
-                                    "assistant_boundary_marker"
-                                ),
+                            _ar_steps = int(_raw_steps)
+                        _ar_max = int(_ar.get("max_decode_steps", 64))
+                        _ar_temp = float(_ar.get("temperature", 0.0))
+                        _ar_sample = bool(_ar.get("do_sample", False))
+                        _wants_gen_capture = patchscope_helpers.extraction_uses_generation_time_capture(
+                            extraction_cfg
+                        )
+                        if _wants_gen_capture and _ar_steps < 1:
+                            logger.warning(
+                                "Generation-time extraction requested but autoregressive.decode_steps < 1; "
+                                "using decode_steps=1."
                             )
-                        self._sample_source_prompts[sp_name] = {
-                            "persona": sp_name,
-                            "question_id": question_id,
-                            "prompt_text": _ptext,
-                            "extraction_site": _site,
+                            _ar_steps = 1
+                        use_ar_extract = _wants_gen_capture and _ar_steps >= 1
+
+                        # Validate extraction position once (first question of first persona)
+                        if not hasattr(self, '_extraction_validated'):
+                            if source_raw_text is not None:
+                                source_text = source_raw_text
+                            else:
+                                source_text = tokenizer.apply_chat_template(
+                                    messages, tokenize=False, add_generation_prompt=True
+                                )
+                            if use_ar_extract:
+                                if _ar_stop_tokens is not None:
+                                    logger.info(
+                                        "Generation-time Phase-1 extraction (until_answer, stop_tokens=%s, "
+                                        "max_steps=%s): activations captured at the decode step that produces "
+                                        "a matching answer token.",
+                                        _ar_stop_tokens,
+                                        _ar_steps,
+                                    )
+                                else:
+                                    logger.info(
+                                        "Generation-time Phase-1 extraction (decode_steps=%s): activations are "
+                                        "hidden[:, -1, :] after that many post-prefill decode forwards — from "
+                                        "generated tokens, not from extraction.token_position / "
+                                        "last_before_assistant.",
+                                        _ar_steps,
+                                    )
+                            else:
+                                patchscope_helpers.validate_extraction_position(
+                                    tokenizer, source_text,
+                                    _ex_tok,
+                                    tmpl_name=f"source_extraction[{sp_name}]",
+                                    boundary_marker=_ex_boundary,
+                                )
+                                if isinstance(_ex_tok, str) and _ex_tok.strip().lower().replace(
+                                    "-", "_"
+                                ) in ("last_before_assistant", "before_assistant"):
+                                    logger.info(
+                                        "extraction.token_position is last_before_assistant: hidden state is "
+                                        "read at the end of the user turn (before assistant scaffolding). "
+                                        "Source direct-answer logits (A/B/C/D) still use the full templated "
+                                        "prefix through the last token — comparable to extraction only if you "
+                                        "interpret them as different readout sites."
+                                    )
+                            self._extraction_validated = True
+
+                        if use_ar_extract:
+                            _ar_caps, _ar_meta = (
+                                patchscope_patching.extract_activations_during_decode(
+                                    model,
+                                    tokenizer,
+                                    device,
+                                    messages,
+                                    layer_indices=source_layers,
+                                    decode_steps=_ar_steps,
+                                    max_decode_steps=_ar_max,
+                                    temperature=_ar_temp,
+                                    do_sample=_ar_sample,
+                                    raw_text=source_raw_text,
+                                    stop_tokens=_ar_stop_tokens,
+                                )
+                            )
+                            activations[sp_name][question_idx] = _ar_caps
+                        else:
+                            _ar_meta = None
+                            activations[sp_name][question_idx] = (
+                                patchscope_patching.extract_activations_multi_layer(
+                                    model, tokenizer, device, messages,
+                                    layer_indices=source_layers,
+                                    token_position=_ex_tok,
+                                    boundary_marker=_ex_boundary,
+                                    raw_text=source_raw_text,
+                                )
+                            )
+
+                        # Direct answer via logits
+                        if source_raw_text is not None:
+                            probs, logits_dict = self.backend.get_choice_probs_and_logits_from_text(
+                                source_raw_text, ["A", "B", "C", "D"],
+                            )
+                            logprobs_dict, total_cp = None, None
+                        else:
+                            source_result = self.backend.get_choice_probs_and_logits(
+                                messages, ["A", "B", "C", "D"], save_logprobs=save_logprobs,
+                            )
+                            if save_logprobs:
+                                probs, logits_dict, logprobs_dict, total_cp = source_result
+                            else:
+                                probs, logits_dict = source_result
+                                logprobs_dict, total_cp = None, None
+
+                        shuffled_answer = max(probs, key=probs.get)
+                        canonical_answer = remap.get(shuffled_answer, shuffled_answer)
+                        canonical_probs = {remap.get(k, k): v for k, v in probs.items()}
+                        canonical_logits = {remap.get(k, k): v for k, v in logits_dict.items()}
+                        canonical_logprobs = (
+                            {remap.get(k, k): v for k, v in logprobs_dict.items()}
+                            if logprobs_dict else None
+                        )
+
+                        direct_answers[sp_name][question_idx] = {
                             "answer": canonical_answer,
+                            "probs": canonical_probs,
+                            "logits": canonical_logits,
+                            "logprobs": canonical_logprobs,
+                            "total_choice_prob": total_cp,
+                            "raw": f"[logits] {canonical_answer}",
                             "shuffled_answer": shuffled_answer,
                             "option_order": [remap.get(l, l) for l in ["A", "B", "C", "D"]],
                         }
+
+                        if sp_name not in self._sample_source_prompts:
+                            _ptext = source_raw_text if source_raw_text is not None else (
+                                tokenizer.apply_chat_template(
+                                    messages, tokenize=False, add_generation_prompt=True
+                                )
+                            )
+                            if use_ar_extract:
+                                _meta = _ar_meta or {}
+                                _cap_step = _meta.get("capture_at_step", _ar_steps)
+                                if _ar_stop_tokens is not None:
+                                    _tspec = (
+                                        f"until_answer: capture hidden[:, -1, :] on forward that emits "
+                                        f"first token in {list(_ar_stop_tokens)!r}"
+                                    )
+                                    _site = {
+                                        "readout": _readout,
+                                        "capture_mode": "during_generation",
+                                        "autoregressive_mode": "until_answer",
+                                        "stop_tokens": list(_ar_stop_tokens),
+                                        "max_decode_budget": _ar_steps,
+                                        "max_decode_steps": _ar_max,
+                                        "temperature": _ar_temp,
+                                        "do_sample": _ar_sample,
+                                        "token_position_spec": _tspec,
+                                        "n_tokens": len(
+                                            tokenizer.encode(_ptext, add_special_tokens=False)
+                                        ),
+                                        **_meta,
+                                    }
+                                else:
+                                    _site = {
+                                        "readout": _readout,
+                                        "capture_mode": "during_generation",
+                                        "autoregressive_mode": "fixed_steps",
+                                        "decode_steps": _ar_steps,
+                                        "max_decode_steps": _ar_max,
+                                        "temperature": _ar_temp,
+                                        "do_sample": _ar_sample,
+                                        "token_position_spec": (
+                                            f"last_seq_position_after_{_cap_step}_post_prefill_decode_forward(s)"
+                                        ),
+                                        "n_tokens": len(
+                                            tokenizer.encode(_ptext, add_special_tokens=False)
+                                        ),
+                                        **_meta,
+                                    }
+                            else:
+                                _site = patchscope_helpers.describe_source_extraction_site(
+                                    tokenizer,
+                                    _ptext,
+                                    extraction_cfg.get("token_position", "last"),
+                                    boundary_marker=extraction_cfg.get(
+                                        "assistant_boundary_marker"
+                                    ),
+                                )
+                            self._sample_source_prompts[sp_name] = {
+                                "persona": sp_name,
+                                "question_id": question_id,
+                                "prompt_text": _ptext,
+                                "extraction_site": _site,
+                                "answer": canonical_answer,
+                                "shuffled_answer": shuffled_answer,
+                                "option_order": [remap.get(l, l) for l in ["A", "B", "C", "D"]],
+                            }
 
                 except Exception as e:
                     msg = f"Extract error: {sp_name} q{question_idx} {question.get('question_id', '?')}: {e}"

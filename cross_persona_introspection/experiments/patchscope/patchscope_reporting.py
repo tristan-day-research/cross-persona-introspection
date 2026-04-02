@@ -191,13 +191,15 @@ def write_run_log(
     if sample_source_prompts:
         lines += [sep, "SOURCE PROMPT EXAMPLES (verbatim, including special tokens)", thin]
         for sp_name, sample in sorted(sample_source_prompts.items()):
-            lines += [
-                f"\n--- {sp_name} ---",
-                f"  question_id   : {sample['question_id']}",
-                f"  option_order  : {sample.get('option_order', 'ABCD')}",
-                f"  source_answer : {sample['answer']} (shuffled: {sample.get('shuffled_answer', '?')})",
-                "",
-            ]
+            lines.append(f"\n--- {sp_name} ---")
+            lines.append(f"  question_id   : {sample['question_id']}")
+            if sample.get("option_order"):
+                lines.append(f"  option_order  : {sample['option_order']}")
+            if sample.get("answer") is not None:
+                lines.append(
+                    f"  source_answer : {sample['answer']} (shuffled: {sample.get('shuffled_answer', '?')})"
+                )
+            lines.append("")
             site = sample.get("extraction_site") or {}
             if site.get("error"):
                 lines += [
@@ -212,13 +214,52 @@ def write_run_log(
             ):
                 lines += [
                     "  ── ACTIVATION EXTRACTION (during generation — not prefill token_position) ──",
-                    f"  decode_steps     : {site.get('decode_steps')}",
-                    f"  max_decode_steps : {site.get('max_decode_steps')}",
-                    f"  temperature      : {site.get('temperature')}",
-                    f"  do_sample        : {site.get('do_sample')}",
-                    f"  capture          : {site.get('token_position_spec')!r}",
-                    f"  prefill_tokens   : {site.get('n_tokens')}",
                 ]
+                _mode = site.get("autoregressive_mode")
+                if _mode:
+                    lines.append(f"  autoregressive_mode : {_mode}")
+                if site.get("stop_tokens") is not None:
+                    lines.append(f"  stop_tokens         : {site.get('stop_tokens')}")
+                if site.get("max_decode_budget") is not None:
+                    lines.append(
+                        f"  max_decode_budget   : {site.get('max_decode_budget')} "
+                        f"(safety cap; actual rollout may stop earlier)"
+                    )
+                if site.get("decode_steps") is not None:
+                    lines.append(f"  decode_steps        : {site.get('decode_steps')}")
+                lines += [
+                    f"  max_decode_steps    : {site.get('max_decode_steps')}",
+                    f"  temperature         : {site.get('temperature')}",
+                    f"  do_sample           : {site.get('do_sample')}",
+                    f"  capture (spec)      : {site.get('token_position_spec')!r}",
+                    f"  prefill_tokens      : {site.get('n_tokens')}",
+                ]
+                if site.get("capture_at_step") is not None:
+                    lines.append(
+                        f"  capture_at_step     : {site.get('capture_at_step')} "
+                        f"(post-prefill generated-token index, 1-based)"
+                    )
+                if site.get("n_generated_tokens") is not None:
+                    lines.append(
+                        f"  n_generated_tokens  : {site.get('n_generated_tokens')}"
+                    )
+                if site.get("stopped_on_token") is True:
+                    lines.append(
+                        "  stopped_on_token    : True (matched stop_tokens before hitting budget)"
+                    )
+                elif site.get("stopped_on_token") is False and site.get("stop_tokens"):
+                    lines.append(
+                        "  stopped_on_token    : False (ran full budget without stop_tokens match)"
+                    )
+                _act_strip = site.get("activation_token_decoded_strip")
+                _act_id = site.get("activation_token_id")
+                if _act_id is not None:
+                    lines += [
+                        "  ── Phase-1 vector = hidden[:, -1, :] after THIS generated token ──",
+                        f"  activation_token_id           : {_act_id}",
+                        f"  activation_token_decoded_strip : {_act_strip!r}",
+                    ]
+                lines.append("")
                 gids = site.get("generated_token_ids")
                 if gids is not None:
                     lines.append(f"  generated_ids    : {gids}")
@@ -234,6 +275,17 @@ def write_run_log(
                         r = trepr[i] if i < len(trepr) else repr(piece)
                         lines.append(f"    step {i + 1}: id={tid} {r} -> {piece!r}")
                 lines.append("")
+            elif site.get("capture_mode") == "manual_target_word":
+                lines += [
+                    "  ── ACTIVATION EXTRACTION (manual prompt — target word) ──",
+                    f"  target_word        : {site.get('target_word')!r}",
+                    f"  target_strategy    : {site.get('target_strategy')!r}",
+                    f"  token_index (0-based) : {site.get('token_index')}  (sequence length {site.get('n_tokens')} tokens)",
+                    f"  token_id              : {site.get('token_id')}",
+                    f"  decoded token (repr)  : {site.get('token_decoded_repr')}",
+                    f"  decoded token (strip) : {site.get('token_decoded_strip')!r}",
+                    "",
+                ]
             elif site:
                 lines += [
                     "  ── ACTIVATION EXTRACTION SITE (source prompt; same index at every hooked layer) ──",

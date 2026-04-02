@@ -284,6 +284,15 @@ def extract_activations_during_decode(
     decoded_pieces = [
         tokenizer.decode([tid], skip_special_tokens=False) for tid in generated_ids
     ]
+    # Token whose forward pass produced the captured hidden[:, -1, :] (1-based capture_at_step).
+    act_id: Optional[int] = None
+    act_strip: Optional[str] = None
+    if generated_ids and capture_step >= 1:
+        idx = min(int(capture_step), len(generated_ids)) - 1
+        if idx >= 0:
+            act_id = generated_ids[idx]
+            act_strip = tokenizer.decode([act_id], skip_special_tokens=False).strip()
+
     meta: dict[str, Any] = {
         "generated_token_ids": generated_ids,
         "generated_decode_concat": "".join(decoded_pieces),
@@ -291,6 +300,9 @@ def extract_activations_during_decode(
         "generated_token_repr": [repr(p) for p in decoded_pieces],
         "capture_at_step": capture_step,
         "stopped_on_token": _stopped_early,
+        "n_generated_tokens": len(generated_ids),
+        "activation_token_id": act_id,
+        "activation_token_decoded_strip": act_strip,
     }
     return captured, meta
 

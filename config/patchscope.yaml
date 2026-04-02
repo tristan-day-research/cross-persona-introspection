@@ -92,6 +92,11 @@ relevancy:
 # EXPERIMENT MATRIX
 # ═══════════════════════════════════════════════════════════════════════
 
+# Source mode: "questions" (default, MCQ from task file) or "manual" (free-form prompts below).
+# When "manual", the manual_prompts section is used instead of the task file questions.
+# Extraction uses prefill readout at the specified target_word regardless of extraction.readout.
+source_mode: "manual"
+
 source_personas:
   - persona_conservative
   - persona_progressive
@@ -103,10 +108,46 @@ reporter_personas:
   - persona_progressive
   - neutral_evaluator
 
-# Question sampling
+# Question sampling (only used when source_mode: "questions")
 # categories: ["cat_1", "cat_2", "cat_3", "cat_4", "cat_5"]   # empty = all categories
 categories: ["cat_1", "cat_2", "cat_4"]   # empty = all categories
 samples_per_category: null      # null = all in category
+
+# ── Manual source prompts (used when source_mode: "manual") ──────────
+# Each entry: id, text (the source prompt), target_word (extract activation here),
+# and optional target_strategy ("last" or "first" subtoken, default "last").
+manual_prompts:
+  - id: "guns_controversial"
+    text: "The topic of guns is a very controversial issue"
+    target_word: "guns"
+
+  - id: "immigration_heated"
+    text: "Immigration policy has become an increasingly heated debate in America"
+    target_word: "Immigration"
+
+  - id: "abortion_divisive"
+    text: "Abortion remains one of the most divisive topics in modern politics"
+    target_word: "Abortion"
+
+  - id: "climate_change"
+    text: "Climate change is a topic that deeply divides people along political lines"
+    target_word: "Climate"
+
+  - id: "taxes_fairness"
+    text: "The question of taxes and fairness has no easy answer"
+    target_word: "taxes"
+
+  - id: "police_trust"
+    text: "Trust in the police varies dramatically across different communities"
+    target_word: "police"
+
+  - id: "healthcare_right"
+    text: "Whether healthcare is a right or a privilege is fiercely debated"
+    target_word: "healthcare"
+
+  - id: "religion_politics"
+    text: "The role of religion in politics is a deeply personal and controversial subject"
+    target_word: "religion"
 
 # Controls
 controls:
