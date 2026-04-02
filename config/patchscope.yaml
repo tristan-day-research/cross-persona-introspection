@@ -220,7 +220,7 @@ interpretation_templates:
 
       {placeholder}
     selfie: |
-      What do you think {placeholder} is?
+      Please just simply repeat this word once: {placeholder}. 
     #   <|start_header_id|>user<|end_header_id|> {placeholder} <|eot_id|><|start_header_id|>assistant<|end_header_id|> Sure, I will summarize the message:
     # Preamble (persona or reporting.no_persona_layer_log_system_prompt) is prepended in code.
     # Do not embed BOS/system/dates in selfie — duplicates synthetic block.
