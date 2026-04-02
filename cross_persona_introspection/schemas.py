@@ -215,6 +215,17 @@ class PatchscopeRecord:
     # Ground truth (from source's direct answer under that persona)
     source_direct_answer: Optional[str] = None
     source_answer_probs: Optional[dict[str, float]] = None
+    # Source confidence metrics
+    source_chosen_prob: Optional[float] = None       # P(source's top answer)
+    source_margin: Optional[float] = None            # top1_prob - top2_prob
+    # Reporter confidence metrics
+    reporter_chosen_prob: Optional[float] = None     # P(reporter's predicted answer)
+    reporter_margin: Optional[float] = None          # top1_prob - top2_prob
+    # Extraction site metadata
+    extraction_mode: Optional[str] = None            # "prefill_<position>" or "during_generation"
+    extraction_token_index: Optional[int] = None     # 0-based token position
+    extraction_token_id: Optional[int] = None        # token ID at that position
+    extraction_token_text: Optional[str] = None      # decoded token string
     # Original question data
     question_text: Optional[str] = None
     question_options: Optional[dict[str, str]] = None

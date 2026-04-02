@@ -750,12 +750,20 @@ def _norm_extraction_key(s: str) -> str:
 def extraction_uses_generation_time_capture(extraction_cfg: dict) -> bool:
     """True when Phase-1 activations should come from post-prefill decode (generated tokens)."""
     readout = _norm_extraction_key(str(extraction_cfg.get("readout") or "prefill"))
+    if readout == "both":
+        return False  # "both" mode handled separately
     if readout in _GEN_READOUT_MODES:
         return True
     tp = extraction_cfg.get("token_position", "last")
     if isinstance(tp, str) and _norm_extraction_key(tp) in _GEN_TOKEN_POSITION_SPECS:
         return True
     return False
+
+
+def extraction_uses_both_modes(extraction_cfg: dict) -> bool:
+    """True when Phase-1 should extract from both prefill position AND during generation."""
+    readout = _norm_extraction_key(str(extraction_cfg.get("readout") or "prefill"))
+    return readout == "both"
 
 
 def _last_token_index_ending_before_char(

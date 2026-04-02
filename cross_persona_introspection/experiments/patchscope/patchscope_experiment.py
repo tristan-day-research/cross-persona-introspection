@@ -315,7 +315,7 @@ class PatchscopeExperiment(BaseExperiment):
         # ── Phase 1: extract source activations & direct answers ──────────
 
         logger.info("=== Phase 1: Extracting source activations ===")
-        activations, direct_answers, shuffle_maps = self._extract_sources(
+        activations, direct_answers, shuffle_maps, extraction_meta = self._extract_sources(
             model, tokenizer, device,
             source_persona_names, source_layers,
             extraction_cfg, save_logprobs,
@@ -331,9 +331,11 @@ class PatchscopeExperiment(BaseExperiment):
         if controls_cfg.get("shuffled_activation", False):
             conditions.append("shuffled")
 
+        _use_both = patchscope_helpers.extraction_uses_both_modes(extraction_cfg)
         matrix_dims = {
             "source_personas": len(source_persona_names),
             "questions": len(self.questions),
+            "extraction_modes": 2 if _use_both else 1,
             "source_layers": len(source_layers),
             "injection_layers": len(injection_layers),
             "reporter_personas": len(reporter_persona_names),
@@ -376,6 +378,7 @@ class PatchscopeExperiment(BaseExperiment):
             activations=activations,
             direct_answers=direct_answers,
             shuffle_maps=shuffle_maps,
+            extraction_meta=extraction_meta,
             control_sample_rate=control_sample_rate,
             control_rng=control_rng,
             style=style,
@@ -474,15 +477,32 @@ class PatchscopeExperiment(BaseExperiment):
         self, model, tokenizer, device,
         source_persona_names, source_layers,
         extraction_cfg, save_logprobs,
-    ) -> tuple[dict, dict, dict]:
+    ) -> tuple[dict, dict, dict, dict]:
         """Extract activations and direct answers for every (persona, question, layer).
 
         Returns:
-            (activations, direct_answers, shuffle_maps)
+            (activations, direct_answers, shuffle_maps, extraction_meta)
+
+        When ``readout: "both"``, activations are keyed as::
+
+            activations[persona][question_idx] = {
+                "prefill": {layer: tensor, ...},
+                "during_gen": {layer: tensor, ...},
+            }
+
+        Otherwise (single mode), the existing flat structure is preserved::
+
+            activations[persona][question_idx] = {layer: tensor, ...}
+
+        extraction_meta maps ``(persona, question_idx)`` to a dict with keys:
+            extraction_mode, extraction_token_index, extraction_token_id,
+            extraction_token_text.  For "both" mode, maps to a dict of
+            ``{"prefill": {...}, "during_gen": {...}}``.
         """
-        activations: dict[str, dict[int, dict[int, torch.Tensor]]] = {}
+        activations: dict[str, dict[int, dict]] = {}
         direct_answers: dict[str, dict[int, dict]] = {}
         shuffle_maps: dict[tuple[str, str], tuple[dict, dict[str, str]]] = {}
+        extraction_meta: dict[tuple[str, int], dict] = {}
         self._sample_source_prompts: dict[str, dict] = {}
 
         for sp_name in source_persona_names:
@@ -534,6 +554,17 @@ class PatchscopeExperiment(BaseExperiment):
                         # Identity remap (no shuffling)
                         remap = {}
                         shuffle_maps[(question_id, sp_name)] = (question, remap)
+
+                        # Extraction metadata for manual mode
+                        token_ids = tokenizer.encode(source_raw_text, add_special_tokens=False)
+                        _tok_id = int(token_ids[_tok_pos]) if 0 <= _tok_pos < len(token_ids) else None
+                        _tok_text = tokenizer.decode([_tok_id]).strip() if _tok_id is not None else None
+                        extraction_meta[(sp_name, question_idx)] = {
+                            "extraction_mode": f"prefill_manual_{_target_word}",
+                            "extraction_token_index": _tok_pos,
+                            "extraction_token_id": _tok_id,
+                            "extraction_token_text": _tok_text,
+                        }
 
                         # Sample prompt for log
                         if sp_name not in self._sample_source_prompts:
@@ -597,7 +628,8 @@ class PatchscopeExperiment(BaseExperiment):
                         _ar_max = int(_ar.get("max_decode_steps", 64))
                         _ar_temp = float(_ar.get("temperature", 0.0))
                         _ar_sample = bool(_ar.get("do_sample", False))
-                        _wants_gen_capture = patchscope_helpers.extraction_uses_generation_time_capture(
+                        _use_both = patchscope_helpers.extraction_uses_both_modes(extraction_cfg)
+                        _wants_gen_capture = _use_both or patchscope_helpers.extraction_uses_generation_time_capture(
                             extraction_cfg
                         )
                         if _wants_gen_capture and _ar_steps < 1:
@@ -607,6 +639,8 @@ class PatchscopeExperiment(BaseExperiment):
                             )
                             _ar_steps = 1
                         use_ar_extract = _wants_gen_capture and _ar_steps >= 1
+                        # In "both" mode, always extract prefill too
+                        use_prefill_extract = _use_both or not use_ar_extract
 
                         # Validate extraction position once (first question of first persona)
                         if not hasattr(self, '_extraction_validated'):
@@ -633,24 +667,36 @@ class PatchscopeExperiment(BaseExperiment):
                                         "last_before_assistant.",
                                         _ar_steps,
                                     )
-                            else:
+                            if use_prefill_extract:
                                 patchscope_helpers.validate_extraction_position(
                                     tokenizer, source_text,
                                     _ex_tok,
                                     tmpl_name=f"source_extraction[{sp_name}]",
                                     boundary_marker=_ex_boundary,
                                 )
-                                if isinstance(_ex_tok, str) and _ex_tok.strip().lower().replace(
-                                    "-", "_"
-                                ) in ("last_before_assistant", "before_assistant"):
-                                    logger.info(
-                                        "extraction.token_position is last_before_assistant: hidden state is "
-                                        "read at the end of the user turn (before assistant scaffolding). "
-                                        "Source direct-answer logits (A/B/C/D) still use the full templated "
-                                        "prefix through the last token — comparable to extraction only if you "
-                                        "interpret them as different readout sites."
-                                    )
+                            if _use_both:
+                                logger.info(
+                                    "Dual extraction mode (readout: both): extracting from "
+                                    "prefill position '%s' AND during generation.",
+                                    _ex_tok,
+                                )
                             self._extraction_validated = True
+
+                        # ── Run extraction(s) ──
+                        _ar_meta = None
+                        _prefill_caps = None
+                        _ar_caps = None
+
+                        if use_prefill_extract:
+                            _prefill_caps = (
+                                patchscope_patching.extract_activations_multi_layer(
+                                    model, tokenizer, device, messages,
+                                    layer_indices=source_layers,
+                                    token_position=_ex_tok,
+                                    boundary_marker=_ex_boundary,
+                                    raw_text=source_raw_text,
+                                )
+                            )
 
                         if use_ar_extract:
                             _ar_caps, _ar_meta = (
@@ -668,18 +714,56 @@ class PatchscopeExperiment(BaseExperiment):
                                     stop_tokens=_ar_stop_tokens,
                                 )
                             )
+
+                        # Store activations
+                        if _use_both:
+                            activations[sp_name][question_idx] = {
+                                "prefill": _prefill_caps or {},
+                                "during_gen": _ar_caps or {},
+                            }
+                        elif use_ar_extract:
                             activations[sp_name][question_idx] = _ar_caps
                         else:
-                            _ar_meta = None
-                            activations[sp_name][question_idx] = (
-                                patchscope_patching.extract_activations_multi_layer(
-                                    model, tokenizer, device, messages,
-                                    layer_indices=source_layers,
-                                    token_position=_ex_tok,
-                                    boundary_marker=_ex_boundary,
-                                    raw_text=source_raw_text,
-                                )
+                            activations[sp_name][question_idx] = _prefill_caps
+
+                        # ── Build per-question extraction metadata ──
+                        _ptext = source_raw_text if source_raw_text is not None else (
+                            tokenizer.apply_chat_template(
+                                messages, tokenize=False, add_generation_prompt=True
                             )
+                        )
+
+                        def _prefill_meta() -> dict:
+                            site = patchscope_helpers.describe_source_extraction_site(
+                                tokenizer, _ptext, _ex_tok,
+                                boundary_marker=_ex_boundary,
+                            )
+                            _tok_spec = str(_ex_tok).strip().lower().replace("-", "_")
+                            return {
+                                "extraction_mode": f"prefill_{_tok_spec}",
+                                "extraction_token_index": site.get("token_index"),
+                                "extraction_token_id": site.get("token_id"),
+                                "extraction_token_text": site.get("token_decoded_strip"),
+                            }
+
+                        def _gen_meta() -> dict:
+                            m = _ar_meta or {}
+                            return {
+                                "extraction_mode": "during_generation",
+                                "extraction_token_index": None,  # position is dynamic (generated)
+                                "extraction_token_id": m.get("activation_token_id"),
+                                "extraction_token_text": m.get("activation_token_decoded_strip"),
+                            }
+
+                        if _use_both:
+                            extraction_meta[(sp_name, question_idx)] = {
+                                "prefill": _prefill_meta(),
+                                "during_gen": _gen_meta(),
+                            }
+                        elif use_ar_extract:
+                            extraction_meta[(sp_name, question_idx)] = _gen_meta()
+                        else:
+                            extraction_meta[(sp_name, question_idx)] = _prefill_meta()
 
                         # Direct answer via logits
                         if source_raw_text is not None:
@@ -706,6 +790,7 @@ class PatchscopeExperiment(BaseExperiment):
                             if logprobs_dict else None
                         )
 
+                        _sorted_cp = sorted(canonical_probs.values(), reverse=True)
                         direct_answers[sp_name][question_idx] = {
                             "answer": canonical_answer,
                             "probs": canonical_probs,
@@ -715,6 +800,8 @@ class PatchscopeExperiment(BaseExperiment):
                             "raw": f"[logits] {canonical_answer}",
                             "shuffled_answer": shuffled_answer,
                             "option_order": [remap.get(l, l) for l in ["A", "B", "C", "D"]],
+                            "source_chosen_prob": _sorted_cp[0] if _sorted_cp else None,
+                            "source_margin": (_sorted_cp[0] - _sorted_cp[1]) if len(_sorted_cp) > 1 else None,
                         }
 
                         if sp_name not in self._sample_source_prompts:
@@ -791,7 +878,7 @@ class PatchscopeExperiment(BaseExperiment):
                         "answer": None, "probs": {}, "logits": {}, "raw": ""
                     }
 
-        return activations, direct_answers, shuffle_maps
+        return activations, direct_answers, shuffle_maps, extraction_meta
 
     # ── Phase 2: matrix iteration ─────────────────────────────────────────
 
@@ -799,14 +886,14 @@ class PatchscopeExperiment(BaseExperiment):
         self, *,
         source_persona_names, source_layers, injection_layers, pair_map,
         reporter_persona_names, templates, conditions,
-        activations, direct_answers, shuffle_maps,
+        activations, direct_answers, shuffle_maps, extraction_meta,
         control_sample_rate, control_rng,
         style, tokenizer, base_prompt, placeholder_token, num_placeholders,
         injection_mode,
     ) -> Iterator[dict]:
         """Yield one dict per cell in the Phase 2 experiment matrix.
 
-        This generator owns the 7-level nested loop so that run() stays flat.
+        This generator owns the nested loop so that run() stays flat.
         Each yielded dict contains everything _run_single_cell needs:
           - "record": pre-populated PatchscopeRecord
           - "activation": tensor to inject (real, shuffled, or None for baseline)
@@ -815,126 +902,157 @@ class PatchscopeExperiment(BaseExperiment):
           - "tmpl_name" / "tmpl_cfg" / "prompt_style": template info
           - "inj_layer": injection layer index
           - "shuffle_remap": label remap dict for answer remapping
+
+        When ``readout: "both"`` was used, activations[persona][question] is
+        ``{"prefill": {layer: tensor}, "during_gen": {layer: tensor}}``.
+        This method detects that structure and loops over both extraction modes,
+        yielding separate cells for each.
         """
         for sp_name in source_persona_names:
             for question_idx, question in enumerate(self.questions):
                 question_id = question.get("question_id", f"q{question_idx}")
 
-                if not activations.get(sp_name, {}).get(question_idx, {}):
+                q_acts = activations.get(sp_name, {}).get(question_idx, {})
+                if not q_acts:
                     logger.warning(f"Skipping {sp_name} q={question_id}: no activations")
                     continue
 
-                for src_layer in source_layers:
-                    real_act = activations.get(sp_name, {}).get(question_idx, {}).get(src_layer)
-                    if real_act is None:
-                        continue
+                # Detect "both" mode: activations have "prefill"/"during_gen" sub-dicts
+                _is_both = "prefill" in q_acts and "during_gen" in q_acts
+                if _is_both:
+                    extraction_modes = [("prefill", q_acts["prefill"]), ("during_gen", q_acts["during_gen"])]
+                else:
+                    extraction_modes = [(None, q_acts)]  # single mode, acts is {layer: tensor}
 
-                    # Shuffled control: activation from a different question
-                    # (mismatched-content control, NOT random noise)
-                    shuffled_act = None
-                    if "shuffled" in conditions and len(self.questions) > 1:
-                        other_question_idx = (question_idx + 1) % len(self.questions)
-                        shuffled_act = activations.get(sp_name, {}).get(other_question_idx, {}).get(src_layer)
+                for ext_mode_key, mode_acts in extraction_modes:
+                    for src_layer in source_layers:
+                        real_act = mode_acts.get(src_layer)
+                        if real_act is None:
+                            continue
 
-                    paired_inj_layers = pair_map[src_layer] if pair_map else injection_layers
-                    for inj_layer in paired_inj_layers:
-                        for reporter_name in reporter_persona_names:
-                            reporter_persona = self.all_personas[reporter_name]
+                        # Shuffled control: activation from a different question
+                        # (mismatched-content control, NOT random noise)
+                        shuffled_act = None
+                        if "shuffled" in conditions and len(self.questions) > 1:
+                            other_question_idx = (question_idx + 1) % len(self.questions)
+                            other_acts = activations.get(sp_name, {}).get(other_question_idx, {})
+                            if _is_both and ext_mode_key in other_acts:
+                                shuffled_act = other_acts[ext_mode_key].get(src_layer)
+                            else:
+                                shuffled_act = other_acts.get(src_layer)
 
-                            for tmpl_name, tmpl_cfg in templates.items():
-                                prompt_style = style
+                        paired_inj_layers = pair_map[src_layer] if pair_map else injection_layers
+                        for inj_layer in paired_inj_layers:
+                            for reporter_name in reporter_persona_names:
+                                reporter_persona = self.all_personas[reporter_name]
 
-                                # Use shuffled options matching the source pass
-                                shuffle_key = (question_id, sp_name)
-                                shuffled_question = shuffle_maps.get(shuffle_key, (question, {}))[0]
-                                shuffled_options = shuffled_question.get("options", {})
-                                shuffle_remap = shuffle_maps.get(shuffle_key, (None, {}))[1]
+                                for tmpl_name, tmpl_cfg in templates.items():
+                                    prompt_style = style
 
-                                # Build the interpretation prompt and find where the
-                                # placeholder tokens landed (token indices).  These
-                                # positions are where the activation will be patched in.
-                                interp_text, interp_messages, placeholder_positions = (
-                                    patchscope_helpers.build_interpretation_prompt(
-                                        tokenizer=tokenizer,
-                                        tmpl_cfg=tmpl_cfg,
-                                        prompt_style=prompt_style,
-                                        base_prompt=base_prompt,
-                                        placeholder_token=placeholder_token,
-                                        num_placeholders=num_placeholders,
-                                        question=question,
-                                        reporter_system_prompt=reporter_persona.system_prompt,
-                                        options_override=shuffled_options,
-                                        use_chat_template=self._use_chat_template,
-                                    )
-                                )
+                                    # Use shuffled options matching the source pass
+                                    shuffle_key = (question_id, sp_name)
+                                    shuffled_question = shuffle_maps.get(shuffle_key, (question, {}))[0]
+                                    shuffled_options = shuffled_question.get("options", {})
+                                    shuffle_remap = shuffle_maps.get(shuffle_key, (None, {}))[1]
 
-                                # Validate placeholder positions once per template
-                                # (first time we see this template name)
-                                _validation_key = f"_validated_{tmpl_name}"
-                                if not hasattr(self, _validation_key):
-                                    patchscope_helpers.validate_placeholder_positions(
-                                        tokenizer, interp_text,
-                                        placeholder_positions, placeholder_token,
-                                        tmpl_name=tmpl_name,
-                                        raise_on_error=True,
-                                    )
-                                    setattr(self, _validation_key, True)
-
-                                for condition in conditions:
-                                    # Subsample controls if configured
-                                    if condition != "real" and control_sample_rate < 1.0:
-                                        if control_rng.random() > control_sample_rate:
-                                            continue
-
-                                    # Select the activation for this condition:
-                                    #   "real"               -> the actual source activation
-                                    #   "shuffled"           -> activation from a different question
-                                    #   "text_only_baseline" -> None (no injection)
-                                    if condition == "text_only_baseline":
-                                        activation = None
-                                    elif condition == "shuffled":
-                                        activation = shuffled_act
-                                    else:
-                                        activation = real_act
-
-                                    source_direct = direct_answers[sp_name][question_idx]
-                                    record = PatchscopeRecord(
-                                        experiment="patchscope",
-                                        template_name=tmpl_name,
-                                        model=self.config.model_name,
-                                        question_id=question_id,
-                                        source_persona=sp_name,
-                                        reporter_persona=reporter_name,
-                                        condition=condition,
-                                        source_layer=src_layer,
-                                        injection_layer=inj_layer,
-                                        injection_mode=injection_mode,
-                                        source_direct_answer=source_direct["answer"],
-                                        source_answer_probs=source_direct["probs"],
-                                        question_text=question.get("question_text", ""),
-                                        question_options=question.get("options"),
-                                        reporter_system_prompt=(
-                                            (reporter_persona.system_prompt or "").strip()
-                                        ),
+                                    # Build the interpretation prompt and find where the
+                                    # placeholder tokens landed (token indices).  These
+                                    # positions are where the activation will be patched in.
+                                    interp_text, interp_messages, placeholder_positions = (
+                                        patchscope_helpers.build_interpretation_prompt(
+                                            tokenizer=tokenizer,
+                                            tmpl_cfg=tmpl_cfg,
+                                            prompt_style=prompt_style,
+                                            base_prompt=base_prompt,
+                                            placeholder_token=placeholder_token,
+                                            num_placeholders=num_placeholders,
+                                            question=question,
+                                            reporter_system_prompt=reporter_persona.system_prompt,
+                                            options_override=shuffled_options,
+                                            use_chat_template=self._use_chat_template,
+                                        )
                                     )
 
-                                    yield {
-                                        "record": record,
-                                        "condition": condition,
-                                        "activation": activation,
-                                        "interp_text": interp_text,
-                                        "interp_messages": interp_messages,
-                                        "placeholder_positions": placeholder_positions,
-                                        "prompt_style": prompt_style,
-                                        "tmpl_name": tmpl_name,
-                                        "tmpl_cfg": tmpl_cfg,
-                                        "inj_layer": inj_layer,
-                                        "shuffle_remap": shuffle_remap,
-                                        "interp_question": {
-                                            "question_text": question.get("question_text", ""),
-                                            "options": dict(shuffled_options),
-                                        },
-                                    }
+                                    # Validate placeholder positions once per template
+                                    # (first time we see this template name)
+                                    _validation_key = f"_validated_{tmpl_name}"
+                                    if not hasattr(self, _validation_key):
+                                        patchscope_helpers.validate_placeholder_positions(
+                                            tokenizer, interp_text,
+                                            placeholder_positions, placeholder_token,
+                                            tmpl_name=tmpl_name,
+                                            raise_on_error=True,
+                                        )
+                                        setattr(self, _validation_key, True)
+
+                                    for condition in conditions:
+                                        # Subsample controls if configured
+                                        if condition != "real" and control_sample_rate < 1.0:
+                                            if control_rng.random() > control_sample_rate:
+                                                continue
+
+                                        # Select the activation for this condition:
+                                        #   "real"               -> the actual source activation
+                                        #   "shuffled"           -> activation from a different question
+                                        #   "text_only_baseline" -> None (no injection)
+                                        if condition == "text_only_baseline":
+                                            activation = None
+                                        elif condition == "shuffled":
+                                            activation = shuffled_act
+                                        else:
+                                            activation = real_act
+
+                                        # Resolve extraction metadata for this cell
+                                        _emeta_raw = extraction_meta.get((sp_name, question_idx), {})
+                                        if ext_mode_key is not None and ext_mode_key in _emeta_raw:
+                                            _emeta = _emeta_raw[ext_mode_key]
+                                        else:
+                                            _emeta = _emeta_raw
+
+                                        source_direct = direct_answers[sp_name][question_idx]
+                                        record = PatchscopeRecord(
+                                            experiment="patchscope",
+                                            template_name=tmpl_name,
+                                            model=self.config.model_name,
+                                            question_id=question_id,
+                                            source_persona=sp_name,
+                                            reporter_persona=reporter_name,
+                                            condition=condition,
+                                            source_layer=src_layer,
+                                            injection_layer=inj_layer,
+                                            injection_mode=injection_mode,
+                                            source_direct_answer=source_direct["answer"],
+                                            source_answer_probs=source_direct["probs"],
+                                            source_chosen_prob=source_direct.get("source_chosen_prob"),
+                                            source_margin=source_direct.get("source_margin"),
+                                            extraction_mode=_emeta.get("extraction_mode"),
+                                            extraction_token_index=_emeta.get("extraction_token_index"),
+                                            extraction_token_id=_emeta.get("extraction_token_id"),
+                                            extraction_token_text=_emeta.get("extraction_token_text"),
+                                            question_text=question.get("question_text", ""),
+                                            question_options=question.get("options"),
+                                            reporter_system_prompt=(
+                                                (reporter_persona.system_prompt or "").strip()
+                                            ),
+                                        )
+
+                                        yield {
+                                            "record": record,
+                                            "condition": condition,
+                                            "activation": activation,
+                                            "interp_text": interp_text,
+                                            "interp_messages": interp_messages,
+                                            "placeholder_positions": placeholder_positions,
+                                            "prompt_style": prompt_style,
+                                            "tmpl_name": tmpl_name,
+                                            "tmpl_cfg": tmpl_cfg,
+                                            "inj_layer": inj_layer,
+                                            "shuffle_remap": shuffle_remap,
+                                            "interp_question": {
+                                                "question_text": question.get("question_text", ""),
+                                                "options": dict(shuffled_options),
+                                            },
+                                        }
 
     # ── Phase 2: single-cell execution ────────────────────────────────────
 
@@ -1097,6 +1215,13 @@ class PatchscopeExperiment(BaseExperiment):
                     patchscope_helpers._parse_constrained(tmpl_name, result["generated_text"])
                 )
 
+            # Remap shuffled letter back to canonical space so it can be
+            # compared against source_direct_answer (which is already canonical).
+            if shuffle_remap and record.parsed_answer:
+                record.parsed_answer = shuffle_remap.get(
+                    record.parsed_answer, record.parsed_answer
+                )
+
             # Relevancy scoring (SelfIE metric, only for real condition)
             if (
                 relevancy_cfg.get("enabled", False)
@@ -1120,6 +1245,12 @@ class PatchscopeExperiment(BaseExperiment):
                     record.mean_relevancy = (
                         sum(rel_scores) / len(rel_scores) if rel_scores else None
                     )
+
+        # ── 3b. Reporter confidence metrics ──────────────────────────────
+        if record.choice_probs:
+            _sorted_rp = sorted(record.choice_probs.values(), reverse=True)
+            record.reporter_chosen_prob = _sorted_rp[0] if _sorted_rp else None
+            record.reporter_margin = (_sorted_rp[0] - _sorted_rp[1]) if len(_sorted_rp) > 1 else None
 
         # ── 4. Cache baseline result ──────────────────────────────────────
 

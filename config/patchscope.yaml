@@ -21,12 +21,11 @@ layer_pairs:
   - [25, 25]
   - [30, 30]
 
-
 extraction:
 
   # Phase-1: prefill = prompt-only (token_position). during_generation = activations from generated tokens.
   # Aliases: readout autoregressive / while_generating; or token_position during_generation (same idea).
-  readout: "during_generation"   # Phase-1: hidden states from generated tokens (see autoregressive.*)
+  readout: "both"   # Phase-1: hidden states from generated tokens (see autoregressive.*)
   # readout: "prefill"           # prompt-only positions via token_position below
 
   autoregressive:
@@ -44,7 +43,7 @@ extraction:
   #            assistant_boundary_marker (end of user turn, before assistant header tokens).
   #   <int> — explicit 0-based index into encode(templated_source, add_special_tokens=False).
 
-  token_position: "during_generation"  # Alternative: token_position: "during_generation" (same as readout: during_generation).
+  token_position: "last_before_assistant"  # Alternative: token_position: "during_generation" (same as readout: during_generation).
 
   # Substring search in the templated source string; only used when token_position is
   # last_before_assistant. Must match your model's chat template (Llama 3 Instruct default).
@@ -86,7 +85,6 @@ relevancy:
 # ═══════════════════════════════════════════════════════════════════════
 
 # Source mode: "questions" (default, MCQ from task file) or "manual" (free-form prompts below).
-# When "manual", the manual_prompts section is used instead of the task file questions.
 # Extraction uses prefill readout at the specified target_word regardless of extraction.readout.
 source_mode: "questions"
 
@@ -103,7 +101,7 @@ reporter_personas:
 
 # Question sampling (only used when source_mode: "questions")
 # categories: ["cat_1", "cat_2", "cat_3", "cat_4", "cat_5"]   # empty = all categories
-categories: ["cat_1", "cat_2", "cat_4"]   # empty = all categories
+categories: ["cat_1", "cat_2", "cat_3", "cat_4", "cat_5"]   # empty = all categories
 samples_per_category: null      # null = all in category
 
 # ── Manual source prompts (used when source_mode: "manual") ──────────
@@ -154,6 +152,7 @@ controls:
 # (see opposing_sample_policy). Each block also runs a log-only decode without the reporter
 # persona when include_no_reporter_system_sample is true and the reporter has a system prompt.
 # That decode uses no_persona_layer_log_system_prompt when set (recommended with use_chat_template false).
+
 reporting:
   include_no_reporter_system_sample: true
   # .txt only: one plain-string prompt per source→injection layer pair (no apply_chat_template).
@@ -177,6 +176,27 @@ reporting:
 # Phase 1 — source forward pass: user message only (source persona system prompt
 # is still applied in code from personas.yaml). Edit this to change MCQ layout
 # or instructions without touching Python.
+
+# Which templates to run (empty list = all).
+# Valid: open_summary, answer_extraction, persona_probe, agreement_probe, self_recognition
+enabled_templates: ["open_summary"]
+
+# Prompt style — selects which variant to use from each template below.
+#   "identity"    — pattern-completion user text (e.g. cat -> cat; {placeholder}).
+#                   Still wrapped with the model chat template + reporter system prompt.
+#   "patchscopes" — minimal structured user prompt + chat template + reporter system.
+#   "selfie"      — instructional user prompt + chat template + reporter system.
+prompt_style: "repeat_word"
+
+# Whether to wrap interpretation prompts in the model's chat template.
+#   true  — apply_chat_template is used; reporter system prompt goes in the system role.
+#           identity style always bypasses this (it is a raw continuation prompt by design).
+#   false — no chat template for any style; reporter system prompt is prepended as plain
+#           text followed by a blank line (e.g. "You are a conservative...\n\ncat -> cat; ___").
+#           Keeps the model in base-model continuation mode regardless of prompt_style.
+use_chat_template: true
+
+
 # Placeholders: {question_text}, {options_formatted} (A–D lines, present options only).
 source_pass:
   # user_message_template: |
@@ -195,24 +215,7 @@ source_pass:
     Answer with only one letter and no other text. Do you choose A, B, C, or D?
 
     My answer is: <|eot_id|><|start_header_id|>assistant<|end_header_id|>
-# Which templates to run (empty list = all).
-# Valid: open_summary, answer_extraction, persona_probe, agreement_probe, self_recognition
-enabled_templates: ["open_summary"]
 
-# Prompt style — selects which variant to use from each template below.
-#   "identity"    — pattern-completion user text (e.g. cat -> cat; {placeholder}).
-#                   Still wrapped with the model chat template + reporter system prompt.
-#   "patchscopes" — minimal structured user prompt + chat template + reporter system.
-#   "selfie"      — instructional user prompt + chat template + reporter system.
-prompt_style: "selfie"
-
-# Whether to wrap interpretation prompts in the model's chat template.
-#   true  — apply_chat_template is used; reporter system prompt goes in the system role.
-#           identity style always bypasses this (it is a raw continuation prompt by design).
-#   false — no chat template for any style; reporter system prompt is prepended as plain
-#           text followed by a blank line (e.g. "You are a conservative...\n\ncat -> cat; ___").
-#           Keeps the model in base-model continuation mode regardless of prompt_style.
-use_chat_template: true
 
 
 
@@ -253,8 +256,8 @@ interpretation_templates:
       In a short phrase, describe what it means.
 
       {placeholder}
-    # selfie: |
-    #   Please just simply repeat this word or letter once: {placeholder}. 
+    repeat_word: |
+      Please just simply repeat this word or letter once: {placeholder}. 
     selfie: |
       Tell me what this means: {placeholder}. 
     #   <|start_header_id|>user<|end_header_id|> {placeholder} <|eot_id|><|start_header_id|>assistant<|end_header_id|> Sure, I will summarize the message:
