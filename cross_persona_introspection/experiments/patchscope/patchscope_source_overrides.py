@@ -150,7 +150,7 @@ def run_source_overrides(
                     )
 
                     try:
-                        record.interpretation_prompt = interp_text
+                        record.reporter_interpretation_prompt = interp_text
 
                         use_logits = (
                             tmpl_cfg.get("decode_mode", "generate") == "logits"
@@ -174,26 +174,26 @@ def run_source_overrides(
                             save_logprobs=save_logprobs,
                         )
 
-                        record.decode_mode = "logits" if use_logits else "generate"
-                        record.generated_text = result["generated_text"]
+                        record.reporter_decode_mode = "logits" if use_logits else "generate"
+                        record.reporter_generated_text = result["generated_text"]
                         if use_logits:
-                            record.choice_probs = result["probs"]
-                            record.choice_logits = result["logits"]
-                            record.choice_logprobs = result.get("logprobs")
-                            record.total_choice_prob = result.get("total_choice_prob")
-                            record.predicted = result["predicted"]
+                            record.reporter_choice_probs = result["probs"]
+                            record.reporter_choice_logits = result["logits"]
+                            record.reporter_choice_logprobs = result.get("logprobs")
+                            record.reporter_total_choice_prob = result.get("total_choice_prob")
+                            record.reporter_predicted = result["predicted"]
                             record.reporter_parsed_answer = result["predicted"]
-                            record.parse_success = True
+                            record.reporter_parse_success = True
 
                         # Check expected output
                         found = (
-                            so_expected.lower() in record.generated_text.lower()
+                            so_expected.lower() in record.reporter_generated_text.lower()
                             if so_expected else None
                         )
                         status = "✓" if found else "✗" if found is False else " "
                         logger.info(
                             f"    {so_name} L{src_layer:>2}→{inj_layer:>2} "
-                            f"{tmpl_name}: [{status}] '{record.generated_text.strip()[:60]}'"
+                            f"{tmpl_name}: [{status}] '{record.reporter_generated_text.strip()[:60]}'"
                         )
 
                         # Capture sample prompt
@@ -207,7 +207,7 @@ def run_source_overrides(
                                 "source_layer": src_layer,
                                 "injection_layer": inj_layer,
                                 "interp_prompt_text": interp_text,
-                                "generated_text": record.generated_text,
+                                "reporter_generated_text": record.reporter_generated_text,
                                 "question_id": f"override_{so_name}",
                             }
 

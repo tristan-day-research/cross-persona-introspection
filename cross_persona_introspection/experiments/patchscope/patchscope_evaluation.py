@@ -27,7 +27,7 @@ def compute_metrics(records: list[PatchscopeRecord]) -> dict:
 
     total = len(records)
     errors = sum(1 for r in records if r.error)
-    constrained = [r for r in records if r.parse_success]
+    constrained = [r for r in records if r.reporter_parse_success]
 
     metrics = {
         "total_records": total,
@@ -90,10 +90,10 @@ def compute_metrics(records: list[PatchscopeRecord]) -> dict:
             metrics[f"self_recognition_{condition}_n"] = len(recs)
 
     # -- mean relevancy (SelfIE)
-    rel_recs = [r for r in records if r.mean_relevancy is not None]
+    rel_recs = [r for r in records if r.reporter_mean_relevancy is not None]
     if rel_recs:
-        metrics["mean_relevancy"] = round(
-            sum(r.mean_relevancy for r in rel_recs) / len(rel_recs), 6
+        metrics["reporter_mean_relevancy"] = round(
+            sum(r.reporter_mean_relevancy for r in rel_recs) / len(rel_recs), 6
         )
 
     return metrics

@@ -205,9 +205,9 @@ def test_patchscope_record():
         source_layer=8,
         injection_layer=3,
         injection_mode="replace",
-        generated_text="This represents a conservative view.",
+        reporter_generated_text="This represents a conservative view.",
         reporter_parsed_answer=None,
-        parse_success=False,
+        reporter_parse_success=False,
     )
     d = asdict(rec)
     assert d["condition"] == "real"
@@ -286,7 +286,7 @@ def test_patchscope_helpers():
     tok = GPT2Tokenizer.from_pretrained("gpt2")
     tmpl = {
         "selfie": "HEAD {persona_prompt} MID {placeholder} TAIL",
-        "decode_mode": "generate",
+        "reporter_decode_mode": "generate",
     }
     interp, _msgs, _ph = build_interpretation_prompt(
         tok,

@@ -366,7 +366,7 @@ def write_run_log(
                 "",
                 "  ── MODEL RESPONSE ──",
             ]
-            for rline in sample.get("generated_text", "").splitlines():
+            for rline in sample.get("reporter_generated_text", "").splitlines():
                 lines.append(f"  {rline}")
             lines.append("")
         lines.append("")
@@ -415,7 +415,7 @@ def write_run_log(
             "",
             "  ── MODEL RESPONSE (verbatim) ──",
         ]
-        for rline in sample["generated_text"].splitlines():
+        for rline in sample["reporter_generated_text"].splitlines():
             lines.append(f"  {rline}")
         lines.append("")
         ns = sample.get("no_reporter_system")
@@ -432,7 +432,7 @@ def write_run_log(
                 "",
                 "  ── MODEL RESPONSE (no reporter system) ──",
             ]
-            for rline in ns["generated_text"].splitlines():
+            for rline in ns["reporter_generated_text"].splitlines():
                 lines.append(f"  {rline}")
             lines.append("")
     lines.append("")
@@ -448,7 +448,7 @@ def write_run_log(
                 lines.append(f"\n  {r.question_id}: \"{r.question_text}\"")
             lines.append(
                 f"    L{r.source_layer:>2} → {r.injection_layer:>2}  "
-                f"{r.template_name:<20s}  '{r.generated_text.strip()[:70]}'"
+                f"{r.template_name:<20s}  '{r.reporter_generated_text.strip()[:70]}'"
             )
         lines.append("")
 

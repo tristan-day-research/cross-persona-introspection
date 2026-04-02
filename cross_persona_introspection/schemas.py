@@ -195,23 +195,23 @@ class PatchscopeRecord:
     # Reporter system prompt (raw, before chat template)
     reporter_system_prompt: str = ""
     # Full prompt sent to model (exact text including special tokens, system prompt, MCQ, etc.)
-    interpretation_prompt: str = ""
+    reporter_interpretation_prompt: str = ""
     # Decoding mode: "logits" or "generate"
-    decode_mode: str = "generate"
-    # Results
-    generated_text: str = ""
+    reporter_decode_mode: str = "generate"
+    # Reporter results
+    reporter_generated_text: str = ""
     reporter_parsed_answer: Optional[str] = None
-    parse_success: bool = False
-    # Logit-mode results (constrained single-token decode)
-    choice_probs: Optional[dict[str, float]] = None   # softmax over valid choices
-    choice_logits: Optional[dict[str, float]] = None   # raw logits for valid choices
-    choice_logprobs: Optional[dict[str, float]] = None  # log-softmax over full vocab at choice tokens
-    total_choice_prob: Optional[float] = None           # sum of full-vocab probs on choice tokens
-    predicted: Optional[str] = None                     # argmax choice
-    is_correct: Optional[bool] = None                   # predicted == source_last_prefill_answer
-    # Relevancy scores (SelfIE Section 3.2)
-    relevancy_scores: Optional[list[float]] = None
-    mean_relevancy: Optional[float] = None
+    reporter_parse_success: bool = False
+    # Reporter logit-mode results (constrained single-token decode)
+    reporter_choice_probs: Optional[dict[str, float]] = None   # softmax over valid choices
+    reporter_choice_logits: Optional[dict[str, float]] = None   # raw logits for valid choices
+    reporter_choice_logprobs: Optional[dict[str, float]] = None  # log-softmax over full vocab at choice tokens
+    reporter_total_choice_prob: Optional[float] = None           # sum of full-vocab probs on choice tokens
+    reporter_predicted: Optional[str] = None                     # argmax choice
+    reporter_is_correct: Optional[bool] = None                   # reporter_parsed_answer matches ground truth
+    # Reporter relevancy scores (SelfIE Section 3.2)
+    reporter_relevancy_scores: Optional[list[float]] = None
+    reporter_mean_relevancy: Optional[float] = None
     # Ground truth (from source's direct answer under that persona)
     source_last_prefill_answer: Optional[str] = None          # from prefill logits (canonical)
     source_generated_answer: Optional[str] = None       # from actual generation during decode (canonical)
@@ -223,11 +223,11 @@ class PatchscopeRecord:
     # Reporter confidence metrics
     reporter_chosen_prob: Optional[float] = None     # P(reporter's predicted answer)
     reporter_margin: Optional[float] = None          # top1_prob - top2_prob
-    # Extraction site metadata
-    extraction_mode: Optional[str] = None            # "prefill_<position>" or "during_generation"
-    extraction_token_index: Optional[int] = None     # 0-based token position
-    extraction_token_id: Optional[int] = None        # token ID at that position
-    extraction_token_text: Optional[str] = None      # decoded token string
+    # Source extraction site metadata
+    source_extraction_mode: Optional[str] = None            # "prefill_<position>" or "during_generation"
+    source_extraction_token_index: Optional[int] = None     # 0-based token position
+    source_extraction_token_id: Optional[int] = None        # token ID at that position
+    source_extraction_token_text: Optional[str] = None      # decoded token string
     # Original question data
     question_text: Optional[str] = None
     question_options: Optional[dict[str, str]] = None

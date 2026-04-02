@@ -546,7 +546,7 @@ class PatchscopeExperiment(BaseExperiment):
                         # No MCQ direct answer for manual prompts
                         direct_answers[sp_name][question_idx] = {
                             "answer": None, "probs": {}, "logits": {},
-                            "logprobs": None, "total_choice_prob": None,
+                            "logprobs": None, "reporter_total_choice_prob": None,
                             "raw": f"[manual] target_word={_target_word!r}",
                             "shuffled_answer": None,
                             "option_order": [],
@@ -560,10 +560,10 @@ class PatchscopeExperiment(BaseExperiment):
                         _tok_id = int(token_ids[_tok_pos]) if 0 <= _tok_pos < len(token_ids) else None
                         _tok_text = tokenizer.decode([_tok_id]).strip() if _tok_id is not None else None
                         extraction_meta[(sp_name, question_idx)] = {
-                            "extraction_mode": f"prefill_manual_{_target_word}",
-                            "extraction_token_index": _tok_pos,
-                            "extraction_token_id": _tok_id,
-                            "extraction_token_text": _tok_text,
+                            "source_extraction_mode": f"prefill_manual_{_target_word}",
+                            "source_extraction_token_index": _tok_pos,
+                            "source_extraction_token_id": _tok_id,
+                            "source_extraction_token_text": _tok_text,
                         }
 
                         # Sample prompt for log
@@ -740,19 +740,19 @@ class PatchscopeExperiment(BaseExperiment):
                             )
                             _tok_spec = str(_ex_tok).strip().lower().replace("-", "_")
                             return {
-                                "extraction_mode": f"prefill_{_tok_spec}",
-                                "extraction_token_index": site.get("token_index"),
-                                "extraction_token_id": site.get("token_id"),
-                                "extraction_token_text": site.get("token_decoded_repr") or site.get("token_decoded_strip"),
+                                "source_extraction_mode": f"prefill_{_tok_spec}",
+                                "source_extraction_token_index": site.get("token_index"),
+                                "source_extraction_token_id": site.get("token_id"),
+                                "source_extraction_token_text": site.get("token_decoded_repr") or site.get("token_decoded_strip"),
                             }
 
                         def _gen_meta() -> dict:
                             m = _ar_meta or {}
                             return {
-                                "extraction_mode": "during_generation",
-                                "extraction_token_index": None,  # position is dynamic (generated)
-                                "extraction_token_id": m.get("activation_token_id"),
-                                "extraction_token_text": (
+                                "source_extraction_mode": "during_generation",
+                                "source_extraction_token_index": None,  # position is dynamic (generated)
+                                "source_extraction_token_id": m.get("activation_token_id"),
+                                "source_extraction_token_text": (
                                     m.get("activation_token_decoded_strip")
                                     or (repr(tokenizer.decode([m["activation_token_id"]])) if m.get("activation_token_id") is not None else None)
                                 ),
@@ -815,7 +815,7 @@ class PatchscopeExperiment(BaseExperiment):
                             "probs": canonical_probs,
                             "logits": canonical_logits,
                             "logprobs": canonical_logprobs,
-                            "total_choice_prob": total_cp,
+                            "reporter_total_choice_prob": total_cp,
                             "raw": f"[logits] {canonical_answer}",
                             "shuffled_answer": shuffled_answer,
                             "option_order": [remap.get(l, l) for l in ["A", "B", "C", "D"]],
@@ -1048,10 +1048,10 @@ class PatchscopeExperiment(BaseExperiment):
                                             source_chosen_prob=source_direct.get("source_chosen_prob"),
                                             source_margin=source_direct.get("source_margin"),
                                             source_answer_entropy=source_direct.get("source_answer_entropy"),
-                                            extraction_mode=_emeta.get("extraction_mode"),
-                                            extraction_token_index=_emeta.get("extraction_token_index"),
-                                            extraction_token_id=_emeta.get("extraction_token_id"),
-                                            extraction_token_text=_emeta.get("extraction_token_text"),
+                                            source_extraction_mode=_emeta.get("source_extraction_mode"),
+                                            source_extraction_token_index=_emeta.get("source_extraction_token_index"),
+                                            source_extraction_token_id=_emeta.get("source_extraction_token_id"),
+                                            source_extraction_token_text=_emeta.get("source_extraction_token_text"),
                                             question_text=question.get("question_text", ""),
                                             question_options=question.get("options"),
                                             category_id=question.get("category_id"),
@@ -1148,7 +1148,7 @@ class PatchscopeExperiment(BaseExperiment):
                 if not baseline_prompt.endswith(" "):
                     baseline_prompt += " "
 
-        record.interpretation_prompt = (
+        record.reporter_interpretation_prompt = (
             baseline_prompt if (condition == "text_only_baseline" and baseline_prompt)
             else interp_text
         )
@@ -1165,17 +1165,17 @@ class PatchscopeExperiment(BaseExperiment):
         baseline_key = (record.question_id, record.reporter_persona, tmpl_name, record.source_persona)
         if condition == "text_only_baseline" and baseline_key in baseline_cache:
             cached = baseline_cache[baseline_key]
-            record.decode_mode = cached["decode_mode"]
-            record.generated_text = cached["generated_text"]
+            record.reporter_decode_mode = cached["reporter_decode_mode"]
+            record.reporter_generated_text = cached["reporter_generated_text"]
             record.reporter_parsed_answer = cached.get("reporter_parsed_answer")
-            record.parse_success = cached.get("parse_success", False)
-            record.choice_probs = cached.get("choice_probs")
-            record.choice_logits = cached.get("choice_logits")
-            record.choice_logprobs = cached.get("choice_logprobs")
-            record.total_choice_prob = cached.get("total_choice_prob")
-            record.predicted = cached.get("predicted")
+            record.reporter_parse_success = cached.get("reporter_parse_success", False)
+            record.reporter_choice_probs = cached.get("reporter_choice_probs")
+            record.reporter_choice_logits = cached.get("reporter_choice_logits")
+            record.reporter_choice_logprobs = cached.get("reporter_choice_logprobs")
+            record.reporter_total_choice_prob = cached.get("reporter_total_choice_prob")
+            record.reporter_predicted = cached.get("reporter_predicted")
             if tmpl_name == "answer_extraction" and record.source_last_prefill_answer:
-                record.is_correct = record.predicted == record.source_last_prefill_answer
+                record.reporter_is_correct = record.reporter_predicted == record.source_last_prefill_answer
             return
 
         # ── 3. Patch activation + decode ─────────────────────────────────
@@ -1189,8 +1189,8 @@ class PatchscopeExperiment(BaseExperiment):
                 f"Only text_only_baseline should have no activation."
             )
 
-        decode_mode = tmpl_cfg.get("decode_mode", "generate")
-        use_logits = decode_mode == "logits" and tmpl_name in all_choice_token_ids
+        reporter_decode_mode = tmpl_cfg.get("decode_mode", "generate")
+        use_logits = reporter_decode_mode == "logits" and tmpl_name in all_choice_token_ids
         effective_raw = baseline_prompt if condition == "text_only_baseline" else raw_text
 
         # Single call to patch_and_decode handles both logits and generate modes
@@ -1212,33 +1212,33 @@ class PatchscopeExperiment(BaseExperiment):
         )
 
         # Populate the record from the result
-        record.decode_mode = "logits" if use_logits else "generate"
-        record.generated_text = result["generated_text"]
+        record.reporter_decode_mode = "logits" if use_logits else "generate"
+        record.reporter_generated_text = result["generated_text"]
 
         if use_logits:
             # Remap shuffled labels back to canonical for answer_extraction
             if shuffle_remap and tmpl_name == "answer_extraction":
-                record.choice_probs = {shuffle_remap.get(k, k): v for k, v in result["probs"].items()}
-                record.choice_logits = {shuffle_remap.get(k, k): v for k, v in result["logits"].items()}
-                record.choice_logprobs = (
+                record.reporter_choice_probs = {shuffle_remap.get(k, k): v for k, v in result["probs"].items()}
+                record.reporter_choice_logits = {shuffle_remap.get(k, k): v for k, v in result["logits"].items()}
+                record.reporter_choice_logprobs = (
                     {shuffle_remap.get(k, k): v for k, v in result["logprobs"].items()}
                     if "logprobs" in result else None
                 )
-                record.predicted = shuffle_remap.get(result["predicted"], result["predicted"])
+                record.reporter_predicted = shuffle_remap.get(result["predicted"], result["predicted"])
             else:
-                record.choice_probs = result["probs"]
-                record.choice_logits = result["logits"]
-                record.choice_logprobs = result.get("logprobs")
-                record.predicted = result["predicted"]
-            record.total_choice_prob = result.get("total_choice_prob")
-            record.reporter_parsed_answer = record.predicted
-            record.parse_success = True
+                record.reporter_choice_probs = result["probs"]
+                record.reporter_choice_logits = result["logits"]
+                record.reporter_choice_logprobs = result.get("logprobs")
+                record.reporter_predicted = result["predicted"]
+            record.reporter_total_choice_prob = result.get("total_choice_prob")
+            record.reporter_parsed_answer = record.reporter_predicted
+            record.reporter_parse_success = True
             if tmpl_name == "answer_extraction" and record.source_last_prefill_answer:
-                record.is_correct = record.predicted == record.source_last_prefill_answer
+                record.reporter_is_correct = record.reporter_predicted == record.source_last_prefill_answer
         else:
             # Free-form generation: parse structured answer from text
             if tmpl_name in patchscope_helpers.TEMPLATE_CHOICES:
-                record.reporter_parsed_answer, record.parse_success = (
+                record.reporter_parsed_answer, record.reporter_parse_success = (
                     patchscope_helpers._parse_constrained(tmpl_name, result["generated_text"])
                 )
             else:
@@ -1248,7 +1248,7 @@ class PatchscopeExperiment(BaseExperiment):
                 _gen = result["generated_text"].strip()
                 if _gen and _gen[0] in "ABCD":
                     record.reporter_parsed_answer = _gen[0]
-                    record.parse_success = True
+                    record.reporter_parse_success = True
 
             # Remap shuffled letter back to canonical space so it can be
             # compared against source_last_prefill_answer (which is already canonical).
@@ -1276,30 +1276,46 @@ class PatchscopeExperiment(BaseExperiment):
                         max_tokens=relevancy_cfg.get("max_tokens", 64),
                         raw_text=interp_text if (prompt_style == "identity" or not self._use_chat_template) else None,
                     )
-                    record.relevancy_scores = rel_scores
-                    record.mean_relevancy = (
+                    record.reporter_relevancy_scores = rel_scores
+                    record.reporter_mean_relevancy = (
                         sum(rel_scores) / len(rel_scores) if rel_scores else None
                     )
 
         # ── 3b. Reporter confidence metrics ──────────────────────────────
-        if record.choice_probs:
-            _sorted_rp = sorted(record.choice_probs.values(), reverse=True)
+        if record.reporter_choice_probs:
+            _sorted_rp = sorted(record.reporter_choice_probs.values(), reverse=True)
             record.reporter_chosen_prob = _sorted_rp[0] if _sorted_rp else None
             record.reporter_margin = (_sorted_rp[0] - _sorted_rp[1]) if len(_sorted_rp) > 1 else None
+
+        # ── 3c. reporter_is_correct ──────────────────────────────────────
+        # Compare reporter_parsed_answer (canonical) against the right ground
+        # truth for this extraction mode.  Both sides are already in canonical
+        # space so no shuffle logic needed here.
+        if record.reporter_parsed_answer:
+            _is_during_gen = (
+                record.source_extraction_mode
+                and "during_generation" in record.source_extraction_mode
+            )
+            _gt = (
+                record.source_generated_answer if _is_during_gen and record.source_generated_answer
+                else record.source_last_prefill_answer
+            )
+            if _gt:
+                record.reporter_is_correct = record.reporter_parsed_answer == _gt
 
         # ── 4. Cache baseline result ──────────────────────────────────────
 
         if condition == "text_only_baseline" and baseline_key not in baseline_cache:
             baseline_cache[baseline_key] = {
-                "decode_mode": record.decode_mode,
-                "generated_text": record.generated_text,
+                "reporter_decode_mode": record.reporter_decode_mode,
+                "reporter_generated_text": record.reporter_generated_text,
                 "reporter_parsed_answer": record.reporter_parsed_answer,
-                "parse_success": record.parse_success,
-                "choice_probs": record.choice_probs,
-                "choice_logits": record.choice_logits,
-                "choice_logprobs": record.choice_logprobs,
-                "total_choice_prob": record.total_choice_prob,
-                "predicted": record.predicted,
+                "reporter_parse_success": record.reporter_parse_success,
+                "reporter_choice_probs": record.reporter_choice_probs,
+                "reporter_choice_logits": record.reporter_choice_logits,
+                "reporter_choice_logprobs": record.reporter_choice_logprobs,
+                "reporter_total_choice_prob": record.reporter_total_choice_prob,
+                "reporter_predicted": record.reporter_predicted,
             }
 
         # .txt log: one match + one oppose sample per (template, condition, layer pair)
@@ -1320,7 +1336,7 @@ class PatchscopeExperiment(BaseExperiment):
                 "source_layer": record.source_layer,
                 "injection_layer": inj_layer,
                 "interp_prompt_text": interp_text,
-                "generated_text": record.generated_text,
+                "reporter_generated_text": record.reporter_generated_text,
                 "question_id": record.question_id,
             }
             if rep_cfg.get("include_no_reporter_system_sample", True) and (
@@ -1448,8 +1464,8 @@ class PatchscopeExperiment(BaseExperiment):
             reporter_system_prompt=layer_log_system_prompt,
             use_chat_template=False,
         )
-        decode_mode = tmpl_cfg.get("decode_mode", "generate")
-        use_logits = decode_mode == "logits" and tmpl_name in all_choice_token_ids
+        reporter_decode_mode = tmpl_cfg.get("decode_mode", "generate")
+        use_logits = reporter_decode_mode == "logits" and tmpl_name in all_choice_token_ids
 
         result = patchscope_patching.patch_and_decode(
             model,
@@ -1480,7 +1496,7 @@ class PatchscopeExperiment(BaseExperiment):
             "layer_log_system_prompt": layer_log_system_prompt or "",
             "layer_log_body_override": layer_log_body_override or "",
             "interp_prompt_text": ns_text,
-            "generated_text": result["generated_text"],
+            "reporter_generated_text": result["generated_text"],
         }
 
     def _capture_no_system_log_sample(
@@ -1554,8 +1570,8 @@ class PatchscopeExperiment(BaseExperiment):
         elif prompt_style == "identity" or not use_ct:
             effective_raw = ns_text
 
-        decode_mode = tmpl_cfg.get("decode_mode", "generate")
-        use_logits = decode_mode == "logits" and tmpl_name in all_choice_token_ids
+        reporter_decode_mode = tmpl_cfg.get("decode_mode", "generate")
+        use_logits = reporter_decode_mode == "logits" and tmpl_name in all_choice_token_ids
 
         result = patchscope_patching.patch_and_decode(
             model,
@@ -1583,7 +1599,7 @@ class PatchscopeExperiment(BaseExperiment):
         )
         self._sample_prompts[sample_key]["no_reporter_system"] = {
             "interp_prompt_text": log_prompt,
-            "generated_text": result["generated_text"],
+            "reporter_generated_text": result["generated_text"],
         }
 
     # ── Evaluate & save ───────────────────────────────────────────────────
