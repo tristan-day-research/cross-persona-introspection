@@ -46,7 +46,7 @@ def compute_metrics(records: list[PatchscopeRecord]) -> dict:
         if recs:
             correct = sum(
                 1 for r in recs
-                if r.parsed_answer and r.parsed_answer[0] == r.source_direct_answer
+                if r.reporter_parsed_answer and r.reporter_parsed_answer[0] == r.source_direct_answer
             )
             metrics[f"answer_extraction_{condition}_accuracy"] = round(
                 correct / len(recs), 4
@@ -66,7 +66,7 @@ def compute_metrics(records: list[PatchscopeRecord]) -> dict:
                     "CONSERVATIVE" if "conservative" in r.source_persona
                     else "PROGRESSIVE"
                 )
-                if r.parsed_answer and expected.startswith(r.parsed_answer[:4]):
+                if r.reporter_parsed_answer and expected.startswith(r.reporter_parsed_answer[:4]):
                     correct += 1
             metrics[f"persona_probe_{condition}_accuracy"] = round(
                 correct / len(recs), 4
@@ -82,7 +82,7 @@ def compute_metrics(records: list[PatchscopeRecord]) -> dict:
         if recs:
             correct = sum(
                 1 for r in recs
-                if r.parsed_answer == ("SELF" if r.source_persona == r.reporter_persona else "OTHER")
+                if r.reporter_parsed_answer == ("SELF" if r.source_persona == r.reporter_persona else "OTHER")
             )
             metrics[f"self_recognition_{condition}_accuracy"] = round(
                 correct / len(recs), 4

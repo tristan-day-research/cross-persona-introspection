@@ -794,6 +794,18 @@ class PatchscopeExperiment(BaseExperiment):
                         )
 
                         _sorted_cp = sorted(canonical_probs.values(), reverse=True)
+
+                        # Source generated answer: the token actually produced
+                        # during autoregressive decode, remapped to canonical.
+                        _gen_answer_shuffled = (
+                            (_ar_meta or {}).get("activation_token_decoded_strip")
+                            if _ar_meta else None
+                        )
+                        _gen_answer_canonical = (
+                            remap.get(_gen_answer_shuffled, _gen_answer_shuffled)
+                            if _gen_answer_shuffled else None
+                        )
+
                         direct_answers[sp_name][question_idx] = {
                             "answer": canonical_answer,
                             "probs": canonical_probs,
@@ -805,6 +817,7 @@ class PatchscopeExperiment(BaseExperiment):
                             "option_order": [remap.get(l, l) for l in ["A", "B", "C", "D"]],
                             "source_chosen_prob": _sorted_cp[0] if _sorted_cp else None,
                             "source_margin": (_sorted_cp[0] - _sorted_cp[1]) if len(_sorted_cp) > 1 else None,
+                            "source_generated_answer": _gen_answer_canonical,
                         }
 
                         if sp_name not in self._sample_source_prompts:
@@ -1025,6 +1038,7 @@ class PatchscopeExperiment(BaseExperiment):
                                             injection_layer=inj_layer,
                                             injection_mode=injection_mode,
                                             source_direct_answer=source_direct["answer"],
+                                            source_generated_answer=source_direct.get("source_generated_answer"),
                                             source_answer_probs=source_direct["probs"],
                                             source_chosen_prob=source_direct.get("source_chosen_prob"),
                                             source_margin=source_direct.get("source_margin"),
@@ -1145,7 +1159,7 @@ class PatchscopeExperiment(BaseExperiment):
             cached = baseline_cache[baseline_key]
             record.decode_mode = cached["decode_mode"]
             record.generated_text = cached["generated_text"]
-            record.parsed_answer = cached.get("parsed_answer")
+            record.reporter_parsed_answer = cached.get("reporter_parsed_answer")
             record.parse_success = cached.get("parse_success", False)
             record.choice_probs = cached.get("choice_probs")
             record.choice_logits = cached.get("choice_logits")
@@ -1209,14 +1223,14 @@ class PatchscopeExperiment(BaseExperiment):
                 record.choice_logprobs = result.get("logprobs")
                 record.predicted = result["predicted"]
             record.total_choice_prob = result.get("total_choice_prob")
-            record.parsed_answer = record.predicted
+            record.reporter_parsed_answer = record.predicted
             record.parse_success = True
             if tmpl_name == "answer_extraction" and record.source_direct_answer:
                 record.is_correct = record.predicted == record.source_direct_answer
         else:
             # Free-form generation: parse structured answer from text
             if tmpl_name in patchscope_helpers.TEMPLATE_CHOICES:
-                record.parsed_answer, record.parse_success = (
+                record.reporter_parsed_answer, record.parse_success = (
                     patchscope_helpers._parse_constrained(tmpl_name, result["generated_text"])
                 )
             else:
@@ -1225,14 +1239,14 @@ class PatchscopeExperiment(BaseExperiment):
                 # repeat the activation content (often a single answer letter).
                 _gen = result["generated_text"].strip()
                 if _gen and _gen[0] in "ABCD":
-                    record.parsed_answer = _gen[0]
+                    record.reporter_parsed_answer = _gen[0]
                     record.parse_success = True
 
             # Remap shuffled letter back to canonical space so it can be
             # compared against source_direct_answer (which is already canonical).
-            if shuffle_remap and record.parsed_answer:
-                record.parsed_answer = shuffle_remap.get(
-                    record.parsed_answer, record.parsed_answer
+            if shuffle_remap and record.reporter_parsed_answer:
+                record.reporter_parsed_answer = shuffle_remap.get(
+                    record.reporter_parsed_answer, record.reporter_parsed_answer
                 )
 
             # Relevancy scoring (SelfIE metric, only for real condition)
@@ -1271,7 +1285,7 @@ class PatchscopeExperiment(BaseExperiment):
             baseline_cache[baseline_key] = {
                 "decode_mode": record.decode_mode,
                 "generated_text": record.generated_text,
-                "parsed_answer": record.parsed_answer,
+                "reporter_parsed_answer": record.reporter_parsed_answer,
                 "parse_success": record.parse_success,
                 "choice_probs": record.choice_probs,
                 "choice_logits": record.choice_logits,

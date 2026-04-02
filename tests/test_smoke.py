@@ -180,6 +180,7 @@ def test_config_loading():
         "autoregressive",
         "during_generation",
         "while_generating",
+        "both",
     )
     assert "autoregressive" in ext
     assert "decode_steps" in ext["autoregressive"]
@@ -205,7 +206,7 @@ def test_patchscope_record():
         injection_layer=3,
         injection_mode="replace",
         generated_text="This represents a conservative view.",
-        parsed_answer=None,
+        reporter_parsed_answer=None,
         parse_success=False,
     )
     d = asdict(rec)
@@ -248,6 +249,7 @@ def test_patchscope_helpers():
         "autoregressive",
         "during_generation",
         "while_generating",
+        "both",
     )
     assert isinstance(ext.get("autoregressive"), dict)
     assert extraction_uses_generation_time_capture(

@@ -200,7 +200,7 @@ class PatchscopeRecord:
     decode_mode: str = "generate"
     # Results
     generated_text: str = ""
-    parsed_answer: Optional[str] = None
+    reporter_parsed_answer: Optional[str] = None
     parse_success: bool = False
     # Logit-mode results (constrained single-token decode)
     choice_probs: Optional[dict[str, float]] = None   # softmax over valid choices
@@ -213,7 +213,8 @@ class PatchscopeRecord:
     relevancy_scores: Optional[list[float]] = None
     mean_relevancy: Optional[float] = None
     # Ground truth (from source's direct answer under that persona)
-    source_direct_answer: Optional[str] = None
+    source_direct_answer: Optional[str] = None          # from prefill logits (canonical)
+    source_generated_answer: Optional[str] = None       # from actual generation during decode (canonical)
     source_answer_probs: Optional[dict[str, float]] = None
     # Source confidence metrics
     source_chosen_prob: Optional[float] = None       # P(source's top answer)

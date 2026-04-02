@@ -182,7 +182,7 @@ def run_source_overrides(
                             record.choice_logprobs = result.get("logprobs")
                             record.total_choice_prob = result.get("total_choice_prob")
                             record.predicted = result["predicted"]
-                            record.parsed_answer = result["predicted"]
+                            record.reporter_parsed_answer = result["predicted"]
                             record.parse_success = True
 
                         # Check expected output
