@@ -334,12 +334,16 @@ def extract_activations_multi_pos(
             raw_text, return_tensors="pt", add_special_tokens=False
         ).to(device)
     else:
-        # Use apply_chat_template with return_tensors so special tokens like
+        # Use apply_chat_template(tokenize=True) so special tokens like
         # <|eot_id|>, <|start_header_id|> are encoded as single tokens.
-        input_ids = tokenizer.apply_chat_template(
+        _ct = tokenizer.apply_chat_template(
             messages, tokenize=True, add_generation_prompt=True,
-            return_tensors="pt",
-        ).to(device)
+        )
+        _ids = _ct if isinstance(_ct, list) else (
+            _ct.tolist() if hasattr(_ct, 'tolist') else
+            _ct.ids if hasattr(_ct, 'ids') else list(_ct)
+        )
+        input_ids = torch.tensor([_ids], dtype=torch.long, device=device)
     seq_len = input_ids.shape[1]
 
     # Clamp to valid range
@@ -413,10 +417,14 @@ def extract_activations_during_decode_multi_step(
             raw_text, return_tensors="pt", add_special_tokens=False
         ).to(device)
     else:
-        input_ids = tokenizer.apply_chat_template(
+        _ct = tokenizer.apply_chat_template(
             messages, tokenize=True, add_generation_prompt=True,
-            return_tensors="pt",
-        ).to(device)
+        )
+        _ids = _ct if isinstance(_ct, list) else (
+            _ct.tolist() if hasattr(_ct, 'tolist') else
+            _ct.ids if hasattr(_ct, 'ids') else list(_ct)
+        )
+        input_ids = torch.tensor([_ids], dtype=torch.long, device=device)
 
     steps = min(int(max_decode_steps), 256)  # safety cap
     transformer_layers = _get_transformer_layers(model)
