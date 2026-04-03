@@ -313,6 +313,10 @@ class PatchscopeExperiment(BaseExperiment):
             f"x {num_placeholders}"
         )
 
+        # ── Logit lens collector (runs interleaved with Phase 2) ─────
+        from . import logit_lens as _logit_lens_mod
+        self._ll_collector = _logit_lens_mod.LogitLensCollector.from_experiment(self)
+
         # ── Phase 1: extract source activations & direct answers ──────────
 
         logger.info("=== Phase 1: Extracting source activations ===")
@@ -353,6 +357,7 @@ class PatchscopeExperiment(BaseExperiment):
 
         baseline_cache: dict[tuple, dict] = {}
         cell_count = 0
+        _ll_seen_questions: set[tuple[str, str]] = set()  # (persona, question_id)
 
         # Phase 2 core: iterate every cell in the matrix and run one
         # interpretation trial per cell.
@@ -432,11 +437,28 @@ class PatchscopeExperiment(BaseExperiment):
             record.timestamp = datetime.now(timezone.utc).isoformat()
             self.records.append(record)
 
+            # ── Logit lens: run once per new (persona, question) pair ─
+            if self._ll_collector is not None:
+                _ll_key = (record.source_persona, record.question_id)
+                if _ll_key not in _ll_seen_questions:
+                    _ll_seen_questions.add(_ll_key)
+                    _q_idx = next(
+                        (i for i, q in enumerate(self.questions)
+                         if q.get("question_id", f"q{i}") == record.question_id),
+                        None,
+                    )
+                    if _q_idx is not None:
+                        self._ll_collector.process_question(
+                            _q_idx, self.questions[_q_idx], record.source_persona,
+                        )
+
             if cell_count % 50 == 0:
                 logger.info(f"  Progress: {cell_count}/{total_cells} cells")
             if len(self.records) - self._last_flush >= 20:
                 self._run_elapsed = time.monotonic() - run_start
                 self._flush_results()
+                if self._ll_collector is not None:
+                    self._ll_collector.flush()
 
         # ── Phase 3: source overrides (optional) ──────────────────────────
 
@@ -470,13 +492,9 @@ class PatchscopeExperiment(BaseExperiment):
 
         self._run_elapsed = time.monotonic() - run_start
         self._flush_results()
+        if self._ll_collector is not None:
+            self._ll_collector.flush()
         logger.info(f"Completed {len(self.records)} records in {self._run_elapsed:.1f}s")
-
-        # ── Logit lens (optional, runs after main sweep) ─────────────
-        from . import logit_lens as _logit_lens_mod
-        ll_path = _logit_lens_mod.run_logit_lens_sweep(self)
-        if ll_path:
-            logger.info(f"Logit lens saved to {ll_path}")
 
     # ── Phase 1: source extraction ────────────────────────────────────────
 

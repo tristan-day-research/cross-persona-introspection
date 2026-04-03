@@ -6,13 +6,16 @@ records the top-N most-likely and bottom-N least-likely tokens.
 
 Results are saved to a separate JSON file using the same
 ``ps_{model}_{timestamp}_`` prefix with ``_LOGIT_LENS_`` inserted.
+
+Designed to run **interleaved** with the main patchscope sweep: the experiment
+calls ``collector.process_question()`` per question, and ``collector.flush()``
+at the same cadence as the JSONL checkpoint.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -31,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class LogitLensEntry:
-    """One token-position × layer snapshot."""
+    """One token-position x layer snapshot."""
 
     layer: int
     token_text: str
@@ -160,135 +163,195 @@ def run_logit_lens(
     return entries
 
 
-# ── Experiment-level driver ───────────────────────────────────────────────
+# ── Incremental collector ─────────────────────────────────────────────────
 
 
-def run_logit_lens_sweep(
-    experiment,  # PatchscopeExperiment instance
-) -> Path | None:
-    """Run logit lens for source and/or reporter passes and save results.
+class LogitLensCollector:
+    """Accumulates logit-lens records and flushes to JSON incrementally.
 
-    Reads ``logit_lens`` section from the patchscope config.  Returns the
-    output JSON path, or ``None`` if logit lens is disabled.
+    Usage from PatchscopeExperiment::
+
+        collector = LogitLensCollector.from_experiment(self)
+        # ... inside the question loop:
+        collector.process_question(question_idx, question)
+        # ... at every checkpoint:
+        collector.flush()
     """
-    ps_config = experiment.ps_config
-    ll_cfg = ps_config.get("logit_lens")
-    if not ll_cfg or not ll_cfg.get("enabled", False):
-        logger.info("Logit lens: disabled or not configured — skipping")
-        return None
 
-    model = experiment.backend.model
-    tokenizer = experiment.backend.tokenizer
-    device = experiment.backend.input_device
+    def __init__(
+        self,
+        model,
+        tokenizer,
+        device,
+        ps_config: dict,
+        all_personas: dict,
+        questions: list[dict],
+        output_path: Path,
+        layer_indices: list[int],
+        top_n: int = 20,
+        bottom_n: int = 20,
+        phases: list[str] | None = None,
+    ):
+        self.model = model
+        self.tokenizer = tokenizer
+        self.device = device
+        self.ps_config = ps_config
+        self.all_personas = all_personas
+        self.questions = questions
+        self.output_path = output_path
+        self.layer_indices = layer_indices
+        self.top_n = top_n
+        self.bottom_n = bottom_n
+        self.phases = phases or ["source"]
+        self.records: list[LogitLensRecord] = []
+        self._flushed: int = 0
 
-    top_n = int(ll_cfg.get("top_n", 20))
-    bottom_n = int(ll_cfg.get("bottom_n", 20))
-    phases = [p.strip().lower() for p in ll_cfg.get("phases", ["source"])]
+    @classmethod
+    def from_experiment(cls, experiment) -> "LogitLensCollector | None":
+        """Build a collector from a PatchscopeExperiment, or return None if
+        logit lens is disabled."""
+        ll_cfg = experiment.ps_config.get("logit_lens")
+        if not ll_cfg or not ll_cfg.get("enabled", False):
+            return None
 
-    # Resolve layers
-    num_layers = model.config.num_hidden_layers
-    layer_spec = ll_cfg.get("layers", "all")
-    layer_indices = patchscope_helpers._resolve_layers(layer_spec, num_layers)
+        model = experiment.backend.model
+        tokenizer = experiment.backend.tokenizer
+        device = experiment.backend.input_device
 
-    extraction_cfg = ps_config["extraction"]
-    token_position = extraction_cfg.get("token_position", "last")
-    boundary_marker = extraction_cfg.get("assistant_boundary_marker")
+        num_layers = model.config.num_hidden_layers
+        layer_spec = ll_cfg.get("layers", "all")
+        layer_indices = patchscope_helpers._resolve_layers(layer_spec, num_layers)
 
-    source_persona_names = ps_config["source_personas"]
-    reporter_persona_names = ps_config["reporter_personas"]
+        top_n = int(ll_cfg.get("top_n", 20))
+        bottom_n = int(ll_cfg.get("bottom_n", 20))
+        raw_phases = ll_cfg.get("phases", ["source"])
+        if isinstance(raw_phases, str):
+            raw_phases = [raw_phases]
+        phases = []
+        for p in raw_phases:
+            p = p.strip().lower()
+            if p == "both":
+                phases.extend(["source", "reporter"])
+            else:
+                phases.append(p)
 
-    records: list[LogitLensRecord] = []
-    total_start = time.monotonic()
+        output_path = _build_output_path(experiment)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # ── Source phase ──────────────────────────────────────────────────
-    if "source" in phases:
-        logger.info("Logit lens: running source-pass sweep")
-        for sp_name in source_persona_names:
-            source_persona = experiment.all_personas[sp_name]
-            for question_idx, question in enumerate(experiment.questions):
-                question_id = question.get("question_id", f"q{question_idx}")
-                is_manual = (ps_config.get("source_mode") or "questions") == "manual"
-
-                if is_manual:
-                    target_word = question["_manual_target_word"]
-                    target_strategy = question.get("_manual_target_strategy", "last")
-                    prompt_text = question["question_text"]
-                    sys_text = (source_persona.system_prompt or "").strip()
-                    input_text = (sys_text + "\n\n" + prompt_text) if sys_text else prompt_text
-                    tok_pos = patchscope_helpers.find_token_position(
-                        tokenizer, input_text, target_word, strategy=target_strategy,
-                    )
-                else:
-                    source_messages = _build_source_messages(
-                        ps_config, source_persona, question, tokenizer,
-                    )
-                    input_text = tokenizer.apply_chat_template(
-                        source_messages, tokenize=False, add_generation_prompt=True,
-                    )
-                    tok_pos = token_position
-
-                entries = run_logit_lens(
-                    model, tokenizer, device,
-                    input_text=input_text,
-                    layer_indices=layer_indices,
-                    token_position=tok_pos,
-                    top_n=top_n,
-                    bottom_n=bottom_n,
-                    boundary_marker=boundary_marker,
-                )
-                records.append(LogitLensRecord(
-                    phase="source",
-                    persona=sp_name,
-                    question_id=question_id,
-                    question_text=question.get("question_text", ""),
-                    layers=entries,
-                    prompt_text=input_text,
-                    timestamp=datetime.now().isoformat(),
-                ))
-
-        logger.info(f"  Source logit lens: {len(records)} records")
-
-    # ── Reporter phase ────────────────────────────────────────────────
-    if "reporter" in phases:
-        logger.info("Logit lens: running reporter-pass sweep")
-        injection_cfg = ps_config["injection"]
-        style = ps_config["prompt_style"]
-        configured_placeholder = injection_cfg["placeholder_token"]
-        num_placeholders = int(injection_cfg.get("num_placeholders", 1))
-        placeholder_token_id = patchscope_helpers._get_placeholder_token_id(
-            tokenizer, configured_placeholder,
+        logger.info(
+            f"Logit lens collector: {len(layer_indices)} layers, "
+            f"top_n={top_n}, bottom_n={bottom_n}, phases={phases}"
         )
-        placeholder_token = tokenizer.decode([placeholder_token_id])
-        base_prompt = ps_config["interpretation_base_prompt"]
-        templates = ps_config["interpretation_templates"]
-        enabled = ps_config.get("enabled_templates", [])
-        if enabled:
-            templates = {k: v for k, v in templates.items() if k in enabled}
+        return cls(
+            model=model,
+            tokenizer=tokenizer,
+            device=device,
+            ps_config=experiment.ps_config,
+            all_personas=experiment.all_personas,
+            questions=experiment.questions,
+            output_path=output_path,
+            layer_indices=layer_indices,
+            top_n=top_n,
+            bottom_n=bottom_n,
+            phases=phases,
+        )
 
-        for rp_name in reporter_persona_names:
-            reporter_persona = experiment.all_personas[rp_name]
-            for question_idx, question in enumerate(experiment.questions):
-                question_id = question.get("question_id", f"q{question_idx}")
+    # ── Per-question processing ───────────────────────────────────────
+
+    def process_question(
+        self,
+        question_idx: int,
+        question: dict,
+        source_persona_name: str,
+    ) -> None:
+        """Run logit lens for one (source_persona, question) pair across
+        enabled phases.  Called once per question from the main loop."""
+
+        question_id = question.get("question_id", f"q{question_idx}")
+        extraction_cfg = self.ps_config["extraction"]
+        token_position = extraction_cfg.get("token_position", "last")
+        boundary_marker = extraction_cfg.get("assistant_boundary_marker")
+        is_manual = (self.ps_config.get("source_mode") or "questions") == "manual"
+
+        # ── Source phase ──────────────────────────────────────────────
+        if "source" in self.phases:
+            source_persona = self.all_personas[source_persona_name]
+            if is_manual:
+                target_word = question["_manual_target_word"]
+                target_strategy = question.get("_manual_target_strategy", "last")
+                prompt_text = question["question_text"]
+                sys_text = (source_persona.system_prompt or "").strip()
+                input_text = (sys_text + "\n\n" + prompt_text) if sys_text else prompt_text
+                tok_pos = patchscope_helpers.find_token_position(
+                    self.tokenizer, input_text, target_word, strategy=target_strategy,
+                )
+            else:
+                source_messages = _build_source_messages(
+                    self.ps_config, source_persona, question, self.tokenizer,
+                )
+                input_text = self.tokenizer.apply_chat_template(
+                    source_messages, tokenize=False, add_generation_prompt=True,
+                )
+                tok_pos = token_position
+
+            entries = run_logit_lens(
+                self.model, self.tokenizer, self.device,
+                input_text=input_text,
+                layer_indices=self.layer_indices,
+                token_position=tok_pos,
+                top_n=self.top_n,
+                bottom_n=self.bottom_n,
+                boundary_marker=boundary_marker,
+            )
+            self.records.append(LogitLensRecord(
+                phase="source",
+                persona=source_persona_name,
+                question_id=question_id,
+                question_text=question.get("question_text", ""),
+                layers=entries,
+                prompt_text=input_text,
+                timestamp=datetime.now().isoformat(),
+            ))
+
+        # ── Reporter phase ────────────────────────────────────────────
+        if "reporter" in self.phases:
+            injection_cfg = self.ps_config["injection"]
+            style = self.ps_config["prompt_style"]
+            configured_placeholder = injection_cfg["placeholder_token"]
+            num_placeholders = int(injection_cfg.get("num_placeholders", 1))
+            placeholder_token_id = patchscope_helpers._get_placeholder_token_id(
+                self.tokenizer, configured_placeholder,
+            )
+            placeholder_token = self.tokenizer.decode([placeholder_token_id])
+            base_prompt = self.ps_config["interpretation_base_prompt"]
+            templates = self.ps_config["interpretation_templates"]
+            enabled = self.ps_config.get("enabled_templates", [])
+            if enabled:
+                templates = {k: v for k, v in templates.items() if k in enabled}
+
+            reporter_persona_names = self.ps_config["reporter_personas"]
+            for rp_name in reporter_persona_names:
+                reporter_persona = self.all_personas[rp_name]
                 for tmpl_name, tmpl_cfg in templates.items():
-                    interp_text, interp_messages, _ = (
+                    interp_text, _, _ = (
                         patchscope_helpers.build_interpretation_prompt(
-                            tokenizer, tmpl_cfg, style, base_prompt,
+                            self.tokenizer, tmpl_cfg, style, base_prompt,
                             placeholder_token, num_placeholders,
                             question, reporter_persona.system_prompt,
                             use_chat_template=bool(
-                                ps_config.get("use_chat_template", True)
+                                self.ps_config.get("use_chat_template", True)
                             ),
                         )
                     )
                     entries = run_logit_lens(
-                        model, tokenizer, device,
+                        self.model, self.tokenizer, self.device,
                         input_text=interp_text,
-                        layer_indices=layer_indices,
+                        layer_indices=self.layer_indices,
                         token_position="last",
-                        top_n=top_n,
-                        bottom_n=bottom_n,
+                        top_n=self.top_n,
+                        bottom_n=self.bottom_n,
                     )
-                    records.append(LogitLensRecord(
+                    self.records.append(LogitLensRecord(
                         phase="reporter",
                         persona=rp_name,
                         question_id=question_id,
@@ -298,32 +361,29 @@ def run_logit_lens_sweep(
                         timestamp=datetime.now().isoformat(),
                     ))
 
-        logger.info(
-            f"  Reporter logit lens: "
-            f"{len([r for r in records if r.phase == 'reporter'])} records"
-        )
+    # ── Flush to disk ─────────────────────────────────────────────────
 
-    elapsed = time.monotonic() - total_start
-    logger.info(f"Logit lens sweep done: {len(records)} total records in {elapsed:.1f}s")
-
-    # ── Save ──────────────────────────────────────────────────────────
-    output_path = _build_output_path(experiment)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    payload = {
-        "config": {
-            "layers": layer_indices,
-            "top_n": top_n,
-            "bottom_n": bottom_n,
-            "phases": phases,
-            "model": experiment.config.model_name,
-        },
-        "records": [asdict(r) for r in records],
-    }
-    with open(output_path, "w") as f:
-        json.dump(payload, f, indent=2, default=str)
-    logger.info(f"Logit lens results saved to {output_path}")
-    return output_path
+    def flush(self) -> None:
+        """Write all accumulated records to the JSON file (full overwrite)."""
+        if not self.records:
+            return
+        payload = {
+            "config": {
+                "layers": self.layer_indices,
+                "top_n": self.top_n,
+                "bottom_n": self.bottom_n,
+                "phases": self.phases,
+            },
+            "records": [asdict(r) for r in self.records],
+        }
+        with open(self.output_path, "w") as f:
+            json.dump(payload, f, indent=2, default=str)
+        if len(self.records) > self._flushed:
+            logger.info(
+                f"  Logit lens checkpoint: {len(self.records)} records -> "
+                f"{self.output_path.name}"
+            )
+        self._flushed = len(self.records)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────
