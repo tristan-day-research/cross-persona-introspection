@@ -1032,7 +1032,8 @@ class PatchscopeExperiment(BaseExperiment):
                             }
 
                 except Exception as e:
-                    msg = f"Extract error: {sp_name} q{question_idx} {question.get('question_id', '?')}: {e}"
+                    import traceback
+                    msg = f"Extract error: {sp_name} q{question_idx} {question.get('question_id', '?')}: {e}\n{traceback.format_exc()}"
                     logger.error(msg)
                     self._errors.append(msg)
                     activations.setdefault(sp_name, {})[question_idx] = {}
