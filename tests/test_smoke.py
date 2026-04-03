@@ -285,10 +285,16 @@ def test_patchscope_helpers():
     assert "Pick one?" in out
     assert "A) First" in out and "C) Third" in out
     assert "B)" not in out
-    assert "open_summary" in cfg["interpretation_templates"]
-    # Templates should have both patchscopes and selfie styles
-    assert "patchscopes" in cfg["interpretation_templates"]["open_summary"]
-    assert "selfie" in cfg["interpretation_templates"]["open_summary"]
+    it = cfg["interpretation_templates"]
+    assert "patchscopes" in it and "selfie" in it
+    from cross_persona_introspection.experiments.patchscope.patchscope_helpers import (
+        effective_interpretation_templates,
+        prompt_body_keys,
+    )
+
+    eff = effective_interpretation_templates(cfg)
+    assert "interpretation" in eff
+    assert "patchscopes" in prompt_body_keys(eff["interpretation"])
 
     # Extraction site description (no model; local GPT-2 tokenizer)
     tok = GPT2Tokenizer.from_pretrained("gpt2")

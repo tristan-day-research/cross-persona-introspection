@@ -431,16 +431,102 @@ def _resolve_choice_token_ids(
 
 # ── Interpretation prompt construction ─────────────────────────────────
 
+# Keys on tmpl_cfg that are not multiline prompt bodies.
+INTERPRETATION_TEMPLATE_META_KEYS = frozenset({"decode_mode"})
+
+# Synthetic family name when interpretation_templates is a flat mapping (no nested dicts).
+FLAT_INTERPRETATION_FAMILY = "interpretation"
+
+
+def _interpretation_templates_raw_is_nested(raw: dict) -> bool:
+    """True if YAML uses legacy ``open_summary: { identity: | ... }`` layout."""
+    return any(isinstance(v, dict) for v in (raw or {}).values())
+
+
+def rough_interpretation_templates_dict(ps_config: dict) -> dict[str, dict]:
+    """Normalize ``interpretation_templates`` to ``{family: tmpl_cfg}``.
+
+    * **Flat** — top-level keys are ``decode_mode`` and prompt names (strings): wrapped as
+      ``{"interpretation": {...}}``.
+    * **Nested** (legacy) — top-level keys are family names mapping to per-family dicts:
+      returned unchanged.
+    """
+    raw = ps_config.get("interpretation_templates") or {}
+    if not raw:
+        return {}
+    if _interpretation_templates_raw_is_nested(raw):
+        return dict(raw)
+    return {FLAT_INTERPRETATION_FAMILY: dict(raw)}
+
+
+def effective_interpretation_templates(ps_config: dict) -> dict[str, dict]:
+    """Apply ``enabled_templates`` only for **nested** (multi-family) configs.
+
+    Flat configs always expose the single ``interpretation`` family (``enabled_templates`` ignored).
+    """
+    templates = rough_interpretation_templates_dict(ps_config)
+    if not templates:
+        return {}
+    raw = ps_config.get("interpretation_templates") or {}
+    if not _interpretation_templates_raw_is_nested(raw):
+        return templates
+    enabled = ps_config.get("enabled_templates") or []
+    if not enabled:
+        return templates
+    return {k: v for k, v in templates.items() if k in enabled}
+
+
+def prompt_body_keys(tmpl_cfg: dict) -> list[str]:
+    """Prompt variant names under *tmpl_cfg* (YAML key order); skips metadata."""
+    out: list[str] = []
+    for k, v in tmpl_cfg.items():
+        if k in INTERPRETATION_TEMPLATE_META_KEYS:
+            continue
+        if isinstance(v, str) and v.strip():
+            out.append(k)
+    return out
+
+
+def resolve_prompt_styles_for_tmpl_cfg(tmpl_cfg: dict, ps_config: dict) -> list[str]:
+    """Which prompt keys to run for this family.
+
+    Default: every non-empty string body under *tmpl_cfg* (comment out keys in YAML to disable).
+
+    Optional legacy override: if ``prompt_style`` is set to a string or non-empty list, only
+    those names are used (must exist on *tmpl_cfg*).
+    """
+    keys = prompt_body_keys(tmpl_cfg)
+    raw = ps_config.get("prompt_style", None)
+    if raw is None or raw == [] or raw == "":
+        return keys
+    if isinstance(raw, list):
+        wanted = [str(s).strip() for s in raw if str(s).strip()]
+    else:
+        wanted = [str(raw).strip()]
+    meta = INTERPRETATION_TEMPLATE_META_KEYS
+    return [w for w in wanted if w in tmpl_cfg and w not in meta]
+
 
 def normalize_prompt_styles(ps_config: dict) -> list[str]:
-    """Expand ``prompt_style`` to a non-empty list of variant keys.
+    """Distinct prompt names across all enabled template families (filename / reporting).
 
-    YAML may set ``prompt_style`` to a single string (backward compatible) or
-    to a list of strings. Each entry must match a key on every enabled
-    ``interpretation_templates.*`` block (e.g. ``patchscopes``, ``selfie``,
-    or custom keys like ``what_is_the_definition_of``).
+    Raises ``ValueError`` only when ``prompt_style`` is an explicit empty list (legacy).
     """
-    raw = ps_config.get("prompt_style", "patchscopes")
+    raw = ps_config.get("prompt_style", None)
+    if isinstance(raw, list) and len(raw) == 0:
+        raise ValueError("prompt_style is a list but contains no non-empty strings")
+    templates = effective_interpretation_templates(ps_config)
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for tc in templates.values():
+        for s in resolve_prompt_styles_for_tmpl_cfg(tc, ps_config):
+            if s not in seen:
+                seen.add(s)
+                ordered.append(s)
+    if ordered:
+        return ordered
+    if raw is None or raw == "":
+        return ["patchscopes"]
     if isinstance(raw, list):
         out = [str(s).strip() for s in raw if str(s).strip()]
         if not out:

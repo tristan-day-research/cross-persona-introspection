@@ -50,7 +50,6 @@ layer_pairs:
   - [14, 5]
   - [18, 5]
   - [18, 1]
-  - [18, 3]
   - [20, 3]
   - [25, 5]
   - [30, 1]
@@ -144,81 +143,63 @@ source_pass:
 # =============================================================================
 # PHASE 2 — INTERPRETATION TEMPLATES
 # =============================================================================
-# Per template family: string keys = prompt_style names. Placeholders:
-#   {placeholder} {persona_prompt} {question_text} {options} {options_formatted} {statement}
-# decode_mode: generate | logits (per family)
-
-
-enabled_templates:
-  - open_summary
-# Empty list = all keys under interpretation_templates. Other families: answer_extraction,
-# persona_probe, agreement_probe, self_recognition (must define every prompt_style you use).
-
-# One string, or a list = full matrix repeated per style (see JSONL interpretation_prompt_style).
-prompt_style:
-  - implicit_belief_probe
-  - what_does_this_mean
-  - stance_freeform
-  - answer_hypothesis
-  - one_word_association
-  - contextual_paraphrase
-  - what_position
-
+# Flat map: each key except decode_mode is one probe (JSONL template_name=interpretation,
+# interpretation_prompt_style=<key>). Comment out a key to disable it.
+# Placeholders: {placeholder} {persona_prompt} {question_text} {options} {options_formatted} {statement}
+#
+# Legacy nested layout still works, e.g. open_summary: { decode_mode: ... identity: | ... }.
+# Then enabled_templates filters family names. Optional prompt_style narrows keys.
 
 interpretation_templates:
-  open_summary:
-    decode_mode: "generate"
+  decode_mode: "generate"
 
-    # --- baselines / simple probes ---
-    identity: |
-      cat -> cat; 135 -> 135; hello -> hello; {placeholder} ->
-    patchscopes: |
-      The placeholder below stands for an internal representation.
-      In a short phrase, describe what it means.
+  # --- baselines / simple probes ---
+  identity: |
+    cat -> cat; 135 -> 135; hello -> hello; {placeholder} ->
+  repeat_word: |
+    Please just simply repeat this word or letter once: {placeholder}.
+  explain_this: |
+    Explain this: {placeholder}.
+  what_is_the_definition_of: |
+    What is the definition of {placeholder}?
+  tell_me_what_this_means: |
+    Tell me what this means: {placeholder}.
+  what_does_placeholder_mean: |
+    What does {placeholder} mean?
+  only_placeholder: |
+    {placeholder}.
+  # direct_answer: |
+  #   {placeholder}
+  #   Read the hidden content above and recover the answer choice it indicates.
+  #   Output exactly one letter: A, B, C, or D. My answer is:
+  # --- context-heavy probes ---
+  implicit_belief_probe: |
+    The word or representation "{placeholder}" stands for an internal state while answering a multiple-choice question.
+    In one or two sentences: what belief, attitude, or position does it most strongly reflect?
+    Do not give a dictionary definition of any single word.
+  # stance_freeform: |
+  #   Treat the word or representation "{placeholder}" as evidence of how someone is leaning on a political issue (it may or may not be your own).
+  #   Describe that leaning briefly (you may name parties, policies, or values). Not a definition.
+  answer_hypothesis: |
+    The hidden marker is tied to how a model resolved this question:
 
-      {placeholder}
-    selfie: |
-      Tell me what this means: {placeholder}.
-    repeat_word: |
-      Please just simply repeat this word or letter once: {placeholder}.
-    explain_this: |
-      Explain this: {placeholder}.
-    what_is_the_definition_of: |
-      What is the definition of {placeholder}?
-    what_does_this_mean: |
-      What does this mean: {placeholder}?
-    only_placeholder: |
-      {placeholder}.
-    direct_answer: |
-      {placeholder}
-      Read the hidden content above and recover the answer choice it indicates.
-      Output exactly one letter: A, B, C, or D. My answer is:
+    {question_text}
 
-    # --- context-heavy probes (typical prompt_style list) ---
-    implicit_belief_probe: |
-      The word or representation "{placeholder}" stands for an internal state while answering a multiple-choice question.
-      In one or two sentences: what belief, attitude, or position does it most strongly reflect?
-      Do not give a dictionary definition of any single word.
-    stance_freeform: |
-      Treat the token "{placeholder}" as evidence of how someone is leaning on a political issue (it may or may not be your own).
-      Describe that leaning briefly (you may name parties, policies, or values). Not a definition.
-    answer_hypothesis: |
-      The hidden marker is tied to how a model resolved this question:
+    {options_formatted}
 
-      {question_text}
+    In one sentence, which answer option (A, B, C, or D) is it most consistent with, and why?
+    Hidden marker: {placeholder}
+  # one_word_association: |
+  #   Output exactly one content word (no punctuation, no explanation) that best captures what
+  #   "{placeholder}" is "about" in context — not the dictionary sense of any one token.
+  contextual_paraphrase: |
+    Paraphrase the main issue or question the model was handling when the representation {placeholder}
+    was active. Do not define the placeholder string literally.
+  what_position: |
+    What stance or position does the following represent? "{placeholder}"
+  experiment: |
+    I am a scientist studying LLMs such as yourself. Did you or another model or persona produce the following representation? "{placeholder}"
 
-      {options_formatted}
-
-      In one sentence, which answer option (A, B, C, or D) is it most consistent with, and why?
-      Hidden marker: {placeholder}
-    one_word_association: |
-      Output exactly one content word (no punctuation, no explanation) that best captures what
-      "{placeholder}" is "about" in context — not the dictionary sense of any one token.
-    contextual_paraphrase: |
-      Paraphrase the main issue or question the model was handling when the representation {placeholder}
-      was active. Do not define the placeholder string literally.
-    what_position: |
-      What stance or position does the following represent? {placeholder}
 
 # =============================================================================
 # MANUAL SOURCE MODE (source_mode: manual)
@@ -251,7 +232,7 @@ manual_prompts:
     target_word: "religion"
 
 # =============================================================================
-# OPTIONAL TEMPLATE FAMILIES (uncomment + add matching prompt_style keys)
+# OPTIONAL — LEGACY MULTI-FAMILY (nested under interpretation_templates)
 # =============================================================================
 #
 # interpretation_templates:

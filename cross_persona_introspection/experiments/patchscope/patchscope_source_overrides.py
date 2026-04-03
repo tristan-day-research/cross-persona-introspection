@@ -24,6 +24,7 @@ from cross_persona_introspection.experiments.patchscope.patchscope_helpers impor
     _resolve_choice_token_ids,
     build_interpretation_prompt,
     find_token_position,
+    resolve_prompt_styles_for_tmpl_cfg,
 )
 from cross_persona_introspection.experiments.patchscope.patchscope_patching import (
     extract_activations_multi_layer,
@@ -44,7 +45,7 @@ def run_source_overrides(
     injection_layers: list[int],
     pair_map: dict[int, list[int]] | None,
     templates: dict[str, dict],
-    prompt_styles: list[str],
+    ps_config: dict,
     base_prompt: str,
     placeholder_token: str,
     num_placeholders: int,
@@ -117,7 +118,7 @@ def run_source_overrides(
             _inj_layers = pair_map[src_layer] if pair_map else injection_layers
             for inj_layer in _inj_layers:
                 for tmpl_name, tmpl_cfg in templates.items():
-                    for prompt_style in prompt_styles:
+                    for prompt_style in resolve_prompt_styles_for_tmpl_cfg(tmpl_cfg, ps_config):
                         interp_text, interp_messages, placeholder_positions = (
                             build_interpretation_prompt(
                                 tokenizer=tokenizer,

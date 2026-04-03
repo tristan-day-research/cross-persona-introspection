@@ -492,7 +492,6 @@ class LogitLensCollector:
         # ── Reporter phase ────────────────────────────────────────────
         if "reporter" in self.phases:
             injection_cfg = self.ps_config["injection"]
-            prompt_styles = patchscope_helpers.normalize_prompt_styles(self.ps_config)
             configured_placeholder = injection_cfg["placeholder_token"]
             num_placeholders = int(injection_cfg.get("num_placeholders", 1))
             placeholder_token_id = patchscope_helpers._get_placeholder_token_id(
@@ -500,16 +499,15 @@ class LogitLensCollector:
             )
             placeholder_token = self.tokenizer.decode([placeholder_token_id])
             base_prompt = self.ps_config["interpretation_base_prompt"]
-            templates = self.ps_config["interpretation_templates"]
-            enabled = self.ps_config.get("enabled_templates", [])
-            if enabled:
-                templates = {k: v for k, v in templates.items() if k in enabled}
+            templates = patchscope_helpers.effective_interpretation_templates(self.ps_config)
 
             reporter_persona_names = self.ps_config["reporter_personas"]
             for rp_name in reporter_persona_names:
                 reporter_persona = self.all_personas[rp_name]
                 for tmpl_name, tmpl_cfg in templates.items():
-                    for style in prompt_styles:
+                    for style in patchscope_helpers.resolve_prompt_styles_for_tmpl_cfg(
+                        tmpl_cfg, self.ps_config
+                    ):
                         interp_text, _, _ = (
                             patchscope_helpers.build_interpretation_prompt(
                                 self.tokenizer, tmpl_cfg, style, base_prompt,

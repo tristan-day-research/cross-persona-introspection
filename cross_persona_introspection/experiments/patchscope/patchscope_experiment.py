@@ -192,17 +192,6 @@ class PatchscopeExperiment(BaseExperiment):
         if len(style_s) > 36:
             style_s = f"{len(_styles)}sty"
 
-        enabled = ps.get("enabled_templates") or []
-        all_templates = ps.get("interpretation_templates") or {}
-        if enabled:
-            names = [t for t in sorted(enabled) if t in all_templates]
-            joined = "+".join(slug(t, 22) for t in names)
-            tmpl_s = joined if joined else "notmpl"
-            if len(tmpl_s) > 50:
-                tmpl_s = f"{len(names)}tmpl"
-        else:
-            tmpl_s = f"all{len(all_templates)}tmpl"
-
         if ps.get("layer_sweep", {}).get("enabled"):
             sw = ps["layer_sweep"]
             layer_s = f"sw{len(sw['source_layers'])}x{len(sw['injection_layers'])}"
@@ -277,31 +266,25 @@ class PatchscopeExperiment(BaseExperiment):
         gen_cfg = ps_config["generation"]
         relevancy_cfg = ps_config["relevancy"]
         controls_cfg = ps_config["controls"]
-        templates = ps_config["interpretation_templates"]
+        templates = patchscope_helpers.effective_interpretation_templates(ps_config)
         save_logprobs = gen_cfg.get("save_logprobs", False)
 
-        # Filter templates
-        enabled = ps_config.get("enabled_templates", [])
-        if enabled:
-            templates = {k: v for k, v in templates.items() if k in enabled}
-            logger.info(f"Template filter: running only {list(templates.keys())}")
-        else:
-            logger.info(f"Running all templates: {list(templates.keys())}")
+        logger.info(
+            "Interpretation template families: %s",
+            list(templates.keys()),
+        )
 
         base_prompt = ps_config["interpretation_base_prompt"]
         self._use_chat_template = bool(
             ps_config.get("use_chat_template", True)
         )
-        # One string or list in YAML — full matrix runs per entry
-        prompt_styles = patchscope_helpers.normalize_prompt_styles(ps_config)
         for _tn, _tc in templates.items():
-            for _ps in prompt_styles:
-                if _tc.get(_ps) is None:
-                    _avail = [k for k in _tc if k != "decode_mode"]
-                    raise ValueError(
-                        f"interpretation_templates.{_tn} has no body for prompt_style={_ps!r}. "
-                        f"Add a {_ps}: | block, or remove it from prompt_style. Available keys: {_avail}"
-                    )
+            _probes = patchscope_helpers.resolve_prompt_styles_for_tmpl_cfg(_tc, ps_config)
+            if not _probes:
+                raise ValueError(
+                    f"No enabled prompt bodies for interpretation_templates family {_tn!r}. "
+                    "Uncomment or add at least one string-valued prompt key (or set prompt_style)."
+                )
         source_persona_names = ps_config["source_personas"]
         reporter_persona_names = ps_config["reporter_personas"]
 
@@ -359,6 +342,10 @@ class PatchscopeExperiment(BaseExperiment):
             conditions.append("shuffled")
 
         _use_both = patchscope_helpers.extraction_uses_both_modes(extraction_cfg)
+        _n_probes = sum(
+            len(patchscope_helpers.resolve_prompt_styles_for_tmpl_cfg(tc, ps_config))
+            for tc in templates.values()
+        )
         matrix_dims = {
             "source_personas": len(source_persona_names),
             "questions": len(self.questions),
@@ -366,8 +353,8 @@ class PatchscopeExperiment(BaseExperiment):
             "source_layers": len(source_layers),
             "injection_layers": len(injection_layers),
             "reporter_personas": len(reporter_persona_names),
-            "templates": len(templates),
-            "prompt_styles": len(prompt_styles),
+            "template_families": len(templates),
+            "interpretation_probes": _n_probes,
             "conditions": len(conditions),
         }
         total_cells = 1
@@ -389,7 +376,7 @@ class PatchscopeExperiment(BaseExperiment):
         # interpretation trial per cell.
         #
         # _iter_matrix_cells() handles the nested loop (personas x questions x
-        # extraction sites x layers x reporters x templates x prompt_styles x
+        # extraction sites x layers x reporters x template_families x probes x
         # conditions) and yields
         # one dict per cell containing:
         #   - "activation": the tensor to inject (real, shuffled, or None)
@@ -415,7 +402,6 @@ class PatchscopeExperiment(BaseExperiment):
             extraction_meta=extraction_meta,
             control_sample_rate=control_sample_rate,
             control_rng=control_rng,
-            prompt_styles=prompt_styles,
             tokenizer=tokenizer,
             base_prompt=base_prompt,
             placeholder_token=placeholder_token,
@@ -511,7 +497,7 @@ class PatchscopeExperiment(BaseExperiment):
                 injection_layers=injection_layers,
                 pair_map=pair_map,
                 templates=templates,
-                prompt_styles=prompt_styles,
+                ps_config=ps_config,
                 base_prompt=base_prompt,
                 placeholder_token=placeholder_token,
                 num_placeholders=num_placeholders,
@@ -1073,7 +1059,7 @@ class PatchscopeExperiment(BaseExperiment):
         reporter_persona_names, templates, conditions,
         activations, direct_answers, shuffle_maps, extraction_meta,
         control_sample_rate, control_rng,
-        prompt_styles, tokenizer, base_prompt, placeholder_token, num_placeholders,
+        tokenizer, base_prompt, placeholder_token, num_placeholders,
         injection_mode,
     ) -> Iterator[dict]:
         """Yield one dict per cell in the Phase 2 experiment matrix.
@@ -1084,7 +1070,7 @@ class PatchscopeExperiment(BaseExperiment):
           - "activation": tensor to inject (real, shuffled, or None for baseline)
           - "condition": which condition this cell is for
           - "interp_text" / "interp_messages" / "placeholder_positions": built prompt
-          - "tmpl_name" / "tmpl_cfg" / "prompt_style": template info
+          - "tmpl_name" / "tmpl_cfg" / "prompt_style" (probe key): template info
           - "inj_layer": injection layer index
           - "shuffle_remap": label remap dict for answer remapping
 
@@ -1165,7 +1151,11 @@ class PatchscopeExperiment(BaseExperiment):
                                 reporter_persona = self.all_personas[reporter_name]
 
                                 for tmpl_name, tmpl_cfg in templates.items():
-                                    for prompt_style in prompt_styles:
+                                    for prompt_style in (
+                                        patchscope_helpers.resolve_prompt_styles_for_tmpl_cfg(
+                                            tmpl_cfg, self.ps_config
+                                        )
+                                    ):
 
                                         # Use shuffled options matching the source pass
                                         shuffle_key = (question_id, sp_name)
