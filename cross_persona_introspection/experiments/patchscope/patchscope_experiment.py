@@ -753,15 +753,11 @@ class PatchscopeExperiment(BaseExperiment):
                             _ct_result = tokenizer.apply_chat_template(
                                 messages, tokenize=True, add_generation_prompt=True,
                             )
-                            # Handle different return types across transformers versions
-                            if hasattr(_ct_result, 'tolist'):
-                                _source_token_ids = _ct_result.tolist()
-                            elif hasattr(_ct_result, 'ids'):
-                                _source_token_ids = _ct_result.ids
-                            elif isinstance(_ct_result, list):
-                                _source_token_ids = _ct_result
-                            else:
-                                _source_token_ids = list(_ct_result)
+                            _source_token_ids = (
+                                patchscope_patching._normalize_chat_template_token_ids(
+                                    _ct_result
+                                )
+                            )
                         _seq_len = len(_source_token_ids)
 
                         if _use_multi_pos:

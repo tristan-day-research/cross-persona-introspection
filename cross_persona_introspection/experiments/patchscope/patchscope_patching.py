@@ -55,6 +55,8 @@ without the hook needing to fire again.
 """
 
 import logging
+import numbers
+from collections.abc import Mapping
 from typing import Any, Optional
 
 import torch
@@ -66,6 +68,50 @@ from cross_persona_introspection.experiments.patchscope.patchscope_helpers impor
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _coerce_token_id(x: Any) -> int:
+    if isinstance(x, bool):
+        raise TypeError(f"unexpected bool in token id sequence: {x!r}")
+    if isinstance(x, int):
+        return x
+    if isinstance(x, numbers.Integral):
+        return int(x)
+    if hasattr(x, "item"):
+        return int(x.item())
+    raise TypeError(f"expected int-like token id, got {type(x)}")
+
+
+def _normalize_chat_template_token_ids(ct: Any) -> list[int]:
+    """Flatten ``apply_chat_template(..., tokenize=True)`` output to ``list[int]``.
+
+    HuggingFace may return a bare ``list[int]``, a ``torch.Tensor``, a ``dict`` /
+    ``BatchEncoding`` with an ``input_ids`` field, or a tokenizers ``Encoding``
+    with ``.ids``.  Older code assumed a list or ``list(mapping)`` (keys only),
+    which breaks on ``BatchEncoding`` and triggers cryptic PyTorch errors.
+    """
+    if ct is None:
+        raise ValueError("apply_chat_template(tokenize=True) returned None")
+    if isinstance(ct, torch.Tensor):
+        return [int(x) for x in ct.long().flatten().tolist()]
+    if isinstance(ct, Mapping):
+        if "input_ids" not in ct:
+            raise ValueError(
+                "apply_chat_template(tokenize=True) returned a mapping without "
+                f"'input_ids' (keys={list(ct.keys())})"
+            )
+        return _normalize_chat_template_token_ids(ct["input_ids"])
+    if isinstance(ct, (list, tuple)):
+        return [_coerce_token_id(x) for x in ct]
+    raw_ids = getattr(ct, "ids", None)
+    if isinstance(raw_ids, (list, tuple)):
+        return [_coerce_token_id(x) for x in raw_ids]
+    tolist = getattr(ct, "tolist", None)
+    if callable(tolist):
+        return _normalize_chat_template_token_ids(tolist())
+    raise TypeError(
+        f"cannot normalize apply_chat_template(tokenize=True) output: {type(ct)}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -339,10 +385,7 @@ def extract_activations_multi_pos(
         _ct = tokenizer.apply_chat_template(
             messages, tokenize=True, add_generation_prompt=True,
         )
-        _ids = _ct if isinstance(_ct, list) else (
-            _ct.tolist() if hasattr(_ct, 'tolist') else
-            _ct.ids if hasattr(_ct, 'ids') else list(_ct)
-        )
+        _ids = _normalize_chat_template_token_ids(_ct)
         input_ids = torch.tensor([_ids], dtype=torch.long, device=device)
     seq_len = input_ids.shape[1]
 
@@ -420,10 +463,7 @@ def extract_activations_during_decode_multi_step(
         _ct = tokenizer.apply_chat_template(
             messages, tokenize=True, add_generation_prompt=True,
         )
-        _ids = _ct if isinstance(_ct, list) else (
-            _ct.tolist() if hasattr(_ct, 'tolist') else
-            _ct.ids if hasattr(_ct, 'ids') else list(_ct)
-        )
+        _ids = _normalize_chat_template_token_ids(_ct)
         input_ids = torch.tensor([_ids], dtype=torch.long, device=device)
 
     steps = min(int(max_decode_steps), 256)  # safety cap
