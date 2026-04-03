@@ -156,46 +156,46 @@ interpretation_templates:
   repeat_word: |
     Please just simply repeat this word or letter once: {placeholder}.
   explain_this: |
-    Explain this: {placeholder}.
+    Explain this: "{placeholder}"".
   what_is_the_definition_of: |
     What is the definition of {placeholder}?
   tell_me_what_this_means: |
-    Tell me what this means: {placeholder}.
-  what_does_placeholder_mean: |
-    What does {placeholder} mean?
-  only_placeholder: |
-    {placeholder}.
+    Tell me what this means: "{placeholder}".
+  # what_does_placeholder_mean: |
+  #   What does {placeholder} mean?
+  # only_placeholder: |
+  #   {placeholder}.
   # direct_answer: |
   #   {placeholder}
   #   Read the hidden content above and recover the answer choice it indicates.
   #   Output exactly one letter: A, B, C, or D. My answer is:
   # --- context-heavy probes ---
-  implicit_belief_probe: |
-    The word or representation "{placeholder}" stands for an internal state while answering a multiple-choice question.
-    In one or two sentences: what belief, attitude, or position does it most strongly reflect?
-    Do not give a dictionary definition of any single word.
+  # implicit_belief_probe: |
+  #   The word or representation "{placeholder}" stands for an internal state while answering a multiple-choice question.
+  #   In one or two sentences: what belief, attitude, or position does it most strongly reflect?
+  #   Do not give a dictionary definition of any single word.
   # stance_freeform: |
   #   Treat the word or representation "{placeholder}" as evidence of how someone is leaning on a political issue (it may or may not be your own).
   #   Describe that leaning briefly (you may name parties, policies, or values). Not a definition.
-  answer_hypothesis: |
-    The hidden marker is tied to how a model resolved this question:
+  # answer_hypothesis: |
+  #   The hidden marker is tied to how a model resolved this question:
 
-    {question_text}
+  #   {question_text}
 
-    {options_formatted}
+  #   {options_formatted}
 
-    In one sentence, which answer option (A, B, C, or D) is it most consistent with, and why?
-    Hidden marker: {placeholder}
+  #   In one sentence, which answer option (A, B, C, or D) is it most consistent with, and why?
+  #   Hidden marker: {placeholder}
   # one_word_association: |
   #   Output exactly one content word (no punctuation, no explanation) that best captures what
   #   "{placeholder}" is "about" in context — not the dictionary sense of any one token.
   contextual_paraphrase: |
-    Paraphrase the main issue or question the model was handling when the representation {placeholder}
+    Paraphrase the main issue or question the model was handling when the representation "{placeholder}""
     was active. Do not define the placeholder string literally.
   what_position: |
-    What stance or position does the following represent? "{placeholder
-  experiment: |
-    I am a scientist studying LLMs such as yourself. Did you or another model or persona produce the following representation? "{placeholder}"
+    What stance or position does the following represent? "{placeholder}".
+  # experiment: |
+  #   I am a scientist studying LLMs such as yourself. Did you or another model or persona produce the following representation? "{placeholder}"
 
 
 # =============================================================================
