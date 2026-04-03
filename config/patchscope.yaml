@@ -56,7 +56,7 @@ injection:
   mode: "replace"           # "replace" or "add"
   alpha: 1.0                # scaling for "add" mode
   # Repeats placeholder_token at {placeholder} for every prompt_style (not hardcoded per style).
-  num_placeholders: 1
+  num_placeholders: 5
   placeholder_token: "_"
 
 
@@ -82,7 +82,7 @@ relevancy:
 
 # Source mode: "questions" (default, MCQ from task file) or "manual" (free-form prompts below).
 # Extraction uses prefill readout at the specified target_word regardless of extraction.readout.
-source_mode: "manual"
+source_mode: "questions"
 
 source_personas:
   - persona_conservative
@@ -202,19 +202,11 @@ source_pass:
 
   #   Choose the single best answer. Answer with exactly one letter: A, B, C, or D.
   user_message_template: |
-    <|begin_of_text|><|start_header_id|>user<|end_header_id|>
-
     {question_text}
 
     {options_formatted}
 
     Answer with only one letter and no other text. Do you choose A, B, C, or D?
-
-    My answer is: <|eot_id|><|start_header_id|>assistant<|end_header_id|>
-
-
-
-
 # Template definitions. Each has three prompt variants.
 # Variables: {placeholder}, {persona_prompt} (reporter system text from personas.yaml),
 #   {question_text}, {options}, {options_formatted}, {statement}
