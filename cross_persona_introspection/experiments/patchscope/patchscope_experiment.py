@@ -762,12 +762,27 @@ class PatchscopeExperiment(BaseExperiment):
                             if _n_source_prompt_tokens > 0:
                                 _n_clamped = min(_n_source_prompt_tokens, _seq_len)
                                 _positions = list(range(_seq_len - _n_clamped, _seq_len))
+                                if not hasattr(self, '_multi_pos_logged'):
+                                    logger.info(
+                                        "Multi-pos prefill: seq_len=%d, extracting %d positions [%d..%d]",
+                                        _seq_len, len(_positions),
+                                        _positions[0] if _positions else -1,
+                                        _positions[-1] if _positions else -1,
+                                    )
+                                    self._multi_pos_logged = True
                                 _multi_prefill = patchscope_patching.extract_activations_multi_pos(
                                     model, tokenizer, device, messages,
                                     layer_indices=source_layers,
                                     token_positions=_positions,
                                     raw_text=source_raw_text,
                                 )
+                                if not _multi_prefill:
+                                    logger.warning(
+                                        "Multi-pos prefill returned empty for %s q=%s (seq_len=%d, positions=%d..%d)",
+                                        sp_name, question_id, _seq_len,
+                                        _positions[0] if _positions else -1,
+                                        _positions[-1] if _positions else -1,
+                                    )
                                 _q_acts["multi_prefill"] = _multi_prefill
 
                             if _n_gen_tokens > 0:
