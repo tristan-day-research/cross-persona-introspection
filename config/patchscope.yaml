@@ -233,6 +233,7 @@ manual_prompts:
   # - id: "religion_politics"
   #   text: "The role of religion in politics is a deeply personal and controversial subject"
   #   target_words: ["religion", "politics"]
+  
 
 # =============================================================================
 # OPTIONAL — LEGACY MULTI-FAMILY (nested under interpretation_templates)
