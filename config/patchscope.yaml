@@ -1,18 +1,41 @@
-# Patchscope activation interpretation pipeline
-# Refs: Patchscopes (arXiv:2401.06102), SelfIE (arXiv:2403.10949)
+# patchscope.yaml — activation interpretation (Patchscopes / SelfIE-style)
+# Code: cross_persona_introspection/experiments/patchscope/
+#
+# Section order: run matrix → layers & extraction → decode → logit lens → controls &
+# reporting → Phase-1 source text → Phase-2 interpretation templates → manual mode.
 
-# ═══════════════════════════════════════════════════════════════════════
-# LAYERS
-# ═══════════════════════════════════════════════════════════════════════
-# Three modes (first match wins):
-#   1. layer_pairs  — explicit [source, injection] pairs
-#   2. layer_sweep  — all combos of source_layers × injection_layers
-#   3. defaults     — extraction.layers × injection.layer
+# =============================================================================
+# RUN MATRIX
+# =============================================================================
 
-# Option 1: explicit pairs (comment out to use option 2 or 3)
+source_mode: "questions"   # "questions" (MCQ task file) | "manual" (manual_prompts below)
+
+source_personas:
+  - persona_conservative
+  - persona_progressive
+
+reporter_personas:
+  - persona_conservative
+  - persona_progressive
+  - neutral_evaluator
+
+# Question filter (source_mode: questions only). [] = all categories.
+categories: ["cat_1", "cat_2", "cat_3", "cat_4", "cat_5"]
+samples_per_category: null   # null = all items per category
+
+use_chat_template: true
+# true  — chat template + reporter system in system role (identity style still raw user text).
+# false — plain continuation; system prepended above body.
+
+interpretation_base_prompt: ""   # prepended to selfie-style bodies when non-empty; usually ""
+
+# =============================================================================
+# LAYERS & SOURCE ACTIVATION (Phase 1)
+# =============================================================================
+# Resolution order: layer_pairs (below) OR layer_sweep OR extraction.layers × injection.layer
+
 layer_pairs:
   - [1, 1]
-  - [2, 2]
   - [3, 3]
   - [4, 4]
   - [5, 5]
@@ -25,232 +48,101 @@ layer_pairs:
   - [15, 15]
   - [20, 20]
   - [25, 25]
-  - [30, 30]
+  - [14, 3]
+  - [14, 5]
+  - [14, 1]
   - [12, 3]
   - [18, 5]
+  - [18, 1]
+  - [18, 3]
+  - [20, 1]
+  - [20, 3]
   - [20, 5]
   - [25, 1]
   - [25, 3]
   - [25, 5]
-  - [13, 13]
-  - [20, 20]
-  - [25, 25]
-  - [30, 30]
+  - [30, 1]
+  - [30, 3]
+  - [30, 5]
 
 extraction:
-
-  # Phase-1: prefill = prompt-only (token_position). during_generation = activations from generated tokens.
-  # Aliases: readout autoregressive / while_generating; or token_position during_generation (same idea).
-  readout: "both"   # Phase-1: hidden states from generated tokens (see autoregressive.*)
-  # readout: "prefill"           # prompt-only positions via token_position below
+  readout: "both"
+  # prefill | during_generation / autoregressive aliases | both
 
   autoregressive:
-    decode_steps: "until_answer"   # "until_answer" or integer >= 1
-    answer_tokens: ["A", "B", "C", "D"]  # stop when generated token matches one of these
-    max_decode_steps: 64     # safety cap (also used as step limit for until_answer)
-    temperature: 0.0         # with do_sample: sampling temperature (0.0 still samples if do_sample true)
-    do_sample: false         # false = greedy argmax each decode step
+    decode_steps: "until_answer"    # or int >= 1
+    answer_tokens: ["A", "B", "C", "D"]
+    max_decode_steps: 64
+    temperature: 0.0
+    do_sample: false
 
-  # Prefill-only when readout is prefill (ignored when readout is during_generation):
-  #   "last" — last token of the full chat-templated string (add_generation_prompt=True).
-  #            Often decodes as "\n\n" after <|eot_id|><|start_header_id|>assistant — template scaffolding,
-  #            not the literal "Answer :" token.
-  #   "last_before_assistant" — last token whose span ends BEFORE the first occurrence of
-  #            assistant_boundary_marker (end of user turn, before assistant header tokens).
-  #   <int> — explicit 0-based index into encode(templated_source, add_special_tokens=False).
+  token_position: "last_before_assistant"
+  # prefill only: last | last_before_assistant | int index | during_generation
 
-  token_position: "last_before_assistant"  # Alternative: token_position: "during_generation" (same as readout: during_generation).
-
-  # Multi-position extraction: extract activations from the last N tokens of the
-  # fully-templated source prompt (including chat template special tokens).
-  # null or 0 = single position from token_position above (current default behaviour).
-  source_prompt_tokens_to_extract_from: 40
-
-  # Multi-position extraction: extract activations from the first M generated tokens.
-  # If fewer than M tokens are generated, uses however many were produced (no error).
-  # null or 0 = current behaviour (single generated-token extraction via autoregressive).
+  source_prompt_tokens_to_extract_from: 25
   max_generated_tokens_to_extract_from: 5
+  # 0/null = single site from token_position / single gen step
 
-  # Substring search in the templated source string; only used when token_position is
-  # last_before_assistant. Must match your model's chat template (Llama 3 Instruct default).
-  assistant_boundary_marker: "<|eot_id|><|start_header_id|>assistant<|end_header_id|>"
-
-  # layers: "middle"          # "all", "middle", or [8, 16, 24]
+  assistant_boundary_marker: "<|eot_id|><|redacted_start_header_id|>assistant<|redacted_end_header_id|>"
 
 injection:
-  # layer: 8
-  mode: "replace"           # "replace" or "add"
-  alpha: 1.0                # scaling for "add" mode
-  # Repeats placeholder_token at {placeholder} for every prompt_style (not hardcoded per style).
+  mode: "replace"          # replace | add
+  alpha: 1.0
   num_placeholders: 1
   placeholder_token: "_"
 
-
-# ═══════════════════════════════════════════════════════════════════════
-# GENERATION
-# ═══════════════════════════════════════════════════════════════════════
+# =============================================================================
+# REPORTER DECODE (Phase 2 generate / logits)
+# =============================================================================
 
 generation:
-  max_new_tokens: 64              # only used by generate mode (open_summary etc.)
+  max_new_tokens: 64
   temperature: 0.0
   do_sample: false
-  use_cache: false                 # applies to both generate() and model(...) decode paths
+  use_cache: false
   save_logprobs: true
 
 relevancy:
   enabled: false
   max_tokens: 64
 
-# ═══════════════════════════════════════════════════════════════════════
-# LOGIT LENS
-# ═══════════════════════════════════════════════════════════════════════
-# Project intermediate hidden states through the unembedding matrix to see
-# what each layer "thinks" the next token is — without any patching.
-# Results go to a separate JSON: ps_{model}_{timestamp}_LOGIT_LENS_{detail}.json
+# =============================================================================
+# LOGIT LENS (separate JSON; no patching)
+# =============================================================================
 
 logit_lens:
-  enabled: false                     # flip to true to run the logit lens sweep
-  layers: "all"                     # "all", "middle", or explicit list e.g. [0, 4, 8, 16, 24, 31]
-  top_n: 20                         # how many most-likely tokens to record per layer
-  bottom_n: 20                      # how many least-likely tokens to record per layer
-  phases: ["both"]                  # which forward passes: "source", "reporter", or both
-  all_tokens: true                  # true = every token position in the prompt; false = extraction site only
-  include_generated: true           # true = also run logit lens on each generated (autoregressive) token
-  max_generated: 64                 # safety cap on decode steps when include_generated is true
-  max_questions: 2               # null = all questions; integer = only run LL on the first N questions
+  enabled: false
+  layers: "all"
+  top_n: 20
+  bottom_n: 20
+  phases: ["both"]
+  all_tokens: true
+  include_generated: true
+  max_generated: 64
+  max_questions: 2
 
+# =============================================================================
+# CONTROLS & .TXT REPORTING
+# =============================================================================
 
-# ═══════════════════════════════════════════════════════════════════════
-# EXPERIMENT MATRIX
-# ═══════════════════════════════════════════════════════════════════════
-
-# Source mode: "questions" (default, MCQ from task file) or "manual" (free-form prompts below).
-# Extraction uses prefill readout at the specified target_word regardless of extraction.readout.
-source_mode: "questions"
-
-source_personas:
-  - persona_conservative
-  - persona_progressive
-
-# Reporter personas: their system prompts are applied via the chat template
-# for every prompt_style (including identity).
-reporter_personas:
-  - persona_conservative
-  - persona_progressive
-  - neutral_evaluator
-
-# Question sampling (only used when source_mode: "questions")
-# categories: ["cat_1", "cat_2", "cat_3", "cat_4", "cat_5"]   # empty = all categories
-categories: ["cat_1", "cat_2", "cat_3", "cat_4", "cat_5"]   # empty = all categories
-samples_per_category: null      # null = all in category
-
-# ── Manual source prompts (used when source_mode: "manual") ──────────
-# Each entry: id, text (the source prompt), target_word (extract activation here),
-# and optional target_strategy ("last" or "first" subtoken, default "last").
-manual_prompts:
-  - id: "guns_controversial"
-    text: "The topic of guns is a very controversial issue"
-    target_word: "guns"
-
-  - id: "immigration_heated"
-    text: "Immigration policy has become an increasingly heated debate in America"
-    target_word: "Immigration"
-
-  - id: "abortion_divisive"
-    text: "Abortion remains one of the most divisive topics in modern politics"
-    target_word: "Abortion"
-
-  - id: "climate_change"
-    text: "Climate change is a topic that deeply divides people along political lines"
-    target_word: "Climate"
-
-  - id: "taxes_fairness"
-    text: "The question of taxes and fairness has no easy answer"
-    target_word: "taxes"
-
-  - id: "police_trust"
-    text: "Trust in the police varies dramatically across different communities"
-    target_word: "police"
-
-  - id: "healthcare_right"
-    text: "Whether healthcare is a right or a privilege is fiercely debated"
-    target_word: "healthcare"
-
-  - id: "religion_politics"
-    text: "The role of religion in politics is a deeply personal and controversial subject"
-    target_word: "religion"
-
-# Controls
 controls:
   text_only_baseline: false
   shuffled_activation: false
-  control_sample_rate: 0.5      # 1.0 = run controls for every cell (needed for matched source_gain)
-
-# Companion .txt log only (does not change JSONL records or metrics).
-# For each (template, condition, source_layer→injection_layer) from layer_pairs, the .txt
-# includes up to two samples: persona_alignment=match (source==reporter) and oppose
-# (see opposing_sample_policy). Each block also runs a log-only decode without the reporter
-# persona when include_no_reporter_system_sample is true and the reporter has a system prompt.
-# That decode uses no_persona_layer_log_system_prompt when set (recommended with use_chat_template false).
+  control_sample_rate: 0.5
 
 reporting:
   include_no_reporter_system_sample: true
-  # .txt only: one plain-string prompt per source→injection layer pair (no apply_chat_template).
-  # Optional synthetic preamble below + interpretation template from this file; not personas.yaml.
-  # Runs even when use_chat_template is false for the main matrix. Skipped for prompt_style identity.
   include_no_persona_chat_template_sample_per_layer: true
-  # Per-layer NO-PERSONA .txt sample uses the SAME string as interpretation_templates.*.{prompt_style}
-  # (e.g. open_summary.selfie). Only set no_persona_layer_log_body if you need a *different* body for that log only.
   no_persona_layer_log_body: ""
-  # Prepended above the template body with a blank line. Empty = nothing added (same as matrix minus persona).
   no_persona_layer_log_system_prompt: ""
-  # oppose bucket: cross_ideology = only persona_conservative ↔ persona_progressive;
-  # any_mismatch = first source≠reporter seen for that layer pair (e.g. includes neutral_evaluator).
   opposing_sample_policy: "cross_ideology"
 
+# =============================================================================
+# PHASE 1 — SOURCE USER MESSAGE
+# =============================================================================
+# Placeholders: {question_text}, {options_formatted}
 
-# ═══════════════════════════════════════════════════════════════════════
-# PROMPTS
-# ═══════════════════════════════════════════════════════════════════════
-
-# Phase 1 — source forward pass: user message only (source persona system prompt
-# is still applied in code from personas.yaml). Edit this to change MCQ layout
-# or instructions without touching Python.
-
-# Which templates to run (empty list = all).
-# Valid: open_summary, answer_extraction, persona_probe, agreement_probe, self_recognition
-enabled_templates: ["open_summary"]
-
-# Prompt style — selects which variant to use from each template below.
-#   "identity"    — pattern-completion user text (e.g. cat -> cat; {placeholder}).
-#                   Still wrapped with the model chat template + reporter system prompt.
-#   "patchscopes" — minimal structured user prompt + chat template + reporter system.
-#   "selfie"      — instructional user prompt + chat template + reporter system.
-prompt_style: "what_is_the_definition_of"
-
-# Whether to wrap interpretation prompts in the model's chat template.
-#   true  — apply_chat_template is used; reporter system prompt goes in the system role.
-#           identity style always bypasses this (it is a raw continuation prompt by design).
-#   false — no chat template for any style; reporter system prompt is prepended as plain
-#           text followed by a blank line (e.g. "You are a conservative...\n\ncat -> cat; ___").
-#           Keeps the model in base-model continuation mode regardless of prompt_style.
-use_chat_template: true
-
-
-# Placeholders: {question_text}, {options_formatted} (A–D lines, present options only).
 source_pass:
-  # user_message_template: |
-  #   {question_text}
-
-  #   {options_formatted}
-
-  #   Choose the single best answer. Answer with exactly one letter: A, B, C, or D.
-  # user_message_template: |
-  #   {question_text}
-
-  #   Answer with only one label:
-
-  #   {options_formatted} 
   user_message_template: |
     {question_text}
 
@@ -258,143 +150,170 @@ source_pass:
 
     Answer with exactly one letter: A, B, C, or D.
 
-  not_real_template: |
-    this is just to add a new line to the last prompt
-# Template definitions. Each has three prompt variants.
-# Variables: {placeholder}, {persona_prompt} (reporter system text from personas.yaml),
-#   {question_text}, {options}, {options_formatted}, {statement}
-# If {persona_prompt} appears, it is not also prepended or sent as a separate system message.
-#
-# decode_mode: "logits"   → single-token probability over fixed choices (A/B/C/D).
-# decode_mode: "generate" → multi-token free-form text generation.
-interpretation_templates:
+# =============================================================================
+# PHASE 2 — INTERPRETATION TEMPLATES
+# =============================================================================
+# Per template family: string keys = prompt_style names. Placeholders:
+#   {placeholder} {persona_prompt} {question_text} {options} {options_formatted} {statement}
+# decode_mode: generate | logits (per family)
 
+
+enabled_templates:
+  - open_summary
+# Empty list = all keys under interpretation_templates. Other families: answer_extraction,
+# persona_probe, agreement_probe, self_recognition (must define every prompt_style you use).
+
+# One string, or a list = full matrix repeated per style (see JSONL interpretation_prompt_style).
+prompt_style:
+  - implicit_belief_probe
+  - what_does_this_mean
+  - stance_freeform
+  - answer_hypothesis
+  - one_word_association
+  - contextual_paraphrase
+  - what_position
+
+
+interpretation_templates:
   open_summary:
+    decode_mode: "generate"
+
+    # --- baselines / simple probes ---
     identity: |
       cat -> cat; 135 -> 135; hello -> hello; {placeholder} ->
-    # identity: |
-    #   Complete the final line. Output only the missing text. Do not explain.
-
-    #   cat -> cat
-    #   135 -> 135
-    #   hello -> hello
-    #   {placeholder} ->
-    # identity: |
-    #   The placeholder below stands for an internal representation.
-    #   In a short phrase, describe what it means.
-
-    #   {placeholder}
-    # identity: |
-    #   The placeholder below stands for an internal representation from a language model.
-    #   Describe briefly what it represents.
-
-    #   Paris -> city
-    #   7 -> number
-    #   running -> action
-    #   {placeholder} -> 
     patchscopes: |
       The placeholder below stands for an internal representation.
       In a short phrase, describe what it means.
 
       {placeholder}
-    repeat_word: |
-      Please just simply repeat this word or letter once: {placeholder}. 
     selfie: |
-      Tell me what this means: {placeholder}. 
+      Tell me what this means: {placeholder}.
+    repeat_word: |
+      Please just simply repeat this word or letter once: {placeholder}.
     explain_this: |
-      Explain this: {placeholder}. 
+      Explain this: {placeholder}.
     what_is_the_definition_of: |
       What is the definition of {placeholder}?
+    what_does_this_mean: |
+      What does this mean: {placeholder}?
     only_placeholder: |
-      {placeholder}. 
-    #   <|start_header_id|>user<|end_header_id|> {placeholder} <|eot_id|><|start_header_id|>assistant<|end_header_id|> Sure, I will summarize the message:
-    # Preamble (persona or reporting.no_persona_layer_log_system_prompt) is prepended in code.
-    # Do not embed BOS/system/dates in selfie — duplicates synthetic block.
-  
-    # selfie: |
-    #   <|start_header_id|>user<|end_header_id|> {placeholder} <|eot_id|><|start_header_id|>assistant<|end_header_id|> Sure, I will summarize the message:
-    # selfie: |
-    #   <|begin_of_text|><|redacted_start_header_id|>user<|redacted_end_header_id|>
-
-    #   {persona_prompt}
-
-    #   The hidden content below corresponds to another agent's selected answer.
-    #   Recover the answer choice it represents.
-
-    #   {placeholder}<|eot_id|><|redacted_start_header_id|>assistant<|redacted_end_header_id|>
-
-    #   Answer:
+      {placeholder}.
     direct_answer: |
       {placeholder}
       Read the hidden content above and recover the answer choice it indicates.
       Output exactly one letter: A, B, C, or D. My answer is:
-    decode_mode: "generate"  # free-form generation, no fixed choices OR generate
 
+    # --- context-heavy probes (typical prompt_style list) ---
+    implicit_belief_probe: |
+      The marker below stands for an internal state while answering a multiple-choice question.
+      In one or two sentences: what belief, attitude, or position does it most strongly reflect?
+      Do not give a dictionary definition of any single word.
 
-  # answer_extraction:
-  #   identity: |
-  #     cat -> cat; 135 -> 135; hello -> hello; {placeholder}
-  #   patchscopes: |
-  #     {question_text}
+      {placeholder}
+    stance_freeform: |
+      Treat the marker below as evidence of how someone is leaning on a political issue.
+      Describe that leaning briefly (you may name parties, policies, or values). Not a definition.
 
-  #     {options_formatted}
+      The marker: {placeholder}
+    answer_hypothesis: |
+      The hidden marker is tied to how a model resolved this question:
 
-  #     Choose the single best answer. Answer with exactly one letter: A, B, C, or D.
-  #     Answer: {placeholder}
-  #   selfie: |
-  #     {placeholder}
+      {question_text}
 
-  #     {question_text}
+      {options_formatted}
 
-  #     {options_formatted}
+      In one sentence, which answer option (A, B, C, or D) is it most consistent with, and why?
+      Hidden marker: {placeholder}
+    one_word_association: |
+      Output exactly one content word (no punctuation, no explanation) that best captures what
+      the internal marker is "about" in context — not the dictionary sense of any one token.
 
-  #     What answer did the model choose?
-  #     Respond with a single letter (A, B, C, or D).
-  #   decode_mode: "generate"   # logits over {A, B, C, D} OR generate
+      {placeholder}
+    contextual_paraphrase: |
+      Paraphrase the main issue or question the model was handling when this representation
+      was active. Do not define the placeholder string literally.
 
-  # persona_probe:
-  #   identity: |
-  #     cat -> cat; 135 -> 135; hello -> hello; {placeholder}
-  #   patchscopes: |
-  #     Persona: {placeholder}
-  #   selfie: |
-  #     {placeholder}
+      {placeholder}
 
-  #     Which persona produced this representation?
-  #     Respond with: Conservative or Progressive.
-  #   decode_mode: "logits"   # logits over {Conservative, Progressive} OR generate
+    what_position: |
+      What stance or position does the following represent? {placeholder}
 
-  # agreement_probe:
-  #   identity: |
-  #     cat -> cat; 135 -> 135; hello -> hello; {placeholder}
-  #   patchscopes: |
-  #     Statement: {statement}
+# =============================================================================
+# MANUAL SOURCE MODE (source_mode: manual)
+# =============================================================================
 
-  #     Position: {placeholder}
-  #   selfie: |
-  #     {placeholder}
+manual_prompts:
+  - id: "guns_controversial"
+    text: "The topic of guns is a very controversial issue"
+    target_word: "guns"
+  - id: "immigration_heated"
+    text: "Immigration policy has become an increasingly heated debate in America"
+    target_word: "Immigration"
+  - id: "abortion_divisive"
+    text: "Abortion remains one of the most divisive topics in modern politics"
+    target_word: "Abortion"
+  - id: "climate_change"
+    text: "Climate change is a topic that deeply divides people along political lines"
+    target_word: "Climate"
+  - id: "taxes_fairness"
+    text: "The question of taxes and fairness has no easy answer"
+    target_word: "taxes"
+  - id: "police_trust"
+    text: "Trust in the police varies dramatically across different communities"
+    target_word: "police"
+  - id: "healthcare_right"
+    text: "Whether healthcare is a right or a privilege is fiercely debated"
+    target_word: "healthcare"
+  - id: "religion_politics"
+    text: "The role of religion in politics is a deeply personal and controversial subject"
+    target_word: "religion"
 
-  #     Does this correspond to agreeing or disagreeing with the statement?
-
-  #     {statement}
-
-  #     Respond with: Agree or Disagree.
-  #   decode_mode: "logits"   # logits over {Agree, Disagree} OR generate
-
-
-  # self_recognition:
-  #   identity: |
-  #     cat -> cat; 135 -> 135; hello -> hello; {placeholder}
-  #   patchscopes: |
-  #     Source: {placeholder}
-  #   selfie: |
-  #     {placeholder}
-
-  #     Was this produced by you or another persona?
-  #     Respond with: Self or Other.
-  #   decode_mode: "logits"   # logits over {Self, Other} OR generate
-
-# Prepended to selfie prompts only. Empty = disabled.
-interpretation_base_prompt: ""
-
-
+# =============================================================================
+# OPTIONAL TEMPLATE FAMILIES (uncomment + add matching prompt_style keys)
+# =============================================================================
+#
+# interpretation_templates:
+#   answer_extraction:
+#     identity: |
+#       cat -> cat; 135 -> 135; hello -> hello; {placeholder}
+#     patchscopes: |
+#       {question_text}
+#       {options_formatted}
+#       Choose the single best answer. Answer with exactly one letter: A, B, C, or D.
+#       Answer: {placeholder}
+#     selfie: |
+#       {placeholder}
+#       {question_text}
+#       {options_formatted}
+#       What answer did the model choose?
+#       Respond with a single letter (A, B, C, or D).
+#     decode_mode: "generate"
+#
+#   persona_probe:
+#     patchscopes: |
+#       Persona: {placeholder}
+#     selfie: |
+#       {placeholder}
+#       Which persona produced this representation?
+#       Respond with: Conservative or Progressive.
+#     decode_mode: "logits"
+#
+#   agreement_probe:
+#     patchscopes: |
+#       Statement: {statement}
+#       Position: {placeholder}
+#     selfie: |
+#       {placeholder}
+#       Does this correspond to agreeing or disagreeing with the statement?
+#       {statement}
+#       Respond with: Agree or Disagree.
+#     decode_mode: "logits"
+#
+#   self_recognition:
+#     patchscopes: |
+#       Source: {placeholder}
+#     selfie: |
+#       {placeholder}
+#       Was this produced by you or another persona?
+#       Respond with: Self or Other.
+#     decode_mode: "logits"

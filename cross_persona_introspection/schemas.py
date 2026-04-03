@@ -192,6 +192,8 @@ class PatchscopeRecord:
     source_layer: int
     injection_layer: int
     injection_mode: str  # "replace" or "add"
+    # Which variant under interpretation_templates.<template_name> was used (YAML prompt_style).
+    interpretation_prompt_style: str = ""
     # Reporter system prompt (raw, before chat template)
     reporter_system_prompt: str = ""
     # Full prompt sent to model (exact text including special tokens, system prompt, MCQ, etc.)

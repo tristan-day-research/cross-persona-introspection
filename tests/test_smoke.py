@@ -201,6 +201,7 @@ def test_patchscope_record():
         source_persona="persona_conservative",
         reporter_persona="neutral_evaluator",
         template_name="open_summary",
+        interpretation_prompt_style="selfie",
         condition="real",
         source_layer=8,
         injection_layer=3,
@@ -210,6 +211,7 @@ def test_patchscope_record():
         reporter_parse_success=False,
     )
     d = asdict(rec)
+    assert d["interpretation_prompt_style"] == "selfie"
     assert d["condition"] == "real"
     assert d["source_layer"] == 8
     # Should be JSON-serializable
@@ -226,6 +228,7 @@ def test_patchscope_helpers():
         describe_source_extraction_site,
         extraction_uses_generation_time_capture,
         format_source_pass_user_message,
+        normalize_prompt_styles,
         reporter_sample_opposing_qualifies,
         resolve_extraction_token_index,
     )
@@ -236,6 +239,11 @@ def test_patchscope_helpers():
     assert _resolve_layers("middle", 32) == list(range(10, 20))
     assert _resolve_layers(8, 32) == [8]
     assert _resolve_layers([4, 8, 12], 32) == [4, 8, 12]
+
+    assert normalize_prompt_styles({"prompt_style": "patchscopes"}) == ["patchscopes"]
+    assert normalize_prompt_styles({"prompt_style": ["a", "b"]}) == ["a", "b"]
+    with pytest.raises(ValueError, match="empty"):
+        normalize_prompt_styles({"prompt_style": []})
 
     # Model short name
     assert _model_short_name("meta-llama/Llama-3.1-8B-Instruct") == "l8b"

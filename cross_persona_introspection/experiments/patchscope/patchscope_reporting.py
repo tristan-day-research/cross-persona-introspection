@@ -9,7 +9,10 @@ from typing import Callable, Optional
 
 import yaml
 
-from cross_persona_introspection.experiments.patchscope.patchscope_helpers import _resolve_layers
+from cross_persona_introspection.experiments.patchscope.patchscope_helpers import (
+    _resolve_layers,
+    normalize_prompt_styles,
+)
 
 
 def write_run_log(
@@ -86,6 +89,13 @@ def write_run_log(
         conditions.append("shuffled")
     n_conditions = len(conditions)
 
+    try:
+        n_prompt_styles = len(normalize_prompt_styles(ps))
+        _style_list = normalize_prompt_styles(ps)
+    except (ValueError, TypeError, KeyError):
+        n_prompt_styles = 1
+        _style_list = [str(ps.get("prompt_style", "?"))]
+
     num_model_layers = backend.model.config.num_hidden_layers if backend else None
     if ps.get("layer_sweep", {}).get("enabled"):
         n_src_layers = len(ps["layer_sweep"]["source_layers"])
@@ -106,7 +116,15 @@ def write_run_log(
         layer_cells = n_src_layers * n_inj_layers if isinstance(n_src_layers, int) else "?"
 
     if isinstance(layer_cells, int):
-        total = n_questions * n_src * layer_cells * n_reporter * n_templates * n_conditions
+        total = (
+            n_questions
+            * n_src
+            * layer_cells
+            * n_reporter
+            * n_templates
+            * n_prompt_styles
+            * n_conditions
+        )
     else:
         total = "?"
 
@@ -119,6 +137,7 @@ def write_run_log(
         f"  layer_cells (src×inj per config): {layer_cells}",
         f"  reporter_personas   : {n_reporter}  {ps.get('reporter_personas', [])}",
         f"  templates           : {n_templates}  {template_keys}",
+        f"  prompt_styles       : {n_prompt_styles}  {_style_list}",
         f"  conditions          : {n_conditions}  {conditions}",
         f"  total cells (nominal): {total}",
         "",

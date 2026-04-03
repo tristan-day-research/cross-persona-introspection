@@ -178,12 +178,19 @@ class PatchscopeExperiment(BaseExperiment):
             out = out[:max_len].rstrip("-")
             return out or "na"
 
-        style = (
-            ps.get("prompt_style")
-            or ps.get("injection", {}).get("placeholder_style")
-            or "patchscopes"
-        )
-        style_s = slug(style, 20)
+        try:
+            _styles = patchscope_helpers.normalize_prompt_styles(ps)
+        except ValueError:
+            _styles = [
+                str(
+                    ps.get("prompt_style")
+                    or ps.get("injection", {}).get("placeholder_style")
+                    or "patchscopes"
+                )
+            ]
+        style_s = "+".join(slug(s, 12) for s in _styles)
+        if len(style_s) > 36:
+            style_s = f"{len(_styles)}sty"
 
         enabled = ps.get("enabled_templates") or []
         all_templates = ps.get("interpretation_templates") or {}
@@ -285,6 +292,14 @@ class PatchscopeExperiment(BaseExperiment):
         self._use_chat_template = bool(
             ps_config.get("use_chat_template", True)
         )
+        for _tn, _tc in templates.items():
+            for _ps in prompt_styles:
+                if _tc.get(_ps) is None:
+                    _avail = [k for k in _tc if k != "decode_mode"]
+                    raise ValueError(
+                        f"interpretation_templates.{_tn} has no body for prompt_style={_ps!r}. "
+                        f"Add a {_ps}: | block, or remove it from prompt_style. Available keys: {_avail}"
+                    )
         source_persona_names = ps_config["source_personas"]
         reporter_persona_names = ps_config["reporter_personas"]
 
@@ -296,8 +311,8 @@ class PatchscopeExperiment(BaseExperiment):
         injection_mode = injection_cfg["mode"]
         injection_alpha = float(injection_cfg["alpha"])
 
-        # Resolve prompt style
-        style = ps_config["prompt_style"]
+        # Prompt style(s): one string or a list — each runs the full matrix
+        prompt_styles = patchscope_helpers.normalize_prompt_styles(ps_config)
         configured_placeholder = injection_cfg["placeholder_token"]
         num_placeholders = int(injection_cfg.get("num_placeholders", 1))
 
@@ -352,6 +367,7 @@ class PatchscopeExperiment(BaseExperiment):
             "injection_layers": len(injection_layers),
             "reporter_personas": len(reporter_persona_names),
             "templates": len(templates),
+            "prompt_styles": len(prompt_styles),
             "conditions": len(conditions),
         }
         total_cells = 1
@@ -372,8 +388,9 @@ class PatchscopeExperiment(BaseExperiment):
         # Phase 2 core: iterate every cell in the matrix and run one
         # interpretation trial per cell.
         #
-        # _iter_matrix_cells() handles the 7-level nested loop (personas x
-        # questions x layers x reporters x templates x conditions) and yields
+        # _iter_matrix_cells() handles the nested loop (personas x questions x
+        # extraction sites x layers x reporters x templates x prompt_styles x
+        # conditions) and yields
         # one dict per cell containing:
         #   - "activation": the tensor to inject (real, shuffled, or None)
         #   - "interp_text" / "interp_messages" / "placeholder_positions":
@@ -398,7 +415,7 @@ class PatchscopeExperiment(BaseExperiment):
             extraction_meta=extraction_meta,
             control_sample_rate=control_sample_rate,
             control_rng=control_rng,
-            style=style,
+            prompt_styles=prompt_styles,
             tokenizer=tokenizer,
             base_prompt=base_prompt,
             placeholder_token=placeholder_token,
@@ -494,7 +511,7 @@ class PatchscopeExperiment(BaseExperiment):
                 injection_layers=injection_layers,
                 pair_map=pair_map,
                 templates=templates,
-                prompt_style=style,
+                prompt_styles=prompt_styles,
                 base_prompt=base_prompt,
                 placeholder_token=placeholder_token,
                 num_placeholders=num_placeholders,
@@ -1056,7 +1073,7 @@ class PatchscopeExperiment(BaseExperiment):
         reporter_persona_names, templates, conditions,
         activations, direct_answers, shuffle_maps, extraction_meta,
         control_sample_rate, control_rng,
-        style, tokenizer, base_prompt, placeholder_token, num_placeholders,
+        prompt_styles, tokenizer, base_prompt, placeholder_token, num_placeholders,
         injection_mode,
     ) -> Iterator[dict]:
         """Yield one dict per cell in the Phase 2 experiment matrix.
@@ -1148,112 +1165,114 @@ class PatchscopeExperiment(BaseExperiment):
                                 reporter_persona = self.all_personas[reporter_name]
 
                                 for tmpl_name, tmpl_cfg in templates.items():
-                                    prompt_style = style
+                                    for prompt_style in prompt_styles:
 
-                                    # Use shuffled options matching the source pass
-                                    shuffle_key = (question_id, sp_name)
-                                    shuffled_question = shuffle_maps.get(shuffle_key, (question, {}))[0]
-                                    shuffled_options = shuffled_question.get("options", {})
-                                    shuffle_remap = shuffle_maps.get(shuffle_key, (None, {}))[1]
+                                        # Use shuffled options matching the source pass
+                                        shuffle_key = (question_id, sp_name)
+                                        shuffled_question = shuffle_maps.get(shuffle_key, (question, {}))[0]
+                                        shuffled_options = shuffled_question.get("options", {})
+                                        shuffle_remap = shuffle_maps.get(shuffle_key, (None, {}))[1]
 
-                                    # Build the interpretation prompt and find where the
-                                    # placeholder tokens landed (token indices).  These
-                                    # positions are where the activation will be patched in.
-                                    interp_text, interp_messages, placeholder_positions = (
-                                        patchscope_helpers.build_interpretation_prompt(
-                                            tokenizer=tokenizer,
-                                            tmpl_cfg=tmpl_cfg,
-                                            prompt_style=prompt_style,
-                                            base_prompt=base_prompt,
-                                            placeholder_token=placeholder_token,
-                                            num_placeholders=num_placeholders,
-                                            question=question,
-                                            reporter_system_prompt=reporter_persona.system_prompt,
-                                            options_override=shuffled_options,
-                                            use_chat_template=self._use_chat_template,
-                                        )
-                                    )
-
-                                    # Validate placeholder positions once per template
-                                    # (first time we see this template name)
-                                    _validation_key = f"_validated_{tmpl_name}"
-                                    if not hasattr(self, _validation_key):
-                                        patchscope_helpers.validate_placeholder_positions(
-                                            tokenizer, interp_text,
-                                            placeholder_positions, placeholder_token,
-                                            tmpl_name=tmpl_name,
-                                            raise_on_error=True,
-                                        )
-                                        setattr(self, _validation_key, True)
-
-                                    for condition in conditions:
-                                        # Subsample controls if configured
-                                        if condition != "real" and control_sample_rate < 1.0:
-                                            if control_rng.random() > control_sample_rate:
-                                                continue
-
-                                        # Select the activation for this condition:
-                                        #   "real"               -> the actual source activation
-                                        #   "shuffled"           -> activation from a different question
-                                        #   "text_only_baseline" -> None (no injection)
-                                        if condition == "text_only_baseline":
-                                            activation = None
-                                        elif condition == "shuffled":
-                                            activation = shuffled_act
-                                        else:
-                                            activation = real_act
-
-                                        source_direct = direct_answers[sp_name][question_idx]
-                                        record = PatchscopeRecord(
-                                            experiment="patchscope",
-                                            template_name=tmpl_name,
-                                            model=self.config.model_name,
-                                            question_id=question_id,
-                                            source_persona=sp_name,
-                                            reporter_persona=reporter_name,
-                                            condition=condition,
-                                            source_layer=src_layer,
-                                            injection_layer=inj_layer,
-                                            injection_mode=injection_mode,
-                                            source_last_prefill_answer=source_direct["answer"],
-                                            source_generated_answer=source_direct.get("source_generated_answer"),
-                                            source_answer_probs=source_direct["probs"],
-                                            source_chosen_prob=source_direct.get("source_chosen_prob"),
-                                            source_margin=source_direct.get("source_margin"),
-                                            source_answer_entropy=source_direct.get("source_answer_entropy"),
-                                            source_extraction_mode=_emeta.get("source_extraction_mode"),
-                                            source_extraction_token_index=_emeta.get("source_extraction_token_index"),
-                                            source_extraction_token_id=_emeta.get("source_extraction_token_id"),
-                                            source_extraction_token_text=_emeta.get("source_extraction_token_text"),
-                                            source_extraction_token_offset=_emeta.get("source_extraction_token_offset"),
-                                            question_text=question.get("question_text", ""),
-                                            question_options=question.get("options"),
-                                            category_id=question.get("category_id"),
-                                            category_name=question.get("category_name"),
-                                            expected_disagreement=question.get("expected_disagreement"),
-                                            neutral_reference_answer=question.get("neutral_reference_answer"),
-                                            reporter_system_prompt=(
-                                                (reporter_persona.system_prompt or "").strip()
-                                            ),
+                                        # Build the interpretation prompt and find where the
+                                        # placeholder tokens landed (token indices).  These
+                                        # positions are where the activation will be patched in.
+                                        interp_text, interp_messages, placeholder_positions = (
+                                            patchscope_helpers.build_interpretation_prompt(
+                                                tokenizer=tokenizer,
+                                                tmpl_cfg=tmpl_cfg,
+                                                prompt_style=prompt_style,
+                                                base_prompt=base_prompt,
+                                                placeholder_token=placeholder_token,
+                                                num_placeholders=num_placeholders,
+                                                question=question,
+                                                reporter_system_prompt=reporter_persona.system_prompt,
+                                                options_override=shuffled_options,
+                                                use_chat_template=self._use_chat_template,
+                                            )
                                         )
 
-                                        yield {
-                                            "record": record,
-                                            "condition": condition,
-                                            "activation": activation,
-                                            "interp_text": interp_text,
-                                            "interp_messages": interp_messages,
-                                            "placeholder_positions": placeholder_positions,
-                                            "prompt_style": prompt_style,
-                                            "tmpl_name": tmpl_name,
-                                            "tmpl_cfg": tmpl_cfg,
-                                            "inj_layer": inj_layer,
-                                            "shuffle_remap": shuffle_remap,
-                                            "interp_question": {
-                                                "question_text": question.get("question_text", ""),
-                                                "options": dict(shuffled_options),
-                                            },
-                                        }
+                                        # Validate once per (template family, prompt_style variant)
+                                        if not hasattr(self, "_placeholder_validation_done"):
+                                            self._placeholder_validation_done = set()
+                                        _vk = (tmpl_name, prompt_style)
+                                        if _vk not in self._placeholder_validation_done:
+                                            patchscope_helpers.validate_placeholder_positions(
+                                                tokenizer, interp_text,
+                                                placeholder_positions, placeholder_token,
+                                                tmpl_name=tmpl_name,
+                                                raise_on_error=True,
+                                            )
+                                            self._placeholder_validation_done.add(_vk)
+
+                                        for condition in conditions:
+                                            # Subsample controls if configured
+                                            if condition != "real" and control_sample_rate < 1.0:
+                                                if control_rng.random() > control_sample_rate:
+                                                    continue
+
+                                            # Select the activation for this condition:
+                                            #   "real"               -> the actual source activation
+                                            #   "shuffled"           -> activation from a different question
+                                            #   "text_only_baseline" -> None (no injection)
+                                            if condition == "text_only_baseline":
+                                                activation = None
+                                            elif condition == "shuffled":
+                                                activation = shuffled_act
+                                            else:
+                                                activation = real_act
+
+                                            source_direct = direct_answers[sp_name][question_idx]
+                                            record = PatchscopeRecord(
+                                                experiment="patchscope",
+                                                template_name=tmpl_name,
+                                                interpretation_prompt_style=prompt_style,
+                                                model=self.config.model_name,
+                                                question_id=question_id,
+                                                source_persona=sp_name,
+                                                reporter_persona=reporter_name,
+                                                condition=condition,
+                                                source_layer=src_layer,
+                                                injection_layer=inj_layer,
+                                                injection_mode=injection_mode,
+                                                source_last_prefill_answer=source_direct["answer"],
+                                                source_generated_answer=source_direct.get("source_generated_answer"),
+                                                source_answer_probs=source_direct["probs"],
+                                                source_chosen_prob=source_direct.get("source_chosen_prob"),
+                                                source_margin=source_direct.get("source_margin"),
+                                                source_answer_entropy=source_direct.get("source_answer_entropy"),
+                                                source_extraction_mode=_emeta.get("source_extraction_mode"),
+                                                source_extraction_token_index=_emeta.get("source_extraction_token_index"),
+                                                source_extraction_token_id=_emeta.get("source_extraction_token_id"),
+                                                source_extraction_token_text=_emeta.get("source_extraction_token_text"),
+                                                source_extraction_token_offset=_emeta.get("source_extraction_token_offset"),
+                                                question_text=question.get("question_text", ""),
+                                                question_options=question.get("options"),
+                                                category_id=question.get("category_id"),
+                                                category_name=question.get("category_name"),
+                                                expected_disagreement=question.get("expected_disagreement"),
+                                                neutral_reference_answer=question.get("neutral_reference_answer"),
+                                                reporter_system_prompt=(
+                                                    (reporter_persona.system_prompt or "").strip()
+                                                ),
+                                            )
+
+                                            yield {
+                                                "record": record,
+                                                "condition": condition,
+                                                "activation": activation,
+                                                "interp_text": interp_text,
+                                                "interp_messages": interp_messages,
+                                                "placeholder_positions": placeholder_positions,
+                                                "prompt_style": prompt_style,
+                                                "tmpl_name": tmpl_name,
+                                                "tmpl_cfg": tmpl_cfg,
+                                                "inj_layer": inj_layer,
+                                                "shuffle_remap": shuffle_remap,
+                                                "interp_question": {
+                                                    "question_text": question.get("question_text", ""),
+                                                    "options": dict(shuffled_options),
+                                                },
+                                            }
 
     # ── Phase 2: single-cell execution ────────────────────────────────────
 

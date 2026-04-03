@@ -432,6 +432,26 @@ def _resolve_choice_token_ids(
 # ── Interpretation prompt construction ─────────────────────────────────
 
 
+def normalize_prompt_styles(ps_config: dict) -> list[str]:
+    """Expand ``prompt_style`` to a non-empty list of variant keys.
+
+    YAML may set ``prompt_style`` to a single string (backward compatible) or
+    to a list of strings. Each entry must match a key on every enabled
+    ``interpretation_templates.*`` block (e.g. ``patchscopes``, ``selfie``,
+    or custom keys like ``what_is_the_definition_of``).
+    """
+    raw = ps_config.get("prompt_style", "patchscopes")
+    if isinstance(raw, list):
+        out = [str(s).strip() for s in raw if str(s).strip()]
+        if not out:
+            raise ValueError("prompt_style is a list but contains no non-empty strings")
+        return out
+    s = str(raw).strip()
+    if not s:
+        raise ValueError("prompt_style is empty")
+    return [s]
+
+
 def build_interpretation_prompt(
     tokenizer,
     tmpl_cfg: dict,

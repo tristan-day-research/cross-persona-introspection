@@ -492,7 +492,7 @@ class LogitLensCollector:
         # ── Reporter phase ────────────────────────────────────────────
         if "reporter" in self.phases:
             injection_cfg = self.ps_config["injection"]
-            style = self.ps_config["prompt_style"]
+            prompt_styles = patchscope_helpers.normalize_prompt_styles(self.ps_config)
             configured_placeholder = injection_cfg["placeholder_token"]
             num_placeholders = int(injection_cfg.get("num_placeholders", 1))
             placeholder_token_id = patchscope_helpers._get_placeholder_token_id(
@@ -509,46 +509,47 @@ class LogitLensCollector:
             for rp_name in reporter_persona_names:
                 reporter_persona = self.all_personas[rp_name]
                 for tmpl_name, tmpl_cfg in templates.items():
-                    interp_text, _, _ = (
-                        patchscope_helpers.build_interpretation_prompt(
-                            self.tokenizer, tmpl_cfg, style, base_prompt,
-                            placeholder_token, num_placeholders,
-                            question, reporter_persona.system_prompt,
-                            use_chat_template=bool(
-                                self.ps_config.get("use_chat_template", True)
-                            ),
+                    for style in prompt_styles:
+                        interp_text, _, _ = (
+                            patchscope_helpers.build_interpretation_prompt(
+                                self.tokenizer, tmpl_cfg, style, base_prompt,
+                                placeholder_token, num_placeholders,
+                                question, reporter_persona.system_prompt,
+                                use_chat_template=bool(
+                                    self.ps_config.get("use_chat_template", True)
+                                ),
+                            )
                         )
-                    )
-                    entries = run_logit_lens(
-                        self.model, self.tokenizer, self.device,
-                        input_text=interp_text,
-                        layer_indices=self.layer_indices,
-                        token_position="last",
-                        top_n=self.top_n,
-                        bottom_n=self.bottom_n,
-                        all_tokens=self.all_tokens,
-                    )
-
-                    if self.include_generated:
-                        gen_entries = run_logit_lens_generated(
+                        entries = run_logit_lens(
                             self.model, self.tokenizer, self.device,
                             input_text=interp_text,
                             layer_indices=self.layer_indices,
+                            token_position="last",
                             top_n=self.top_n,
                             bottom_n=self.bottom_n,
-                            max_new_tokens=self.max_generated,
+                            all_tokens=self.all_tokens,
                         )
-                        entries.extend(gen_entries)
 
-                    self.records.append(LogitLensRecord(
-                        phase="reporter",
-                        persona=rp_name,
-                        question_id=question_id,
-                        question_text=question.get("question_text", ""),
-                        layers=entries,
-                        prompt_text=interp_text,
-                        timestamp=datetime.now().isoformat(),
-                    ))
+                        if self.include_generated:
+                            gen_entries = run_logit_lens_generated(
+                                self.model, self.tokenizer, self.device,
+                                input_text=interp_text,
+                                layer_indices=self.layer_indices,
+                                top_n=self.top_n,
+                                bottom_n=self.bottom_n,
+                                max_new_tokens=self.max_generated,
+                            )
+                            entries.extend(gen_entries)
+
+                        self.records.append(LogitLensRecord(
+                            phase="reporter",
+                            persona=rp_name,
+                            question_id=question_id,
+                            question_text=question.get("question_text", ""),
+                            layers=entries,
+                            prompt_text=interp_text,
+                            timestamp=datetime.now().isoformat(),
+                        ))
 
     # ── Flush to disk ─────────────────────────────────────────────────
 

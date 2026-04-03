@@ -44,7 +44,7 @@ def run_source_overrides(
     injection_layers: list[int],
     pair_map: dict[int, list[int]] | None,
     templates: dict[str, dict],
-    prompt_style: str,
+    prompt_styles: list[str],
     base_prompt: str,
     placeholder_token: str,
     num_placeholders: int,
@@ -117,108 +117,112 @@ def run_source_overrides(
             _inj_layers = pair_map[src_layer] if pair_map else injection_layers
             for inj_layer in _inj_layers:
                 for tmpl_name, tmpl_cfg in templates.items():
-                    interp_text, interp_messages, placeholder_positions = (
-                        build_interpretation_prompt(
-                            tokenizer=tokenizer,
-                            tmpl_cfg=tmpl_cfg,
-                            prompt_style=prompt_style,
-                            base_prompt=base_prompt,
-                            placeholder_token=placeholder_token,
-                            num_placeholders=num_placeholders,
-                            question=dummy_question,
-                            reporter_system_prompt=None,
-                        )
-                    )
-
-                    _raw = interp_text if prompt_style == "identity" else None
-
-                    record = PatchscopeRecord(
-                        experiment="patchscope",
-                        template_name=tmpl_name,
-                        model=model_name,
-                        question_id=f"override_{so_name}",
-                        source_persona="source_override",
-                        reporter_persona="source_override",
-                        condition="real",
-                        source_layer=src_layer,
-                        injection_layer=inj_layer,
-                        injection_mode=injection_mode,
-                        source_last_prefill_answer=None,
-                        source_answer_probs=None,
-                        question_text=so_raw_text,
-                        question_options=None,
-                    )
-
-                    try:
-                        record.reporter_interpretation_prompt = interp_text
-
-                        use_logits = (
-                            tmpl_cfg.get("decode_mode", "generate") == "logits"
-                            and tmpl_name in all_choice_token_ids
+                    for prompt_style in prompt_styles:
+                        interp_text, interp_messages, placeholder_positions = (
+                            build_interpretation_prompt(
+                                tokenizer=tokenizer,
+                                tmpl_cfg=tmpl_cfg,
+                                prompt_style=prompt_style,
+                                base_prompt=base_prompt,
+                                placeholder_token=placeholder_token,
+                                num_placeholders=num_placeholders,
+                                question=dummy_question,
+                                reporter_system_prompt=None,
+                            )
                         )
 
-                        result = patch_and_decode(
-                            model, tokenizer, device,
-                            interp_messages, real_act,
+                        _raw = interp_text if prompt_style == "identity" else None
+
+                        record = PatchscopeRecord(
+                            experiment="patchscope",
+                            template_name=tmpl_name,
+                            interpretation_prompt_style=prompt_style,
+                            model=model_name,
+                            question_id=f"override_{so_name}",
+                            source_persona="source_override",
+                            reporter_persona="source_override",
+                            condition="real",
+                            source_layer=src_layer,
                             injection_layer=inj_layer,
-                            placeholder_positions=placeholder_positions,
-                            mode=injection_mode,
-                            alpha=injection_alpha,
-                            raw_text=_raw,
-                            decode_mode="logits" if use_logits else "generate",
-                            max_new_tokens=gen_cfg["max_new_tokens"],
-                            temperature=gen_cfg["temperature"],
-                            do_sample=gen_cfg.get("do_sample", False),
-                            use_cache=gen_cfg.get("use_cache", True),
-                            choice_token_ids=all_choice_token_ids.get(tmpl_name),
-                            save_logprobs=save_logprobs,
+                            injection_mode=injection_mode,
+                            source_last_prefill_answer=None,
+                            source_answer_probs=None,
+                            question_text=so_raw_text,
+                            question_options=None,
                         )
 
-                        record.reporter_decode_mode = "logits" if use_logits else "generate"
-                        record.reporter_generated_text = result["generated_text"]
-                        if use_logits:
-                            record.reporter_choice_probs = result["probs"]
-                            record.reporter_choice_logits = result["logits"]
-                            record.reporter_choice_logprobs = result.get("logprobs")
-                            record.reporter_total_choice_prob = result.get("total_choice_prob")
-                            record.reporter_predicted = result["predicted"]
-                            record.reporter_parsed_answer = result["predicted"]
-                            record.reporter_parse_success = True
+                        try:
+                            record.reporter_interpretation_prompt = interp_text
 
-                        # Check expected output
-                        found = (
-                            so_expected.lower() in record.reporter_generated_text.lower()
-                            if so_expected else None
-                        )
-                        status = "✓" if found else "✗" if found is False else " "
-                        logger.info(
-                            f"    {so_name} L{src_layer:>2}→{inj_layer:>2} "
-                            f"{tmpl_name}: [{status}] '{record.reporter_generated_text.strip()[:60]}'"
-                        )
+                            use_logits = (
+                                tmpl_cfg.get("decode_mode", "generate") == "logits"
+                                and tmpl_name in all_choice_token_ids
+                            )
 
-                        # Capture sample prompt
-                        sample_key = f"override_{so_name}_{tmpl_name}"
-                        if sample_key not in sample_prompts:
-                            sample_prompts[sample_key] = {
-                                "template": tmpl_name,
-                                "condition": "real (source_override)",
-                                "source_persona": "source_override",
-                                "reporter_persona": "source_override",
-                                "source_layer": src_layer,
-                                "injection_layer": inj_layer,
-                                "interp_prompt_text": interp_text,
-                                "reporter_generated_text": record.reporter_generated_text,
-                                "question_id": f"override_{so_name}",
-                            }
+                            result = patch_and_decode(
+                                model, tokenizer, device,
+                                interp_messages, real_act,
+                                injection_layer=inj_layer,
+                                placeholder_positions=placeholder_positions,
+                                mode=injection_mode,
+                                alpha=injection_alpha,
+                                raw_text=_raw,
+                                decode_mode="logits" if use_logits else "generate",
+                                max_new_tokens=gen_cfg["max_new_tokens"],
+                                temperature=gen_cfg["temperature"],
+                                do_sample=gen_cfg.get("do_sample", False),
+                                use_cache=gen_cfg.get("use_cache", True),
+                                choice_token_ids=all_choice_token_ids.get(tmpl_name),
+                                save_logprobs=save_logprobs,
+                            )
 
-                    except Exception as e:
-                        msg = (
-                            f"Override interpret error: {so_name} "
-                            f"{tmpl_name} L{src_layer}→{inj_layer}: {e}"
-                        )
-                        logger.error(msg)
-                        errors.append(msg)
-                        record.error = str(e)
+                            record.reporter_decode_mode = "logits" if use_logits else "generate"
+                            record.reporter_generated_text = result["generated_text"]
+                            if use_logits:
+                                record.reporter_choice_probs = result["probs"]
+                                record.reporter_choice_logits = result["logits"]
+                                record.reporter_choice_logprobs = result.get("logprobs")
+                                record.reporter_total_choice_prob = result.get("total_choice_prob")
+                                record.reporter_predicted = result["predicted"]
+                                record.reporter_parsed_answer = result["predicted"]
+                                record.reporter_parse_success = True
 
-                    record.timestamp = datetime.now(timezone.utc).isoformat()
-                    records.append(record)
+                            # Check expected output
+                            found = (
+                                so_expected.lower() in record.reporter_generated_text.lower()
+                                if so_expected else None
+                            )
+                            status = "✓" if found else "✗" if found is False else " "
+                            logger.info(
+                                f"    {so_name} L{src_layer:>2}→{inj_layer:>2} "
+                                f"{tmpl_name}/{prompt_style}: [{status}] "
+                                f"'{record.reporter_generated_text.strip()[:60]}'"
+                            )
+
+                            # Capture sample prompt
+                            sample_key = f"override_{so_name}_{tmpl_name}_{prompt_style}"
+                            if sample_key not in sample_prompts:
+                                sample_prompts[sample_key] = {
+                                    "template": tmpl_name,
+                                    "prompt_style": prompt_style,
+                                    "condition": "real (source_override)",
+                                    "source_persona": "source_override",
+                                    "reporter_persona": "source_override",
+                                    "source_layer": src_layer,
+                                    "injection_layer": inj_layer,
+                                    "interp_prompt_text": interp_text,
+                                    "reporter_generated_text": record.reporter_generated_text,
+                                    "question_id": f"override_{so_name}",
+                                }
+
+                        except Exception as e:
+                            msg = (
+                                f"Override interpret error: {so_name} "
+                                f"{tmpl_name}/{prompt_style} L{src_layer}→{inj_layer}: {e}"
+                            )
+                            logger.error(msg)
+                            errors.append(msg)
+                            record.error = str(e)
+
+                        record.timestamp = datetime.now(timezone.utc).isoformat()
+                        records.append(record)
