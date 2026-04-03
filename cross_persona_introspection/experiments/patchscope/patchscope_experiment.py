@@ -451,14 +451,13 @@ class PatchscopeExperiment(BaseExperiment):
                         self._ll_collector.process_question(
                             _q_idx, self.questions[_q_idx], record.source_persona,
                         )
+                        self._ll_collector.flush()
 
             if cell_count % 50 == 0:
                 logger.info(f"  Progress: {cell_count}/{total_cells} cells")
             if len(self.records) - self._last_flush >= 20:
                 self._run_elapsed = time.monotonic() - run_start
                 self._flush_results()
-                if self._ll_collector is not None:
-                    self._ll_collector.flush()
 
         # ── Phase 3: source overrides (optional) ──────────────────────────
 
