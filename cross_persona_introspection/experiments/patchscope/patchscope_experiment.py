@@ -292,6 +292,8 @@ class PatchscopeExperiment(BaseExperiment):
         self._use_chat_template = bool(
             ps_config.get("use_chat_template", True)
         )
+        # One string or list in YAML — full matrix runs per entry
+        prompt_styles = patchscope_helpers.normalize_prompt_styles(ps_config)
         for _tn, _tc in templates.items():
             for _ps in prompt_styles:
                 if _tc.get(_ps) is None:
@@ -311,8 +313,6 @@ class PatchscopeExperiment(BaseExperiment):
         injection_mode = injection_cfg["mode"]
         injection_alpha = float(injection_cfg["alpha"])
 
-        # Prompt style(s): one string or a list — each runs the full matrix
-        prompt_styles = patchscope_helpers.normalize_prompt_styles(ps_config)
         configured_placeholder = injection_cfg["placeholder_token"]
         num_placeholders = int(injection_cfg.get("num_placeholders", 1))
 
