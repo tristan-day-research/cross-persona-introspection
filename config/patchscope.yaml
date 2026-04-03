@@ -66,7 +66,7 @@ extraction:
   # prefill only: last | last_before_assistant | int index | during_generation
 
   source_prompt_tokens_to_extract_from: 7
-  max_generated_tokens_to_extract_from: 5
+  max_generated_tokens_to_extract_from: 15
   # 0/null = single site from token_position / single gen step
 
   assistant_boundary_marker: "<|eot_id|><|redacted_start_header_id|>assistant<|redacted_end_header_id|>"
