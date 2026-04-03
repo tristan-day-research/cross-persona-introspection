@@ -228,6 +228,7 @@ class PatchscopeRecord:
     source_extraction_token_index: Optional[int] = None     # 0-based token position
     source_extraction_token_id: Optional[int] = None        # token ID at that position
     source_extraction_token_text: Optional[str] = None      # decoded token string
+    source_extraction_token_offset: Optional[int] = None   # index within multi-token sweep (0 = anchor / first gen token)
     # Original question data
     question_text: Optional[str] = None
     question_options: Optional[dict[str, str]] = None

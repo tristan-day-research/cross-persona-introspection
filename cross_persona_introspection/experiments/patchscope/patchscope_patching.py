@@ -308,6 +308,201 @@ def extract_activations_during_decode(
 
 
 # ---------------------------------------------------------------------------
+# 1b. Multi-position extraction variants
+# ---------------------------------------------------------------------------
+
+def extract_activations_multi_pos(
+    model,
+    tokenizer,
+    device,
+    messages: list[dict],
+    layer_indices: list[int],
+    token_positions: list[int],
+    *,
+    raw_text: Optional[str] = None,
+) -> dict[int, dict[int, torch.Tensor]]:
+    """Single forward pass — capture hidden states at *multiple* token positions.
+
+    Args:
+        token_positions: Absolute 0-based indices into the tokenised prompt.
+
+    Returns:
+        ``{pos: {layer: tensor}}`` for every requested position and layer.
+    """
+    if raw_text is not None:
+        input_text = raw_text
+    else:
+        input_text = tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+    input_ids = tokenizer.encode(
+        input_text, return_tensors="pt", add_special_tokens=False
+    ).to(device)
+    seq_len = input_ids.shape[1]
+
+    # Clamp to valid range
+    valid_positions = [p for p in token_positions if 0 <= p < seq_len]
+    if not valid_positions:
+        logger.warning(
+            "extract_activations_multi_pos: no valid positions in %s (seq_len=%d)",
+            token_positions, seq_len,
+        )
+        return {}
+
+    captured: dict[tuple[int, int], torch.Tensor] = {}  # (layer, pos) -> tensor
+    transformer_layers = _get_transformer_layers(model)
+
+    def make_hook(layer_idx):
+        def hook_fn(module, input, output):
+            hidden = output[0] if isinstance(output, tuple) else output
+            for pos in valid_positions:
+                captured[(layer_idx, pos)] = hidden[0, pos, :].detach().clone()
+        return hook_fn
+
+    handles = []
+    for idx in layer_indices:
+        handles.append(transformer_layers[idx].register_forward_hook(make_hook(idx)))
+
+    try:
+        with torch.no_grad():
+            model(input_ids)
+    finally:
+        for h in handles:
+            h.remove()
+
+    # Reshape to {pos: {layer: tensor}}
+    result: dict[int, dict[int, torch.Tensor]] = {}
+    for (layer_idx, pos), tensor in captured.items():
+        result.setdefault(pos, {})[layer_idx] = tensor
+    return result
+
+
+def extract_activations_during_decode_multi_step(
+    model,
+    tokenizer,
+    device,
+    messages: list[dict],
+    layer_indices: list[int],
+    max_capture_steps: int,
+    *,
+    max_decode_steps: int = 64,
+    temperature: float = 0.0,
+    do_sample: bool = False,
+    raw_text: Optional[str] = None,
+    stop_tokens: Optional[list[str]] = None,
+) -> tuple[dict[int, dict[int, torch.Tensor]], dict[str, Any]]:
+    """Decode and capture hidden states at *each* of the first ``max_capture_steps`` generated tokens.
+
+    Like :func:`extract_activations_during_decode` but stores per-step
+    activations instead of keeping only the final capture.  If decoding
+    produces fewer than *max_capture_steps* tokens (e.g. early stop), only
+    the available steps are returned — no error.
+
+    Returns:
+        ``({step: {layer: tensor}}, meta)`` where *step* is 0-indexed.
+        ``meta["per_step_tokens"]`` is a list of ``(token_id, decoded_text)``
+        for each captured step.
+    """
+    if max_capture_steps < 1:
+        raise ValueError("max_capture_steps must be >= 1")
+
+    if raw_text is not None:
+        input_text = raw_text
+    else:
+        input_text = tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+    input_ids = tokenizer.encode(
+        input_text, return_tensors="pt", add_special_tokens=False
+    ).to(device)
+
+    steps = min(int(max_decode_steps), 256)  # safety cap
+    transformer_layers = _get_transformer_layers(model)
+
+    # {step: {layer: tensor}}
+    all_captured: dict[int, dict[int, torch.Tensor]] = {}
+    generated_ids: list[int] = []
+    per_step_tokens: list[tuple[int, str]] = []
+
+    _stop_set: frozenset[str] | None = None
+    if stop_tokens:
+        _stop_set = frozenset(t.strip() for t in stop_tokens)
+    _stopped_early = False
+
+    with torch.no_grad():
+        out = model(input_ids, use_cache=True)
+        past = out.past_key_values
+        logits = out.logits[0, -1, :]
+
+        for step in range(steps):
+            if do_sample:
+                if temperature and temperature > 0:
+                    probs = F.softmax(logits / temperature, dim=-1)
+                else:
+                    probs = F.softmax(logits, dim=-1)
+                next_id = torch.multinomial(probs, num_samples=1).squeeze(-1)
+            else:
+                next_id = logits.argmax(dim=-1)
+
+            tid = int(next_id.item())
+            generated_ids.append(tid)
+            next_token = next_id.view(1, 1).to(device=device, dtype=torch.long)
+
+            # Capture hooks for the first max_capture_steps steps
+            need_hooks = step < max_capture_steps
+            if need_hooks:
+                handles = []
+                step_captured: dict[int, torch.Tensor] = {}
+
+                def make_hook(layer_idx, _captured=step_captured):
+                    def hook_fn(module, input, output):
+                        hidden = output[0] if isinstance(output, tuple) else output
+                        _captured[layer_idx] = hidden[0, -1, :].detach().clone()
+                    return hook_fn
+
+                for idx in layer_indices:
+                    handles.append(
+                        transformer_layers[idx].register_forward_hook(make_hook(idx))
+                    )
+                try:
+                    out = model(next_token, past_key_values=past, use_cache=True)
+                finally:
+                    for h in handles:
+                        h.remove()
+
+                all_captured[step] = step_captured
+                decoded_text = tokenizer.decode([tid], skip_special_tokens=False).strip()
+                per_step_tokens.append((tid, decoded_text))
+            else:
+                out = model(next_token, past_key_values=past, use_cache=True)
+
+            past = out.past_key_values
+            logits = out.logits[0, -1, :]
+
+            # Check stop condition
+            if _stop_set is not None:
+                decoded = tokenizer.decode([generated_ids[-1]], skip_special_tokens=False).strip()
+                if decoded in _stop_set:
+                    _stopped_early = True
+                    break
+
+    decoded_pieces = [
+        tokenizer.decode([tid], skip_special_tokens=False) for tid in generated_ids
+    ]
+    meta: dict[str, Any] = {
+        "generated_token_ids": generated_ids,
+        "generated_decode_concat": "".join(decoded_pieces),
+        "generated_decode_pieces": decoded_pieces,
+        "generated_token_repr": [repr(p) for p in decoded_pieces],
+        "n_generated_tokens": len(generated_ids),
+        "n_captured_steps": len(all_captured),
+        "stopped_on_token": _stopped_early,
+        "per_step_tokens": per_step_tokens,
+    }
+    return all_captured, meta
+
+
+# ---------------------------------------------------------------------------
 # 2. Patch and decode (unified: logits or generate)
 # ---------------------------------------------------------------------------
 

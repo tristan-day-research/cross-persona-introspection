@@ -26,6 +26,8 @@ layer_pairs:
   - [20, 20]
   - [25, 25]
   - [30, 30]
+  - [12, 3]
+  - [18, 5]
   - [20, 5]
   - [25, 1]
   - [25, 3]
@@ -58,6 +60,16 @@ extraction:
   #   <int> — explicit 0-based index into encode(templated_source, add_special_tokens=False).
 
   token_position: "last_before_assistant"  # Alternative: token_position: "during_generation" (same as readout: during_generation).
+
+  # Multi-position extraction: extract activations from the last N tokens of the
+  # fully-templated source prompt (including chat template special tokens).
+  # null or 0 = single position from token_position above (current default behaviour).
+  source_prompt_tokens_to_extract_from: 40
+
+  # Multi-position extraction: extract activations from the first M generated tokens.
+  # If fewer than M tokens are generated, uses however many were produced (no error).
+  # null or 0 = current behaviour (single generated-token extraction via autoregressive).
+  max_generated_tokens_to_extract_from: 5
 
   # Substring search in the templated source string; only used when token_position is
   # last_before_assistant. Must match your model's chat template (Llama 3 Instruct default).
@@ -105,6 +117,7 @@ logit_lens:
   all_tokens: true                  # true = every token position in the prompt; false = extraction site only
   include_generated: true           # true = also run logit lens on each generated (autoregressive) token
   max_generated: 64                 # safety cap on decode steps when include_generated is true
+  max_questions: 2               # null = all questions; integer = only run LL on the first N questions
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -232,12 +245,21 @@ source_pass:
   #   {options_formatted}
 
   #   Choose the single best answer. Answer with exactly one letter: A, B, C, or D.
+  # user_message_template: |
+  #   {question_text}
+
+  #   Answer with only one label:
+
+  #   {options_formatted} 
   user_message_template: |
     {question_text}
 
-    Answer with only one label:
+    {options_formatted}
 
-    {options_formatted} 
+    Answer with exactly one letter: A, B, C, or D.
+
+  not_real_template: |
+    this is just to add a new line to the last prompt
 # Template definitions. Each has three prompt variants.
 # Variables: {placeholder}, {persona_prompt} (reporter system text from personas.yaml),
 #   {question_text}, {options}, {options_formatted}, {statement}

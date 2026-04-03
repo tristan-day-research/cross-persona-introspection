@@ -553,7 +553,11 @@ class LogitLensCollector:
     # ── Flush to disk ─────────────────────────────────────────────────
 
     def flush(self) -> None:
-        """Write all accumulated records to the JSON file (full overwrite)."""
+        """Write all accumulated records to the JSON file (atomic overwrite).
+
+        Writes to a temp file first, then renames — so readers never see
+        a half-written file even if the process is interrupted.
+        """
         if not self.records:
             return
         payload = {
@@ -568,8 +572,21 @@ class LogitLensCollector:
             },
             "records": [asdict(r) for r in self.records],
         }
-        with open(self.output_path, "w") as f:
-            json.dump(payload, f, indent=2, default=str)
+        import tempfile, os
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            dir=self.output_path.parent, suffix=".json.tmp",
+        )
+        try:
+            with os.fdopen(tmp_fd, "w") as f:
+                json.dump(payload, f, indent=2, default=str)
+            os.replace(tmp_path, self.output_path)
+        except BaseException:
+            # Clean up temp file on any failure
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
         if len(self.records) > self._flushed:
             logger.info(
                 f"  Logit lens checkpoint: {len(self.records)} records -> "

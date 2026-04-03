@@ -215,6 +215,13 @@ class PatchscopeExperiment(BaseExperiment):
         num_ph = int((ps.get("injection") or {}).get("num_placeholders", 1))
         tail = f"-ph{slug(ph, 8)}-Px{num_ph}" if ph else ""
 
+        # Multi-position token count
+        _ex = ps.get("extraction") or {}
+        _n_pf = int(_ex.get("source_prompt_tokens_to_extract_from") or 0)
+        _n_gen = int(_ex.get("max_generated_tokens_to_extract_from") or 0)
+        if _n_pf > 0 or _n_gen > 0:
+            tail += f"-tok{_n_pf + _n_gen}"
+
         out = f"{style_s}_{layer_s}{tail}"
         if len(out) > 120:
             out = out[:120].rstrip("-_")
@@ -358,6 +365,9 @@ class PatchscopeExperiment(BaseExperiment):
         baseline_cache: dict[tuple, dict] = {}
         cell_count = 0
         _ll_seen_questions: set[tuple[str, str]] = set()  # (persona, question_id)
+        _ll_max_questions = int(
+            (ps_config.get("logit_lens") or {}).get("max_questions") or 0
+        ) or None  # None = unlimited
 
         # Phase 2 core: iterate every cell in the matrix and run one
         # interpretation trial per cell.
@@ -373,6 +383,7 @@ class PatchscopeExperiment(BaseExperiment):
         #
         # _run_single_cell() does the actual injection + decode for that cell.
 
+        _prev_question_id = None
         for cell in self._iter_matrix_cells(
             source_persona_names=source_persona_names,
             source_layers=source_layers,
@@ -396,6 +407,13 @@ class PatchscopeExperiment(BaseExperiment):
         ):
             cell_count += 1
             record = cell["record"]
+
+            # Flush results when we move to a new question
+            _cur_qid = (record.source_persona, record.question_id)
+            if _prev_question_id is not None and _cur_qid != _prev_question_id:
+                self._run_elapsed = time.monotonic() - run_start
+                self._flush_results()
+            _prev_question_id = _cur_qid
 
             try:
                 self._run_single_cell(
@@ -441,17 +459,21 @@ class PatchscopeExperiment(BaseExperiment):
             if self._ll_collector is not None:
                 _ll_key = (record.source_persona, record.question_id)
                 if _ll_key not in _ll_seen_questions:
-                    _ll_seen_questions.add(_ll_key)
-                    _q_idx = next(
-                        (i for i, q in enumerate(self.questions)
-                         if q.get("question_id", f"q{i}") == record.question_id),
-                        None,
-                    )
-                    if _q_idx is not None:
-                        self._ll_collector.process_question(
-                            _q_idx, self.questions[_q_idx], record.source_persona,
+                    # Check max_questions limit (count unique question IDs, not persona×question)
+                    _ll_unique_qids = {qid for _, qid in _ll_seen_questions}
+                    _ll_unique_qids.add(record.question_id)
+                    if _ll_max_questions is None or len(_ll_unique_qids) <= _ll_max_questions:
+                        _ll_seen_questions.add(_ll_key)
+                        _q_idx = next(
+                            (i for i, q in enumerate(self.questions)
+                             if q.get("question_id", f"q{i}") == record.question_id),
+                            None,
                         )
-                        self._ll_collector.flush()
+                        if _q_idx is not None:
+                            self._ll_collector.process_question(
+                                _q_idx, self.questions[_q_idx], record.source_persona,
+                            )
+                            self._ll_collector.flush()
 
             if cell_count % 50 == 0:
                 logger.info(f"  Progress: {cell_count}/{total_cells} cells")
@@ -652,6 +674,10 @@ class PatchscopeExperiment(BaseExperiment):
                         _ar_max = int(_ar.get("max_decode_steps", 64))
                         _ar_temp = float(_ar.get("temperature", 0.0))
                         _ar_sample = bool(_ar.get("do_sample", False))
+                        _n_source_prompt_tokens = int(extraction_cfg.get("source_prompt_tokens_to_extract_from") or 0)
+                        _n_gen_tokens = int(extraction_cfg.get("max_generated_tokens_to_extract_from") or 0)
+                        _use_multi_pos = _n_source_prompt_tokens > 0 or _n_gen_tokens > 0
+
                         _use_both = patchscope_helpers.extraction_uses_both_modes(extraction_cfg)
                         _wants_gen_capture = _use_both or patchscope_helpers.extraction_uses_generation_time_capture(
                             extraction_cfg
@@ -711,86 +737,155 @@ class PatchscopeExperiment(BaseExperiment):
                         _prefill_caps = None
                         _ar_caps = None
 
-                        if use_prefill_extract:
-                            _prefill_caps = (
-                                patchscope_patching.extract_activations_multi_layer(
+                        # Compute templated source text for position resolution
+                        _ptext = source_raw_text if source_raw_text is not None else (
+                            tokenizer.apply_chat_template(
+                                messages, tokenize=False, add_generation_prompt=True
+                            )
+                        )
+                        _source_token_ids = tokenizer.encode(
+                            _ptext, add_special_tokens=False,
+                        )
+                        _seq_len = len(_source_token_ids)
+
+                        if _use_multi_pos:
+                            # ── Multi-position extraction ──
+                            _q_acts: dict = {}
+
+                            if _n_source_prompt_tokens > 0:
+                                _n_clamped = min(_n_source_prompt_tokens, _seq_len)
+                                _positions = list(range(_seq_len - _n_clamped, _seq_len))
+                                _multi_prefill = patchscope_patching.extract_activations_multi_pos(
                                     model, tokenizer, device, messages,
                                     layer_indices=source_layers,
-                                    token_position=_ex_tok,
-                                    boundary_marker=_ex_boundary,
+                                    token_positions=_positions,
                                     raw_text=source_raw_text,
                                 )
-                            )
+                                _q_acts["multi_prefill"] = _multi_prefill
 
-                        if use_ar_extract:
-                            _ar_caps, _ar_meta = (
-                                patchscope_patching.extract_activations_during_decode(
-                                    model,
-                                    tokenizer,
-                                    device,
-                                    messages,
+                            if _n_gen_tokens > 0:
+                                _multi_gen, _ar_meta = patchscope_patching.extract_activations_during_decode_multi_step(
+                                    model, tokenizer, device, messages,
                                     layer_indices=source_layers,
-                                    decode_steps=_ar_steps,
+                                    max_capture_steps=_n_gen_tokens,
                                     max_decode_steps=_ar_max,
                                     temperature=_ar_temp,
                                     do_sample=_ar_sample,
                                     raw_text=source_raw_text,
                                     stop_tokens=_ar_stop_tokens,
                                 )
-                            )
+                                _q_acts["multi_gen"] = _multi_gen
 
-                        # Store activations
-                        if _use_both:
-                            activations[sp_name][question_idx] = {
-                                "prefill": _prefill_caps or {},
-                                "during_gen": _ar_caps or {},
-                            }
-                        elif use_ar_extract:
-                            activations[sp_name][question_idx] = _ar_caps
+                            activations[sp_name][question_idx] = _q_acts
+
+                            # ── Multi-position extraction metadata ──
+                            _emeta: dict = {}
+                            if "multi_prefill" in _q_acts:
+                                _prefill_metas = []
+                                for offset, pos in enumerate(sorted(_q_acts["multi_prefill"].keys())):
+                                    _tid = int(_source_token_ids[pos]) if pos < len(_source_token_ids) else None
+                                    _ttext = tokenizer.decode([_tid], skip_special_tokens=False).strip() if _tid is not None else None
+                                    _prefill_metas.append({
+                                        "source_extraction_mode": "prefill_multi_pos",
+                                        "source_extraction_token_index": pos,
+                                        "source_extraction_token_id": _tid,
+                                        "source_extraction_token_text": _ttext,
+                                        "source_extraction_token_offset": offset,
+                                    })
+                                _emeta["multi_prefill"] = _prefill_metas
+
+                            if "multi_gen" in _q_acts:
+                                _gen_metas = []
+                                _per_step = (_ar_meta or {}).get("per_step_tokens", [])
+                                for step in sorted(_q_acts["multi_gen"].keys()):
+                                    _tid, _ttext = _per_step[step] if step < len(_per_step) else (None, None)
+                                    _gen_metas.append({
+                                        "source_extraction_mode": "during_generation_multi_step",
+                                        "source_extraction_token_index": None,
+                                        "source_extraction_token_id": _tid,
+                                        "source_extraction_token_text": _ttext,
+                                        "source_extraction_token_offset": step,
+                                    })
+                                _emeta["multi_gen"] = _gen_metas
+
+                            extraction_meta[(sp_name, question_idx)] = _emeta
+
                         else:
-                            activations[sp_name][question_idx] = _prefill_caps
+                            # ── Single-position extraction (existing behaviour) ──
+                            if use_prefill_extract:
+                                _prefill_caps = (
+                                    patchscope_patching.extract_activations_multi_layer(
+                                        model, tokenizer, device, messages,
+                                        layer_indices=source_layers,
+                                        token_position=_ex_tok,
+                                        boundary_marker=_ex_boundary,
+                                        raw_text=source_raw_text,
+                                    )
+                                )
 
-                        # ── Build per-question extraction metadata ──
-                        _ptext = source_raw_text if source_raw_text is not None else (
-                            tokenizer.apply_chat_template(
-                                messages, tokenize=False, add_generation_prompt=True
-                            )
-                        )
+                            if use_ar_extract:
+                                _ar_caps, _ar_meta = (
+                                    patchscope_patching.extract_activations_during_decode(
+                                        model,
+                                        tokenizer,
+                                        device,
+                                        messages,
+                                        layer_indices=source_layers,
+                                        decode_steps=_ar_steps,
+                                        max_decode_steps=_ar_max,
+                                        temperature=_ar_temp,
+                                        do_sample=_ar_sample,
+                                        raw_text=source_raw_text,
+                                        stop_tokens=_ar_stop_tokens,
+                                    )
+                                )
 
-                        def _prefill_meta() -> dict:
-                            site = patchscope_helpers.describe_source_extraction_site(
-                                tokenizer, _ptext, _ex_tok,
-                                boundary_marker=_ex_boundary,
-                            )
-                            _tok_spec = str(_ex_tok).strip().lower().replace("-", "_")
-                            return {
-                                "source_extraction_mode": f"prefill_{_tok_spec}",
-                                "source_extraction_token_index": site.get("token_index"),
-                                "source_extraction_token_id": site.get("token_id"),
-                                "source_extraction_token_text": site.get("token_decoded_repr") or site.get("token_decoded_strip"),
-                            }
+                            # Store activations
+                            if _use_both:
+                                activations[sp_name][question_idx] = {
+                                    "prefill": _prefill_caps or {},
+                                    "during_gen": _ar_caps or {},
+                                }
+                            elif use_ar_extract:
+                                activations[sp_name][question_idx] = _ar_caps
+                            else:
+                                activations[sp_name][question_idx] = _prefill_caps
 
-                        def _gen_meta() -> dict:
-                            m = _ar_meta or {}
-                            return {
-                                "source_extraction_mode": "during_generation",
-                                "source_extraction_token_index": None,  # position is dynamic (generated)
-                                "source_extraction_token_id": m.get("activation_token_id"),
-                                "source_extraction_token_text": (
-                                    m.get("activation_token_decoded_strip")
-                                    or (repr(tokenizer.decode([m["activation_token_id"]])) if m.get("activation_token_id") is not None else None)
-                                ),
-                            }
+                            # ── Build per-question extraction metadata ──
+                            def _prefill_meta() -> dict:
+                                site = patchscope_helpers.describe_source_extraction_site(
+                                    tokenizer, _ptext, _ex_tok,
+                                    boundary_marker=_ex_boundary,
+                                )
+                                _tok_spec = str(_ex_tok).strip().lower().replace("-", "_")
+                                return {
+                                    "source_extraction_mode": f"prefill_{_tok_spec}",
+                                    "source_extraction_token_index": site.get("token_index"),
+                                    "source_extraction_token_id": site.get("token_id"),
+                                    "source_extraction_token_text": site.get("token_decoded_repr") or site.get("token_decoded_strip"),
+                                }
 
-                        if _use_both:
-                            extraction_meta[(sp_name, question_idx)] = {
-                                "prefill": _prefill_meta(),
-                                "during_gen": _gen_meta(),
-                            }
-                        elif use_ar_extract:
-                            extraction_meta[(sp_name, question_idx)] = _gen_meta()
-                        else:
-                            extraction_meta[(sp_name, question_idx)] = _prefill_meta()
+                            def _gen_meta() -> dict:
+                                m = _ar_meta or {}
+                                return {
+                                    "source_extraction_mode": "during_generation",
+                                    "source_extraction_token_index": None,
+                                    "source_extraction_token_id": m.get("activation_token_id"),
+                                    "source_extraction_token_text": (
+                                        m.get("activation_token_decoded_strip")
+                                        or (repr(tokenizer.decode([m["activation_token_id"]])) if m.get("activation_token_id") is not None else None)
+                                    ),
+                                }
+
+                            if _use_both:
+                                extraction_meta[(sp_name, question_idx)] = {
+                                    "prefill": _prefill_meta(),
+                                    "during_gen": _gen_meta(),
+                                }
+                            elif use_ar_extract:
+                                extraction_meta[(sp_name, question_idx)] = _gen_meta()
+                            else:
+                                extraction_meta[(sp_name, question_idx)] = _prefill_meta()
 
                         # Direct answer via logits
                         if source_raw_text is not None:
@@ -962,14 +1057,37 @@ class PatchscopeExperiment(BaseExperiment):
                     logger.warning(f"Skipping {sp_name} q={question_id}: no activations")
                     continue
 
-                # Detect "both" mode: activations have "prefill"/"during_gen" sub-dicts
-                _is_both = "prefill" in q_acts and "during_gen" in q_acts
-                if _is_both:
-                    extraction_modes = [("prefill", q_acts["prefill"]), ("during_gen", q_acts["during_gen"])]
-                else:
-                    extraction_modes = [(None, q_acts)]  # single mode, acts is {layer: tensor}
+                # ── Build list of (mode_label, {layer: tensor}, emeta) triples ──
+                # Multi-position: each extracted position is a separate triple.
+                # Single-position / "both": fall through to existing logic.
+                _is_multi = "multi_prefill" in q_acts or "multi_gen" in q_acts
+                _emeta_raw = extraction_meta.get((sp_name, question_idx), {})
 
-                for ext_mode_key, mode_acts in extraction_modes:
+                extraction_items: list[tuple[str | None, dict, dict]] = []
+
+                if _is_multi:
+                    if "multi_prefill" in q_acts:
+                        _mp_metas = _emeta_raw.get("multi_prefill", [])
+                        for i, pos in enumerate(sorted(q_acts["multi_prefill"].keys())):
+                            _em = _mp_metas[i] if i < len(_mp_metas) else {}
+                            extraction_items.append(("prefill", q_acts["multi_prefill"][pos], _em))
+                    if "multi_gen" in q_acts:
+                        _mg_metas = _emeta_raw.get("multi_gen", [])
+                        for i, step in enumerate(sorted(q_acts["multi_gen"].keys())):
+                            _em = _mg_metas[i] if i < len(_mg_metas) else {}
+                            extraction_items.append(("during_gen", q_acts["multi_gen"][step], _em))
+                else:
+                    # Detect "both" mode: activations have "prefill"/"during_gen" sub-dicts
+                    _is_both = "prefill" in q_acts and "during_gen" in q_acts
+                    if _is_both:
+                        _pf_meta = _emeta_raw.get("prefill", _emeta_raw)
+                        _dg_meta = _emeta_raw.get("during_gen", _emeta_raw)
+                        extraction_items.append(("prefill", q_acts["prefill"], _pf_meta))
+                        extraction_items.append(("during_gen", q_acts["during_gen"], _dg_meta))
+                    else:
+                        extraction_items.append((None, q_acts, _emeta_raw))
+
+                for ext_mode_key, mode_acts, _emeta in extraction_items:
                     for src_layer in source_layers:
                         real_act = mode_acts.get(src_layer)
                         if real_act is None:
@@ -981,8 +1099,18 @@ class PatchscopeExperiment(BaseExperiment):
                         if "shuffled" in conditions and len(self.questions) > 1:
                             other_question_idx = (question_idx + 1) % len(self.questions)
                             other_acts = activations.get(sp_name, {}).get(other_question_idx, {})
-                            if _is_both and ext_mode_key in other_acts:
-                                shuffled_act = other_acts[ext_mode_key].get(src_layer)
+                            if _is_multi:
+                                # For multi-position, just grab any matching layer from the other question
+                                # (the offset won't match exactly, which is intentional for shuffled control)
+                                _other_key = "multi_prefill" if ext_mode_key == "prefill" else "multi_gen"
+                                _other_sub = other_acts.get(_other_key, {})
+                                if _other_sub:
+                                    _first_pos = next(iter(sorted(_other_sub.keys())), None)
+                                    if _first_pos is not None:
+                                        shuffled_act = _other_sub[_first_pos].get(src_layer)
+                            elif "prefill" in other_acts or "during_gen" in other_acts:
+                                if ext_mode_key in other_acts:
+                                    shuffled_act = other_acts[ext_mode_key].get(src_layer)
                             else:
                                 shuffled_act = other_acts.get(src_layer)
 
@@ -1047,13 +1175,6 @@ class PatchscopeExperiment(BaseExperiment):
                                         else:
                                             activation = real_act
 
-                                        # Resolve extraction metadata for this cell
-                                        _emeta_raw = extraction_meta.get((sp_name, question_idx), {})
-                                        if ext_mode_key is not None and ext_mode_key in _emeta_raw:
-                                            _emeta = _emeta_raw[ext_mode_key]
-                                        else:
-                                            _emeta = _emeta_raw
-
                                         source_direct = direct_answers[sp_name][question_idx]
                                         record = PatchscopeRecord(
                                             experiment="patchscope",
@@ -1076,6 +1197,7 @@ class PatchscopeExperiment(BaseExperiment):
                                             source_extraction_token_index=_emeta.get("source_extraction_token_index"),
                                             source_extraction_token_id=_emeta.get("source_extraction_token_id"),
                                             source_extraction_token_text=_emeta.get("source_extraction_token_text"),
+                                            source_extraction_token_offset=_emeta.get("source_extraction_token_offset"),
                                             question_text=question.get("question_text", ""),
                                             question_options=question.get("options"),
                                             category_id=question.get("category_id"),
