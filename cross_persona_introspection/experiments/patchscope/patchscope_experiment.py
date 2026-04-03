@@ -144,7 +144,11 @@ class PatchscopeExperiment(BaseExperiment):
                     "question_id": p["id"],
                     "question_text": p["text"],
                     "options": {},
-                    "_manual_target_word": p["target_word"],
+                    # target_words (list) preferred; fall back to [target_word]
+                    "_manual_target_words": (
+                        p["target_words"] if "target_words" in p
+                        else [p["target_word"]]
+                    ),
                     "_manual_target_strategy": p.get("target_strategy", "last"),
                 }
                 for p in raw_manual
@@ -462,10 +466,11 @@ class PatchscopeExperiment(BaseExperiment):
             if self._ll_collector is not None:
                 _ll_key = (record.source_persona, record.question_id)
                 if _ll_key not in _ll_seen_questions:
-                    # Check max_questions limit (count unique question IDs, not persona×question)
-                    _ll_unique_qids = {qid for _, qid in _ll_seen_questions}
-                    _ll_unique_qids.add(record.question_id)
-                    if _ll_max_questions is None or len(_ll_unique_qids) <= _ll_max_questions:
+                    # Check max_questions limit per persona
+                    _ll_persona_count = sum(
+                        1 for p, _ in _ll_seen_questions if p == record.source_persona
+                    )
+                    if _ll_max_questions is None or _ll_persona_count < _ll_max_questions:
                         _ll_seen_questions.add(_ll_key)
                         _q_idx = next(
                             (i for i, q in enumerate(self.questions)
@@ -567,8 +572,8 @@ class PatchscopeExperiment(BaseExperiment):
                     _is_manual = self._source_mode == "manual"
 
                     if _is_manual:
-                        # ── Manual prompt mode: free-form text, extract at target_word ──
-                        _target_word = question["_manual_target_word"]
+                        # ── Manual prompt mode: multi-word + optional generation capture ──
+                        _target_words = question["_manual_target_words"]
                         _target_strategy = question.get("_manual_target_strategy", "last")
                         prompt_text = question["question_text"]
 
@@ -576,66 +581,120 @@ class PatchscopeExperiment(BaseExperiment):
                         sys_text = (source_persona.system_prompt or "").strip()
                         source_raw_text = (sys_text + "\n\n" + prompt_text) if sys_text else prompt_text
 
-                        # Resolve target word to token index in the full source text
-                        _tok_pos = patchscope_helpers.find_token_position(
-                            tokenizer, source_raw_text, _target_word, strategy=_target_strategy,
-                        )
-
-                        # Always use prefill extraction for manual prompts
-                        activations[sp_name][question_idx] = (
-                            patchscope_patching.extract_activations_multi_layer(
-                                model, tokenizer, device,
-                                messages=[],  # unused when raw_text is provided
-                                layer_indices=source_layers,
-                                token_position=_tok_pos,
-                                raw_text=source_raw_text,
+                        # Resolve each target word to a token position
+                        _positions = []
+                        _word_for_pos: dict[int, str] = {}
+                        for _tw in _target_words:
+                            _pos = patchscope_helpers.find_token_position(
+                                tokenizer, source_raw_text, _tw, strategy=_target_strategy,
                             )
+                            _positions.append(_pos)
+                            _word_for_pos[_pos] = _tw
+
+                        # Read generation config
+                        _n_gen_tokens = int(extraction_cfg.get("max_generated_tokens_to_extract_from") or 0)
+                        _ar = extraction_cfg.get("autoregressive") or {}
+                        _ar_max = int(_ar.get("max_decode_steps", 64))
+                        _ar_temp = float(_ar.get("temperature", 0.0))
+                        _ar_sample = bool(_ar.get("do_sample", False))
+                        _raw_steps = _ar.get("decode_steps", 1)
+                        _ar_stop_tokens: list[str] | None = None
+                        if isinstance(_raw_steps, str) and _raw_steps.strip().lower() == "until_answer":
+                            _ar_stop_tokens = _ar.get("answer_tokens", ["A", "B", "C", "D"])
+
+                        # ── Multi-position prefill extraction ──
+                        _q_acts: dict = {}
+                        _multi_prefill = patchscope_patching.extract_activations_multi_pos(
+                            model, tokenizer, device,
+                            messages=[],
+                            layer_indices=source_layers,
+                            token_positions=_positions,
+                            raw_text=source_raw_text,
                         )
+                        _q_acts["multi_prefill"] = _multi_prefill
+
+                        # ── Generation capture (if configured) ──
+                        _ar_meta = None
+                        if _n_gen_tokens > 0:
+                            _multi_gen, _ar_meta = patchscope_patching.extract_activations_during_decode_multi_step(
+                                model, tokenizer, device,
+                                messages=[],
+                                layer_indices=source_layers,
+                                max_capture_steps=_n_gen_tokens,
+                                max_decode_steps=_ar_max,
+                                temperature=_ar_temp,
+                                do_sample=_ar_sample,
+                                raw_text=source_raw_text,
+                                stop_tokens=_ar_stop_tokens,
+                            )
+                            _q_acts["multi_gen"] = _multi_gen
+
+                        activations[sp_name][question_idx] = _q_acts
 
                         # No MCQ direct answer for manual prompts
                         direct_answers[sp_name][question_idx] = {
                             "answer": None, "probs": {}, "logits": {},
                             "logprobs": None, "reporter_total_choice_prob": None,
-                            "raw": f"[manual] target_word={_target_word!r}",
+                            "raw": f"[manual] target_words={_target_words!r}",
                             "shuffled_answer": None,
                             "option_order": [],
                         }
-                        # Identity remap (no shuffling)
                         remap = {}
                         shuffle_maps[(question_id, sp_name)] = (question, remap)
 
-                        # Extraction metadata for manual mode
-                        token_ids = tokenizer.encode(source_raw_text, add_special_tokens=False)
-                        _tok_id = int(token_ids[_tok_pos]) if 0 <= _tok_pos < len(token_ids) else None
-                        _tok_text = tokenizer.decode([_tok_id]).strip() if _tok_id is not None else None
-                        extraction_meta[(sp_name, question_idx)] = {
-                            "source_extraction_mode": f"prefill_manual_{_target_word}",
-                            "source_extraction_token_index": _tok_pos,
-                            "source_extraction_token_id": _tok_id,
-                            "source_extraction_token_text": _tok_text,
-                        }
+                        # ── Extraction metadata (multi-position format) ──
+                        _source_token_ids = tokenizer.encode(source_raw_text, add_special_tokens=False)
+                        _emeta: dict = {}
+
+                        # Prefill metadata: one entry per target word
+                        _prefill_metas = []
+                        for offset, pos in enumerate(sorted(_multi_prefill.keys())):
+                            _tid = int(_source_token_ids[pos]) if pos < len(_source_token_ids) else None
+                            _ttext = tokenizer.decode([_tid], skip_special_tokens=False).strip() if _tid is not None else None
+                            _tw_label = _word_for_pos.get(pos, "?")
+                            _prefill_metas.append({
+                                "source_extraction_mode": f"prefill_manual_{_tw_label}",
+                                "source_extraction_token_index": pos,
+                                "source_extraction_token_id": _tid,
+                                "source_extraction_token_text": _ttext,
+                                "source_extraction_token_offset": offset,
+                            })
+                        _emeta["multi_prefill"] = _prefill_metas
+
+                        # Generation metadata
+                        if "multi_gen" in _q_acts:
+                            _gen_metas = []
+                            _per_step = (_ar_meta or {}).get("per_step_tokens", [])
+                            for step in sorted(_q_acts["multi_gen"].keys()):
+                                _tid, _ttext = _per_step[step] if step < len(_per_step) else (None, None)
+                                _gen_metas.append({
+                                    "source_extraction_mode": "during_generation_multi_step",
+                                    "source_extraction_token_index": None,
+                                    "source_extraction_token_id": _tid,
+                                    "source_extraction_token_text": _ttext,
+                                    "source_extraction_token_offset": step,
+                                })
+                            _emeta["multi_gen"] = _gen_metas
+
+                        extraction_meta[(sp_name, question_idx)] = _emeta
 
                         # Sample prompt for log
                         if sp_name not in self._sample_source_prompts:
-                            token_ids = tokenizer.encode(source_raw_text, add_special_tokens=False)
-                            tokens = [tokenizer.decode([tid]) for tid in token_ids]
-                            _site = {
-                                "readout": "prefill",
-                                "capture_mode": "manual_target_word",
-                                "target_word": _target_word,
-                                "target_strategy": _target_strategy,
-                                "token_position_spec": f"find_token_position({_target_word!r}, strategy={_target_strategy!r})",
-                                "token_index": _tok_pos,
-                                "n_tokens": len(tokens),
-                                "token_id": int(token_ids[_tok_pos]) if 0 <= _tok_pos < len(token_ids) else None,
-                                "token_decoded_repr": repr(tokens[_tok_pos]) if 0 <= _tok_pos < len(tokens) else None,
-                                "token_decoded_strip": tokens[_tok_pos].strip() if 0 <= _tok_pos < len(tokens) else None,
-                            }
+                            _all_tokens = [tokenizer.decode([tid]) for tid in _source_token_ids]
+                            _sites = [
+                                {
+                                    "target_word": _word_for_pos.get(pos, "?"),
+                                    "token_index": pos,
+                                    "token_decoded": _all_tokens[pos].strip() if pos < len(_all_tokens) else None,
+                                }
+                                for pos in _positions
+                            ]
                             self._sample_source_prompts[sp_name] = {
                                 "persona": sp_name,
                                 "question_id": question_id,
                                 "prompt_text": source_raw_text,
-                                "extraction_site": _site,
+                                "extraction_sites": _sites,
+                                "n_gen_tokens": _n_gen_tokens,
                                 "answer": None,
                                 "shuffled_answer": None,
                                 "option_order": [],

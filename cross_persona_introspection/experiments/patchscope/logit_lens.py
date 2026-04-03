@@ -436,7 +436,7 @@ class LogitLensCollector:
         if "source" in self.phases:
             source_persona = self.all_personas[source_persona_name]
             if is_manual:
-                target_word = question["_manual_target_word"]
+                target_word = question["_manual_target_words"][0]
                 target_strategy = question.get("_manual_target_strategy", "last")
                 prompt_text = question["question_text"]
                 sys_text = (source_persona.system_prompt or "").strip()

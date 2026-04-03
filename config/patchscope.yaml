@@ -8,7 +8,7 @@
 # RUN MATRIX
 # =============================================================================
 
-source_mode: "questions"   # "questions" (MCQ task file) | "manual" (manual_prompts below)
+source_mode: "manual"   # "questions" (MCQ task file) | "manual" (manual_prompts below)
 
 source_personas:
   - persona_conservative
@@ -37,9 +37,7 @@ interpretation_base_prompt: ""   # prepended to selfie-style bodies when non-emp
 layer_pairs:
   - [1, 1]
   - [3, 3]
-  - [4, 4]
   - [5, 5]
-  - [6, 6]
   - [8, 8]
   - [10, 10]
   - [12, 12]
@@ -49,10 +47,9 @@ layer_pairs:
   - [12, 3]
   - [14, 5]
   - [18, 5]
-  - [18, 1]
   - [20, 3]
   - [25, 5]
-  - [30, 1]
+
 
 extraction:
   readout: "both"
@@ -100,7 +97,7 @@ relevancy:
 # =============================================================================
 
 logit_lens:
-  enabled: false
+  enabled: true
   layers: "all"
   top_n: 20
   bottom_n: 20
@@ -196,7 +193,7 @@ interpretation_templates:
     Paraphrase the main issue or question the model was handling when the representation {placeholder}
     was active. Do not define the placeholder string literally.
   what_position: |
-    What stance or position does the following represent? "{placeholder}"
+    What stance or position does the following represent? "{placeholder
   experiment: |
     I am a scientist studying LLMs such as yourself. Did you or another model or persona produce the following representation? "{placeholder}"
 
@@ -206,30 +203,36 @@ interpretation_templates:
 # =============================================================================
 
 manual_prompts:
-  - id: "guns_controversial"
-    text: "The topic of guns is a very controversial issue"
-    target_word: "guns"
-  - id: "immigration_heated"
-    text: "Immigration policy has become an increasingly heated debate in America"
-    target_word: "Immigration"
-  - id: "abortion_divisive"
-    text: "Abortion remains one of the most divisive topics in modern politics"
-    target_word: "Abortion"
-  - id: "climate_change"
-    text: "Climate change is a topic that deeply divides people along political lines"
-    target_word: "Climate"
-  - id: "taxes_fairness"
-    text: "The question of taxes and fairness has no easy answer"
-    target_word: "taxes"
-  - id: "police_trust"
-    text: "Trust in the police varies dramatically across different communities"
-    target_word: "police"
-  - id: "healthcare_right"
-    text: "Whether healthcare is a right or a privilege is fiercely debated"
-    target_word: "healthcare"
-  - id: "religion_politics"
-    text: "The role of religion in politics is a deeply personal and controversial subject"
-    target_word: "religion"
+  - id: "guns_one_word"
+    text: "This question is about guns. In one word what is your opinion on them?"
+    target_words: ["guns", "opinion"]
+  - id: "guns_one_sentence"
+    text: "This question is about guns. In one short sentence what is your opinion on them?"
+    target_words: ["guns", "opinion"]
+  # - id: "guns_controversial"
+  #   text: "This question is about guns. In one word what is your opinion on them?"
+  #   target_words: ["guns"]
+  # - id: "immigration_heated"
+  #   text: "Immigration policy has become an increasingly heated debate in America"
+  #   target_words: ["Immigration", "heated", "debate"]
+  # - id: "abortion_divisive"
+  #   text: "Abortion remains one of the most divisive topics in modern politics"
+  #   target_words: ["Abortion", "divisive"]
+  # - id: "climate_change"
+  #   text: "Climate change is a topic that deeply divides people along political lines"
+  #   target_words: ["Climate", "divides", "political"]
+  # - id: "taxes_fairness"
+  #   text: "The question of taxes and fairness has no easy answer"
+  #   target_words: ["taxes", "fairness"]
+  # - id: "police_trust"
+  #   text: "Trust in the police varies dramatically across different communities"
+  #   target_words: ["police", "Trust"]
+  # - id: "healthcare_right"
+  #   text: "Whether healthcare is a right or a privilege is fiercely debated"
+  #   target_words: ["healthcare", "right", "privilege"]
+  # - id: "religion_politics"
+  #   text: "The role of religion in politics is a deeply personal and controversial subject"
+  #   target_words: ["religion", "politics"]
 
 # =============================================================================
 # OPTIONAL — LEGACY MULTI-FAMILY (nested under interpretation_templates)
