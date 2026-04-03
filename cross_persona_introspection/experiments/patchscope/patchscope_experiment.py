@@ -472,6 +472,12 @@ class PatchscopeExperiment(BaseExperiment):
         self._flush_results()
         logger.info(f"Completed {len(self.records)} records in {self._run_elapsed:.1f}s")
 
+        # ── Logit lens (optional, runs after main sweep) ─────────────
+        from . import logit_lens as _logit_lens_mod
+        ll_path = _logit_lens_mod.run_logit_lens_sweep(self)
+        if ll_path:
+            logger.info(f"Logit lens saved to {ll_path}")
+
     # ── Phase 1: source extraction ────────────────────────────────────────
 
     def _extract_sources(
