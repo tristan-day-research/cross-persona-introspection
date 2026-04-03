@@ -752,7 +752,8 @@ class PatchscopeExperiment(BaseExperiment):
                         else:
                             _source_token_ids = tokenizer.apply_chat_template(
                                 messages, tokenize=True, add_generation_prompt=True,
-                            )
+                                return_tensors="pt",
+                            )[0].tolist()
                         _seq_len = len(_source_token_ids)
 
                         if _use_multi_pos:
