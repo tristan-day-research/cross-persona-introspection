@@ -159,8 +159,8 @@ interpretation_templates:
     Explain this: "{placeholder}"".
   what_is_the_definition_of: |
     What is the definition of {placeholder}?
-  tell_me_what_this_means: |
-    Tell me what this means: "{placeholder}".
+  what_does_this_mean: |
+    What does "{placeholder}" mean?
   # what_does_placeholder_mean: |
   #   What does {placeholder} mean?
   # only_placeholder: |
@@ -233,7 +233,7 @@ manual_prompts:
   # - id: "religion_politics"
   #   text: "The role of religion in politics is a deeply personal and controversial subject"
   #   target_words: ["religion", "politics"]
-  
+
 
 # =============================================================================
 # OPTIONAL — LEGACY MULTI-FAMILY (nested under interpretation_templates)

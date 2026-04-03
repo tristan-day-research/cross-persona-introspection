@@ -597,10 +597,8 @@ class PatchscopeExperiment(BaseExperiment):
                         _ar_max = int(_ar.get("max_decode_steps", 64))
                         _ar_temp = float(_ar.get("temperature", 0.0))
                         _ar_sample = bool(_ar.get("do_sample", False))
-                        _raw_steps = _ar.get("decode_steps", 1)
+                        # Manual mode: no answer stop tokens (model generates free text, not A/B/C/D)
                         _ar_stop_tokens: list[str] | None = None
-                        if isinstance(_raw_steps, str) and _raw_steps.strip().lower() == "until_answer":
-                            _ar_stop_tokens = _ar.get("answer_tokens", ["A", "B", "C", "D"])
 
                         # ── Multi-position prefill extraction ──
                         _q_acts: dict = {}
