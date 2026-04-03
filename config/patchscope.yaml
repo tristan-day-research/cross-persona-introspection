@@ -182,7 +182,7 @@ enabled_templates: ["open_summary"]
 #                   Still wrapped with the model chat template + reporter system prompt.
 #   "patchscopes" — minimal structured user prompt + chat template + reporter system.
 #   "selfie"      — instructional user prompt + chat template + reporter system.
-prompt_style: "selfie"
+prompt_style: "repeat_word"
 
 # Whether to wrap interpretation prompts in the model's chat template.
 #   true  — apply_chat_template is used; reporter system prompt goes in the system role.
@@ -206,7 +206,7 @@ source_pass:
 
     {options_formatted}
 
-    Answer with only one letter and no other text. Do you choose A, B, C, or D?
+    Answer with exactly one label: A, B, C, or D.
 # Template definitions. Each has three prompt variants.
 # Variables: {placeholder}, {persona_prompt} (reporter system text from personas.yaml),
 #   {question_text}, {options}, {options_formatted}, {statement}
