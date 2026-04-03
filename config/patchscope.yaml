@@ -42,25 +42,19 @@ layer_pairs:
   - [6, 6]
   - [8, 8]
   - [10, 10]
-  - [11, 11]
   - [12, 12]
   - [15, 15]
   - [20, 20]
-  - [25, 25]
   - [10, 3]
   - [12, 3]
-  - [14, 3]
   - [14, 5]
-  - [14, 1]
   - [18, 5]
   - [18, 1]
   - [18, 3]
-  - [20, 1]
   - [20, 3]
   - [25, 5]
   - [30, 1]
-  - [30, 3]
-  
+
 extraction:
   readout: "both"
   # prefill | during_generation / autoregressive aliases | both
@@ -75,7 +69,7 @@ extraction:
   token_position: "last_before_assistant"
   # prefill only: last | last_before_assistant | int index | during_generation
 
-  source_prompt_tokens_to_extract_from: 25
+  source_prompt_tokens_to_extract_from: 10
   max_generated_tokens_to_extract_from: 5
   # 0/null = single site from token_position / single gen step
 
@@ -145,7 +139,8 @@ source_pass:
     {options_formatted}
 
     Answer with exactly one letter: A, B, C, or D.
-
+    Your answer is: 
+  
 # =============================================================================
 # PHASE 2 — INTERPRETATION TEMPLATES
 # =============================================================================
