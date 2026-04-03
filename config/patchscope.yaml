@@ -69,7 +69,7 @@ extraction:
   token_position: "last_before_assistant"
   # prefill only: last | last_before_assistant | int index | during_generation
 
-  source_prompt_tokens_to_extract_from: 10
+  source_prompt_tokens_to_extract_from: 7
   max_generated_tokens_to_extract_from: 5
   # 0/null = single site from token_position / single gen step
 
@@ -196,16 +196,12 @@ interpretation_templates:
 
     # --- context-heavy probes (typical prompt_style list) ---
     implicit_belief_probe: |
-      The marker below stands for an internal state while answering a multiple-choice question.
+      The word or representation "{placeholder}" stands for an internal state while answering a multiple-choice question.
       In one or two sentences: what belief, attitude, or position does it most strongly reflect?
       Do not give a dictionary definition of any single word.
-
-      {placeholder}
     stance_freeform: |
-      Treat the marker below as evidence of how someone is leaning on a political issue.
+      Treat the token "{placeholder}" as evidence of how someone is leaning on a political issue (it may or may not be your own).
       Describe that leaning briefly (you may name parties, policies, or values). Not a definition.
-
-      The marker: {placeholder}
     answer_hypothesis: |
       The hidden marker is tied to how a model resolved this question:
 
@@ -217,15 +213,10 @@ interpretation_templates:
       Hidden marker: {placeholder}
     one_word_association: |
       Output exactly one content word (no punctuation, no explanation) that best captures what
-      the internal marker is "about" in context — not the dictionary sense of any one token.
-
-      {placeholder}
+      "{placeholder}" is "about" in context — not the dictionary sense of any one token.
     contextual_paraphrase: |
-      Paraphrase the main issue or question the model was handling when this representation
+      Paraphrase the main issue or question the model was handling when the representation {placeholder}
       was active. Do not define the placeholder string literally.
-
-      {placeholder}
-
     what_position: |
       What stance or position does the following represent? {placeholder}
 
