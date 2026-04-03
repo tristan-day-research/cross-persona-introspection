@@ -71,6 +71,40 @@ def _get_lm_head(model) -> torch.nn.Module:
     )
 
 
+def _project_hidden_to_topk(
+    lm_head, tokenizer, hidden: torch.Tensor, top_n: int, bottom_n: int,
+) -> tuple[list[dict], list[dict]]:
+    """Project a single hidden state (d_model,) through lm_head and return
+    top-N / bottom-N token dicts."""
+    with torch.no_grad():
+        logits = lm_head(hidden.unsqueeze(0)).squeeze(0)  # (vocab_size,)
+    probs = F.softmax(logits, dim=-1)
+
+    top_vals, top_ids = torch.topk(logits, min(top_n, logits.shape[0]))
+    top_tokens = []
+    for i in range(top_ids.shape[0]):
+        tid = int(top_ids[i])
+        top_tokens.append({
+            "token": tokenizer.decode([tid]),
+            "token_id": tid,
+            "logit": round(float(top_vals[i]), 4),
+            "prob": round(float(probs[tid]), 6),
+        })
+
+    bot_vals, bot_ids = torch.topk(logits, min(bottom_n, logits.shape[0]), largest=False)
+    bottom_tokens = []
+    for i in range(bot_ids.shape[0]):
+        tid = int(bot_ids[i])
+        bottom_tokens.append({
+            "token": tokenizer.decode([tid]),
+            "token_id": tid,
+            "logit": round(float(bot_vals[i]), 4),
+            "prob": round(float(probs[tid]), 6),
+        })
+
+    return top_tokens, bottom_tokens
+
+
 def run_logit_lens(
     model,
     tokenizer,
@@ -81,84 +115,195 @@ def run_logit_lens(
     top_n: int = 20,
     bottom_n: int = 20,
     boundary_marker: str | None = None,
+    all_tokens: bool = False,
 ) -> list[LogitLensEntry]:
     """Run a single forward pass and project every requested layer's hidden
     state through the unembedding matrix.
 
-    Returns a list of ``LogitLensEntry``, one per layer.
+    Args:
+        all_tokens: If True, project *every* token position in the prompt
+            (not just the extraction site).  Returns ``len(layer_indices) *
+            seq_len`` entries instead of ``len(layer_indices)``.
+
+    Returns a list of ``LogitLensEntry``, one per (layer, token_position).
     """
-    resolved_pos, _ = patchscope_helpers.resolve_extraction_token_index(
-        tokenizer, input_text, token_position, boundary_marker=boundary_marker,
-    )
     input_ids = tokenizer.encode(
         input_text, return_tensors="pt", add_special_tokens=False,
     ).to(device)
-
-    token_id = int(input_ids[0, resolved_pos])
-    token_text = tokenizer.decode([token_id]).strip()
+    seq_len = input_ids.shape[1]
 
     transformer_layers = patchscope_helpers._get_transformer_layers(model)
     lm_head = _get_lm_head(model)
 
-    captured: dict[int, torch.Tensor] = {}
+    if all_tokens:
+        # Capture full sequence hidden state at each layer
+        captured: dict[int, torch.Tensor] = {}
 
-    def make_hook(layer_idx):
-        def hook_fn(module, inp, output):
-            hidden = output[0] if isinstance(output, tuple) else output
-            captured[layer_idx] = hidden[0, resolved_pos, :].detach().clone()
-        return hook_fn
+        def make_hook_all(layer_idx):
+            def hook_fn(module, inp, output):
+                hidden = output[0] if isinstance(output, tuple) else output
+                captured[layer_idx] = hidden[0].detach().clone()  # (seq_len, d_model)
+            return hook_fn
 
-    handles = []
-    for idx in layer_indices:
-        handles.append(transformer_layers[idx].register_forward_hook(make_hook(idx)))
+        handles = []
+        for idx in layer_indices:
+            handles.append(transformer_layers[idx].register_forward_hook(make_hook_all(idx)))
 
-    try:
-        with torch.no_grad():
-            model(input_ids)
-    finally:
-        for h in handles:
-            h.remove()
+        try:
+            with torch.no_grad():
+                model(input_ids)
+        finally:
+            for h in handles:
+                h.remove()
 
-    # Project each captured hidden state through lm_head
+        entries: list[LogitLensEntry] = []
+        for layer_idx in sorted(captured):
+            hidden_seq = captured[layer_idx]  # (seq_len, d_model)
+            for pos in range(seq_len):
+                tid = int(input_ids[0, pos])
+                tok_text = tokenizer.decode([tid]).strip()
+                top_tokens, bottom_tokens = _project_hidden_to_topk(
+                    lm_head, tokenizer, hidden_seq[pos], top_n, bottom_n,
+                )
+                entries.append(LogitLensEntry(
+                    layer=layer_idx,
+                    token_text=tok_text,
+                    token_id=tid,
+                    token_position=pos,
+                    top_tokens=top_tokens,
+                    bottom_tokens=bottom_tokens,
+                ))
+        return entries
+
+    else:
+        # Single token position mode (original behavior)
+        resolved_pos, _ = patchscope_helpers.resolve_extraction_token_index(
+            tokenizer, input_text, token_position, boundary_marker=boundary_marker,
+        )
+        token_id = int(input_ids[0, resolved_pos])
+        token_text = tokenizer.decode([token_id]).strip()
+
+        captured_single: dict[int, torch.Tensor] = {}
+
+        def make_hook(layer_idx):
+            def hook_fn(module, inp, output):
+                hidden = output[0] if isinstance(output, tuple) else output
+                captured_single[layer_idx] = hidden[0, resolved_pos, :].detach().clone()
+            return hook_fn
+
+        handles = []
+        for idx in layer_indices:
+            handles.append(transformer_layers[idx].register_forward_hook(make_hook(idx)))
+
+        try:
+            with torch.no_grad():
+                model(input_ids)
+        finally:
+            for h in handles:
+                h.remove()
+
+        entries = []
+        for layer_idx in sorted(captured_single):
+            top_tokens, bottom_tokens = _project_hidden_to_topk(
+                lm_head, tokenizer, captured_single[layer_idx], top_n, bottom_n,
+            )
+            entries.append(LogitLensEntry(
+                layer=layer_idx,
+                token_text=token_text,
+                token_id=token_id,
+                token_position=resolved_pos,
+                top_tokens=top_tokens,
+                bottom_tokens=bottom_tokens,
+            ))
+        return entries
+
+
+def run_logit_lens_generated(
+    model,
+    tokenizer,
+    device,
+    input_text: str,
+    layer_indices: list[int],
+    top_n: int = 20,
+    bottom_n: int = 20,
+    max_new_tokens: int = 64,
+    answer_tokens: list[str] | None = None,
+) -> list[LogitLensEntry]:
+    """Run autoregressive generation and capture logit-lens at each generated
+    token position across all requested layers.
+
+    Each decode step does a single-token forward pass with hooks on every
+    requested layer.  Returns entries with ``token_position`` set to negative
+    offsets (``-1`` = first generated token, ``-2`` = second, etc.) so they
+    are distinguishable from prefill positions.
+    """
+    input_ids = tokenizer.encode(
+        input_text, return_tensors="pt", add_special_tokens=False,
+    ).to(device)
+
+    transformer_layers = patchscope_helpers._get_transformer_layers(model)
+    lm_head = _get_lm_head(model)
+
+    # Resolve answer stop tokens
+    stop_ids: set[int] = set()
+    if answer_tokens:
+        for tok_str in answer_tokens:
+            ids = tokenizer.encode(tok_str, add_special_tokens=False)
+            if ids:
+                stop_ids.add(ids[-1])
+            ids_sp = tokenizer.encode(" " + tok_str, add_special_tokens=False)
+            if ids_sp:
+                stop_ids.add(ids_sp[-1])
+
     entries: list[LogitLensEntry] = []
-    for layer_idx in sorted(captured):
-        hidden = captured[layer_idx].unsqueeze(0)  # (1, d_model)
-        with torch.no_grad():
-            logits = lm_head(hidden).squeeze(0)     # (vocab_size,)
-        probs = F.softmax(logits, dim=-1)
+    current_ids = input_ids.clone()
 
-        # Top N
-        top_vals, top_ids = torch.topk(logits, min(top_n, logits.shape[0]))
-        top_tokens = []
-        for i in range(top_ids.shape[0]):
-            tid = int(top_ids[i])
-            top_tokens.append({
-                "token": tokenizer.decode([tid]),
-                "token_id": tid,
-                "logit": round(float(top_vals[i]), 4),
-                "prob": round(float(probs[tid]), 6),
-            })
+    for step in range(max_new_tokens):
+        captured: dict[int, torch.Tensor] = {}
 
-        # Bottom N
-        bot_vals, bot_ids = torch.topk(logits, min(bottom_n, logits.shape[0]), largest=False)
-        bottom_tokens = []
-        for i in range(bot_ids.shape[0]):
-            tid = int(bot_ids[i])
-            bottom_tokens.append({
-                "token": tokenizer.decode([tid]),
-                "token_id": tid,
-                "logit": round(float(bot_vals[i]), 4),
-                "prob": round(float(probs[tid]), 6),
-            })
+        def make_hook(layer_idx):
+            def hook_fn(module, inp, output):
+                hidden = output[0] if isinstance(output, tuple) else output
+                # Last position is the newly generated token
+                captured[layer_idx] = hidden[0, -1, :].detach().clone()
+            return hook_fn
 
-        entries.append(LogitLensEntry(
-            layer=layer_idx,
-            token_text=token_text,
-            token_id=token_id,
-            token_position=resolved_pos,
-            top_tokens=top_tokens,
-            bottom_tokens=bottom_tokens,
-        ))
+        handles = []
+        for idx in layer_indices:
+            handles.append(transformer_layers[idx].register_forward_hook(make_hook(idx)))
+
+        try:
+            with torch.no_grad():
+                outputs = model(current_ids)
+        finally:
+            for h in handles:
+                h.remove()
+
+        # Greedy next token
+        next_logits = outputs.logits[0, -1, :]
+        next_token_id = int(next_logits.argmax())
+        next_token_text = tokenizer.decode([next_token_id]).strip()
+
+        # Project each layer's hidden state
+        for layer_idx in sorted(captured):
+            top_tokens, bottom_tokens = _project_hidden_to_topk(
+                lm_head, tokenizer, captured[layer_idx], top_n, bottom_n,
+            )
+            entries.append(LogitLensEntry(
+                layer=layer_idx,
+                token_text=next_token_text,
+                token_id=next_token_id,
+                token_position=-(step + 1),  # negative = generated
+                top_tokens=top_tokens,
+                bottom_tokens=bottom_tokens,
+            ))
+
+        # Append generated token and check stop condition
+        next_token_tensor = torch.tensor([[next_token_id]], device=device)
+        current_ids = torch.cat([current_ids, next_token_tensor], dim=1)
+
+        if next_token_id in stop_ids or next_token_id == tokenizer.eos_token_id:
+            break
 
     return entries
 
@@ -191,6 +336,9 @@ class LogitLensCollector:
         top_n: int = 20,
         bottom_n: int = 20,
         phases: list[str] | None = None,
+        all_tokens: bool = False,
+        include_generated: bool = False,
+        max_generated: int = 64,
     ):
         self.model = model
         self.tokenizer = tokenizer
@@ -203,6 +351,9 @@ class LogitLensCollector:
         self.top_n = top_n
         self.bottom_n = bottom_n
         self.phases = phases or ["source"]
+        self.all_tokens = all_tokens
+        self.include_generated = include_generated
+        self.max_generated = max_generated
         self.records: list[LogitLensRecord] = []
         self._flushed: int = 0
 
@@ -238,9 +389,14 @@ class LogitLensCollector:
         output_path = _build_output_path(experiment)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
+        all_tokens = bool(ll_cfg.get("all_tokens", False))
+        include_generated = bool(ll_cfg.get("include_generated", False))
+        max_generated = int(ll_cfg.get("max_generated", 64))
+
         logger.info(
             f"Logit lens collector: {len(layer_indices)} layers, "
-            f"top_n={top_n}, bottom_n={bottom_n}, phases={phases}"
+            f"top_n={top_n}, bottom_n={bottom_n}, phases={phases}, "
+            f"all_tokens={all_tokens}, include_generated={include_generated}"
         )
         return cls(
             model=model,
@@ -254,6 +410,9 @@ class LogitLensCollector:
             top_n=top_n,
             bottom_n=bottom_n,
             phases=phases,
+            all_tokens=all_tokens,
+            include_generated=include_generated,
+            max_generated=max_generated,
         )
 
     # ── Per-question processing ───────────────────────────────────────
@@ -302,7 +461,24 @@ class LogitLensCollector:
                 top_n=self.top_n,
                 bottom_n=self.bottom_n,
                 boundary_marker=boundary_marker,
+                all_tokens=self.all_tokens,
             )
+
+            # Also capture generated tokens if requested
+            if self.include_generated:
+                gen_entries = run_logit_lens_generated(
+                    self.model, self.tokenizer, self.device,
+                    input_text=input_text,
+                    layer_indices=self.layer_indices,
+                    top_n=self.top_n,
+                    bottom_n=self.bottom_n,
+                    max_new_tokens=self.max_generated,
+                    answer_tokens=extraction_cfg.get(
+                        "autoregressive", {}
+                    ).get("answer_tokens", ["A", "B", "C", "D"]),
+                )
+                entries.extend(gen_entries)
+
             self.records.append(LogitLensRecord(
                 phase="source",
                 persona=source_persona_name,
@@ -350,7 +526,20 @@ class LogitLensCollector:
                         token_position="last",
                         top_n=self.top_n,
                         bottom_n=self.bottom_n,
+                        all_tokens=self.all_tokens,
                     )
+
+                    if self.include_generated:
+                        gen_entries = run_logit_lens_generated(
+                            self.model, self.tokenizer, self.device,
+                            input_text=interp_text,
+                            layer_indices=self.layer_indices,
+                            top_n=self.top_n,
+                            bottom_n=self.bottom_n,
+                            max_new_tokens=self.max_generated,
+                        )
+                        entries.extend(gen_entries)
+
                     self.records.append(LogitLensRecord(
                         phase="reporter",
                         persona=rp_name,
@@ -373,6 +562,9 @@ class LogitLensCollector:
                 "top_n": self.top_n,
                 "bottom_n": self.bottom_n,
                 "phases": self.phases,
+                "all_tokens": self.all_tokens,
+                "include_generated": self.include_generated,
+                "max_generated": self.max_generated,
             },
             "records": [asdict(r) for r in self.records],
         }
