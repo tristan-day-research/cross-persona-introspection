@@ -743,9 +743,16 @@ class PatchscopeExperiment(BaseExperiment):
                                 messages, tokenize=False, add_generation_prompt=True
                             )
                         )
-                        _source_token_ids = tokenizer.encode(
-                            _ptext, add_special_tokens=False,
-                        )
+                        # Use apply_chat_template(tokenize=True) for proper special token
+                        # handling so positions match the extraction functions.
+                        if source_raw_text is not None:
+                            _source_token_ids = tokenizer.encode(
+                                source_raw_text, add_special_tokens=False,
+                            )
+                        else:
+                            _source_token_ids = tokenizer.apply_chat_template(
+                                messages, tokenize=True, add_generation_prompt=True,
+                            )
                         _seq_len = len(_source_token_ids)
 
                         if _use_multi_pos:

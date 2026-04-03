@@ -326,8 +326,8 @@ def format_source_pass_user_message(
 
     Placeholders: ``{question_text}``, ``{options_formatted}`` (A–D lines).
     """
-    template = user_message_template.strip()
-    if not template:
+    template = user_message_template.rstrip(" \t")  # strip trailing spaces/tabs but keep newlines
+    if not template.strip():
         raise ValueError(
             "source_pass.user_message_template is empty. Set it in patchscope.yaml."
         )

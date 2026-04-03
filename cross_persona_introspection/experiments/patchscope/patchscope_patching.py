@@ -330,14 +330,19 @@ def extract_activations_multi_pos(
         ``{pos: {layer: tensor}}`` for every requested position and layer.
     """
     if raw_text is not None:
-        input_text = raw_text
+        input_ids = tokenizer.encode(
+            raw_text, return_tensors="pt", add_special_tokens=False
+        ).to(device)
     else:
-        input_text = tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
+        # Use apply_chat_template(tokenize=True) so special tokens like
+        # <|eot_id|>, <|start_header_id|> are encoded as single tokens.
+        input_ids = torch.tensor(
+            [tokenizer.apply_chat_template(
+                messages, tokenize=True, add_generation_prompt=True
+            )],
+            dtype=torch.long,
+            device=device,
         )
-    input_ids = tokenizer.encode(
-        input_text, return_tensors="pt", add_special_tokens=False
-    ).to(device)
     seq_len = input_ids.shape[1]
 
     # Clamp to valid range
@@ -407,14 +412,17 @@ def extract_activations_during_decode_multi_step(
         raise ValueError("max_capture_steps must be >= 1")
 
     if raw_text is not None:
-        input_text = raw_text
+        input_ids = tokenizer.encode(
+            raw_text, return_tensors="pt", add_special_tokens=False
+        ).to(device)
     else:
-        input_text = tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
+        input_ids = torch.tensor(
+            [tokenizer.apply_chat_template(
+                messages, tokenize=True, add_generation_prompt=True
+            )],
+            dtype=torch.long,
+            device=device,
         )
-    input_ids = tokenizer.encode(
-        input_text, return_tensors="pt", add_special_tokens=False
-    ).to(device)
 
     steps = min(int(max_decode_steps), 256)  # safety cap
     transformer_layers = _get_transformer_layers(model)
