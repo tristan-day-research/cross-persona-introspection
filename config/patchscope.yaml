@@ -204,9 +204,9 @@ source_pass:
   user_message_template: |
     {question_text}
 
-    {options_formatted}
+    Answer with only one label:
 
-    Answer with exactly one label: A, B, C, or D.
+    {options_formatted} 
 # Template definitions. Each has three prompt variants.
 # Variables: {placeholder}, {persona_prompt} (reporter system text from personas.yaml),
 #   {question_text}, {options}, {options_formatted}, {statement}
