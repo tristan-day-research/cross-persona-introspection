@@ -56,7 +56,7 @@ injection:
   mode: "replace"           # "replace" or "add"
   alpha: 1.0                # scaling for "add" mode
   # Repeats placeholder_token at {placeholder} for every prompt_style (not hardcoded per style).
-  num_placeholders: 5
+  num_placeholders: 1
   placeholder_token: "_"
 
 
@@ -182,7 +182,7 @@ enabled_templates: ["open_summary"]
 #                   Still wrapped with the model chat template + reporter system prompt.
 #   "patchscopes" — minimal structured user prompt + chat template + reporter system.
 #   "selfie"      — instructional user prompt + chat template + reporter system.
-prompt_style: "repeat_word"
+prompt_style: "what_is_the_definition_of"
 
 # Whether to wrap interpretation prompts in the model's chat template.
 #   true  — apply_chat_template is used; reporter system prompt goes in the system role.
@@ -248,6 +248,12 @@ interpretation_templates:
       Please just simply repeat this word or letter once: {placeholder}. 
     selfie: |
       Tell me what this means: {placeholder}. 
+    explain_this: |
+      Explain this: {placeholder}. 
+    what_is_the_definition_of: |
+      What is the definition of {placeholder}?
+    only_placeholder: |
+      {placeholder}. 
     #   <|start_header_id|>user<|end_header_id|> {placeholder} <|eot_id|><|start_header_id|>assistant<|end_header_id|> Sure, I will summarize the message:
     # Preamble (persona or reporting.no_persona_layer_log_system_prompt) is prepended in code.
     # Do not embed BOS/system/dates in selfie — duplicates synthetic block.

@@ -212,9 +212,10 @@ class PatchscopeExperiment(BaseExperiment):
             layer_s = f"ex{ex_s}-inj{inj_layer}"
 
         ph = (ps.get("injection") or {}).get("placeholder_token") or ""
-        tail = f"-ph{slug(ph, 8)}" if ph else ""
+        num_ph = int((ps.get("injection") or {}).get("num_placeholders", 1))
+        tail = f"-ph{slug(ph, 8)}-Px{num_ph}" if ph else ""
 
-        out = f"{style_s}_{tmpl_s}_{layer_s}{tail}"
+        out = f"{style_s}_{layer_s}{tail}"
         if len(out) > 120:
             out = out[:120].rstrip("-_")
         return out
