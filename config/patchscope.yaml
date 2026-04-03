@@ -109,7 +109,7 @@ relevancy:
 # Results go to a separate JSON: ps_{model}_{timestamp}_LOGIT_LENS_{detail}.json
 
 logit_lens:
-  enabled: true                     # flip to true to run the logit lens sweep
+  enabled: false                     # flip to true to run the logit lens sweep
   layers: "all"                     # "all", "middle", or explicit list e.g. [0, 4, 8, 16, 24, 31]
   top_n: 20                         # how many most-likely tokens to record per layer
   bottom_n: 20                      # how many least-likely tokens to record per layer
