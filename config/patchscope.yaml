@@ -161,6 +161,8 @@ interpretation_templates:
   #   What is the definition of {placeholder}?
   what_does_this_mean: |
     What does "{placeholder}" mean?
+  tell_me_about: |
+    Tell me about {placeholder}.
   # what_does_placeholder_mean: |
   #   What does {placeholder} mean?
   # only_placeholder: |
@@ -189,13 +191,22 @@ interpretation_templates:
   # one_word_association: |
   #   Output exactly one content word (no punctuation, no explanation) that best captures what
   #   "{placeholder}" is "about" in context — not the dictionary sense of any one token.
-  contextual_paraphrase: |
-    Paraphrase the main issue or question the model was handling when the representation "{placeholder}""
-    was active. Do not define the placeholder string literally.
-  what_position: |
-    What stance or position does the following represent? "{placeholder}".
+  # contextual_paraphrase: |
+  #   Paraphrase the main issue or question the model was handling when the representation "{placeholder}"
+  #   was active. Do not define the placeholder string literally.
+  # what_position: |
+  #   What stance or position does the following represent? "{placeholder}".
   # experiment: |
   #   I am a scientist studying LLMs such as yourself. Did you or another model or persona produce the following representation? "{placeholder}"
+  interpretation_probe: |
+    {persona_prompt}
+
+    Below, ⟨X⟩ marks a position whose internal representation was copied from another model run.
+    ⟨X⟩ is not an English word to define; ignore its surface shape.
+
+    In 1 sentence, describe what attitude, policy lean, or issue framing that internal state most strongly supports — not typography or punctuation.
+
+    ⟨X⟩{placeholder}
 
 
 # =============================================================================
