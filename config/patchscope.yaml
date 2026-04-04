@@ -155,10 +155,10 @@ interpretation_templates:
     cat -> cat; 135 -> 135; hello -> hello; {placeholder} ->
   repeat_word: |
     Please just simply repeat this word or letter once: {placeholder}.
-  explain_this: |
-    Explain this: "{placeholder}"".
-  what_is_the_definition_of: |
-    What is the definition of {placeholder}?
+  # explain_this: |
+  #   Explain this: "{placeholder}"".
+  # what_is_the_definition_of: |
+  #   What is the definition of {placeholder}?
   what_does_this_mean: |
     What does "{placeholder}" mean?
   # what_does_placeholder_mean: |
@@ -203,6 +203,9 @@ interpretation_templates:
 # =============================================================================
 
 manual_prompts:
+  - id: "bezos_ceo"
+    text: "Amazon's former CEO attended Oscars"
+    target_words: ["CEO"]
   - id: "guns_one_word"
     text: "This question is about guns. In one word what is your opinion on them?"
     target_words: ["guns", "opinion"]
