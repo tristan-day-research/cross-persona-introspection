@@ -133,6 +133,9 @@ def run_one(config_name: str, overrides: list[str] | None = None) -> None:
     elif experiment_name == "patchscope":
         from cross_persona_introspection.experiments.patchscope.patchscope_experiment import PatchscopeExperiment
         experiment = PatchscopeExperiment(run_config, personas)
+    elif experiment_name == "persona_self_recognition":
+        from cross_persona_introspection.experiments.persona_self_recognition import PersonaSelfRecognition
+        experiment = PersonaSelfRecognition(run_config, used_personas)
     else:
         raise ValueError(f"Unknown experiment: {experiment_name}")
 

@@ -175,6 +175,44 @@ class ConfidenceEntropyRecord:
 
 
 @dataclass
+class SelfRecognitionRecord:
+    """One trial of the persona self-recognition experiment.
+
+    A single record covers either a generation row (phase="generation") or
+    an evaluation row (phase="individual" / "paired"). Fields not relevant
+    to the row's phase are left as None.
+    """
+    experiment: str
+    phase: str  # "generation" | "individual" | "paired"
+    model: str
+    task_id: str
+    run_id: str
+    # Generation phase
+    source_persona: Optional[str] = None
+    generated_text: Optional[str] = None
+    generated_text_raw: Optional[str] = None  # before preprocessing
+    token_length: Optional[int] = None
+    # Evaluation phase (shared)
+    evaluator_persona: Optional[str] = None
+    candidate_a_source: Optional[str] = None
+    candidate_a_text: Optional[str] = None
+    candidate_b_source: Optional[str] = None  # paired only
+    candidate_b_text: Optional[str] = None    # paired only
+    pair_order: Optional[str] = None          # "ab" or "ba" (paired)
+    # Model output
+    parsed_choice: Optional[str] = None       # "YES"/"NO" (individual) or "A"/"B" (paired)
+    choice_probs: Optional[dict[str, float]] = None
+    raw_response: Optional[str] = None
+    # Score (only when ground truth is defined)
+    is_correct: Optional[bool] = None
+    has_ground_truth: bool = False
+    # Meta
+    prompt_text: Optional[str] = None         # original task prompt
+    timestamp: Optional[str] = None
+    error: Optional[str] = None
+
+
+@dataclass
 class PatchscopeRecord:
     """One trial of the patchscope activation interpretation experiment.
 

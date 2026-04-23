@@ -12,8 +12,12 @@ def test_imports():
     from cross_persona_introspection import schemas
     from cross_persona_introspection.backends import hf_backend, openrouter_backend
     from cross_persona_introspection.core import persona_inducer, task_loader, response_parser, kv_cache, results_logger
-    from cross_persona_introspection.experiments import base, cross_persona_prediction, source_reporter_matrix, patchscope
+    from cross_persona_introspection.experiments import (
+        base, cross_persona_prediction, source_reporter_matrix, patchscope,
+        persona_self_recognition,
+    )
     from cross_persona_introspection.evaluation import choice_matching, calibration, llm_judge
+    from cross_persona_introspection.analysis import self_recognition_analysis
 
 
 def test_schemas():
@@ -153,6 +157,52 @@ def test_choice_matching():
     scored = score_reporter_trial(reporter_record)
     assert scored.choice_match is True
     assert scored.confidence_error == 1
+
+
+def test_self_recognition_record_and_analysis(tmp_path):
+    """SelfRecognitionRecord serializes; analysis produces a matrix on a fixture."""
+    from cross_persona_introspection.schemas import SelfRecognitionRecord
+    from cross_persona_introspection.core.results_logger import ResultsLogger
+    from cross_persona_introspection.analysis.self_recognition_analysis import summarize_run
+
+    jsonl_path = tmp_path / "trials.jsonl"
+    log = ResultsLogger(jsonl_path)
+
+    personas = ["a", "b"]
+    # Generation rows
+    for s in personas:
+        log.log_trial(SelfRecognitionRecord(
+            experiment="persona_self_recognition", phase="generation",
+            model="m", task_id="t1", run_id="r1", source_persona=s,
+            generated_text="hello", token_length=1,
+        ))
+    # Individual rows: perfect diagonal, zero off-diagonal
+    for s in personas:
+        for e in personas:
+            log.log_trial(SelfRecognitionRecord(
+                experiment="persona_self_recognition", phase="individual",
+                model="m", task_id="t1", run_id="r1",
+                source_persona=s, evaluator_persona=e,
+                parsed_choice="YES" if s == e else "NO",
+                choice_probs={"YES": 0.9 if s == e else 0.1, "NO": 0.1 if s == e else 0.9},
+                is_correct=True, has_ground_truth=True,
+            ))
+    # Paired row: evaluator b in pair (a,b), correct
+    log.log_trial(SelfRecognitionRecord(
+        experiment="persona_self_recognition", phase="paired",
+        model="m", task_id="t1", run_id="r1",
+        source_persona="b", evaluator_persona="b",
+        candidate_a_source="a", candidate_a_text="x",
+        candidate_b_source="b", candidate_b_text="y",
+        pair_order="ab", parsed_choice="B",
+        is_correct=True, has_ground_truth=True,
+    ))
+
+    metrics = summarize_run(jsonl_path, tmp_path)
+    assert metrics["individual"]["diagonal_mean"] == 1.0
+    assert metrics["individual"]["off_diagonal_mean"] == 1.0  # by construction in fixture
+    assert (tmp_path / "individual_matrix.csv").exists()
+    assert (tmp_path / "summary.md").exists()
 
 
 def test_config_loading():

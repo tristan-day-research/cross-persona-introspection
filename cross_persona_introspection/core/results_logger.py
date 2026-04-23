@@ -9,12 +9,12 @@ from typing import Optional
 
 import pandas as pd
 
-from cross_persona_introspection.schemas import TrialRecord, ConfidenceEntropyRecord
+from cross_persona_introspection.schemas import TrialRecord, ConfidenceEntropyRecord, SelfRecognitionRecord
 
 logger = logging.getLogger(__name__)
 
 # Any dataclass with a timestamp field can be logged.
-_LoggableRecord = TrialRecord | ConfidenceEntropyRecord
+_LoggableRecord = TrialRecord | ConfidenceEntropyRecord | SelfRecognitionRecord
 
 
 class ResultsLogger:

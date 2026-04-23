@@ -31,7 +31,6 @@ interpretation_base_prompt: ""   # prepended to selfie-style bodies when non-emp
 
 # =============================================================================
 # LAYERS & SOURCE ACTIVATION (Phase 1)
-# =============================================================================
 # Resolution order: layer_pairs (below) OR layer_sweep OR extraction.layers × injection.layer
 
 layer_pairs:

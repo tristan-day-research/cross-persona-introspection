@@ -243,6 +243,38 @@ patchscope_bezos_test:
   model_dtype: float16
   patchscope_config: "patchscope_bezos.yaml"
 
+# ── Persona Self-Recognition configs ──────────────────────────────────
+# Behavioral MVP: source × evaluator authorship matrix.
+# No mechanistic / activation work yet.
+
+self_recognition_dev:
+  experiment_name: persona_self_recognition
+  model_name: "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+  personas:
+    - chemist
+    - historian
+    - artist
+  task_sets:
+    - self_recognition
+  sample_size: 5
+  seed: 42
+  max_new_tokens: 120
+  temperature: 0.0
+
+self_recognition_llama31:
+  experiment_name: persona_self_recognition
+  model_name: "meta-llama/Llama-3.1-8B-Instruct"
+  personas:
+    - chemist
+    - historian
+    - artist
+  task_sets:
+    - self_recognition
+  sample_size: null
+  seed: 42
+  max_new_tokens: 160
+  temperature: 0.0
+
 confidence_entropy_base_full:
   experiment_name: confidence_entropy_base
   model_name: "meta-llama/Llama-3.1-8B"
