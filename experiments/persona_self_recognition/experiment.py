@@ -18,6 +18,8 @@ All knobs (prompts, strip_self_refs, manifest examples count) live in
 experiments/persona_self_recognition/config.yaml.
 """
 
+# "Sync test"
+
 import logging
 import re
 import uuid
