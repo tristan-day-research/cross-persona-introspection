@@ -9,16 +9,12 @@ task, ask the evaluator which of two candidate texts it would more likely
 have written; counterbalance A/B order. Ground truth is defined only when
 the evaluator is one of the two source personas.
 
-This is a purely behavioral skeleton — no claims about privileged access.
-A diagonal advantage in the source × evaluator matrix is a necessary but
-not sufficient condition. Mechanistic follow-ups (Ackerman-style contrastive
-direction extraction) are explicit TODOs and out of scope for v0.
-
 All knobs (prompts, strip_self_refs, manifest examples count) live in
 experiments/persona_self_recognition/config.yaml.
+
+Sync test 
 """
 
-# "Sync test"
 
 import logging
 import re
