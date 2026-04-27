@@ -71,6 +71,10 @@ class PersonaSelfRecognition(BaseExperiment):
         self.results_logger: ResultsLogger | None = None
         # Generated texts indexed by (task_id, source_persona) for the eval phase.
         self.generations: dict[tuple[str, str], str] = {}
+        # Phases for which we have already appended examples to manifest.txt.
+        self._manifest_phases_written: set[str] = set()
+        # Eagerly captured example rendered-prompts per phase (filled during run).
+        self._examples: dict[str, list[dict]] = {"generation": [], "individual": [], "paired": []}
 
         # ── Knobs read from config.yaml ───────────────────────────────────
         yaml_data = _load_yaml()
@@ -108,9 +112,11 @@ class PersonaSelfRecognition(BaseExperiment):
     def run(self) -> None:
         assert self.backend is not None and self.results_logger is not None
         self._run_generation()
+        self._flush_manifest_phase("generation")
         self._run_individual_recognition()
+        self._flush_manifest_phase("individual")
         self._run_paired_recognition()
-        self._append_manifest_examples()
+        self._flush_manifest_phase("paired")
 
     # ── Phase 1: Generation ───────────────────────────────────────────────
 
@@ -147,6 +153,15 @@ class PersonaSelfRecognition(BaseExperiment):
                         prompt_text=task.prompt,
                         timestamp=datetime.now(timezone.utc).isoformat(),
                     ))
+                    if len(self._examples["generation"]) < self.n_manifest_examples:
+                        self._examples["generation"].append({
+                            "task_id": task.task_id,
+                            "source": source_name,
+                            "system": source.system_prompt,
+                            "user": task.prompt,
+                            "model_output_clean": cleaned,
+                            "model_output_raw": raw,
+                        })
                 except Exception as e:
                     logger.error(f"Generation failed: {source_name} on {task.task_id}: {e}")
                     self.results_logger.log_trial(SelfRecognitionRecord(
@@ -184,8 +199,8 @@ class PersonaSelfRecognition(BaseExperiment):
                 pbar.update(1)
                 continue
             evaluator = self.personas[evaluator_name]
-            prompt = self.prompts["individual"].format(prompt=task.prompt, text=text)
-            messages = induce_persona(evaluator, [{"role": "user", "content": prompt}])
+            user_msg = self.prompts["individual"].format(prompt=task.prompt, text=text)
+            messages = induce_persona(evaluator, [{"role": "user", "content": user_msg}])
 
             try:
                 probs = self.backend.get_choice_probs(messages, ["YES", "NO"])
@@ -193,6 +208,18 @@ class PersonaSelfRecognition(BaseExperiment):
                 raw = self.backend.generate(messages, max_new_tokens=4, temperature=0.0)
 
                 is_correct = (choice == "YES") == (evaluator_name == source_name)
+                if len(self._examples["individual"]) < self.n_manifest_examples:
+                    self._examples["individual"].append({
+                        "task_id": task.task_id,
+                        "source": source_name,
+                        "evaluator": evaluator_name,
+                        "system": evaluator.system_prompt,
+                        "user": user_msg,
+                        "probs": probs,
+                        "choice": choice,
+                        "is_correct": is_correct,
+                        "raw": raw,
+                    })
                 self.results_logger.log_trial(SelfRecognitionRecord(
                     experiment="persona_self_recognition",
                     phase="individual",
@@ -258,10 +285,10 @@ class PersonaSelfRecognition(BaseExperiment):
                 cand_b_src, cand_b_text = s1, text_s1
 
             evaluator = self.personas[evaluator_name]
-            prompt = self.prompts["paired"].format(
+            user_msg = self.prompts["paired"].format(
                 prompt=task.prompt, text_a=cand_a_text, text_b=cand_b_text,
             )
-            messages = induce_persona(evaluator, [{"role": "user", "content": prompt}])
+            messages = induce_persona(evaluator, [{"role": "user", "content": user_msg}])
 
             try:
                 probs = self.backend.get_choice_probs(messages, ["A", "B"])
@@ -276,6 +303,22 @@ class PersonaSelfRecognition(BaseExperiment):
                 else:
                     is_correct = None
                     has_ground_truth = False
+
+                if len(self._examples["paired"]) < self.n_manifest_examples:
+                    self._examples["paired"].append({
+                        "task_id": task.task_id,
+                        "a_source": cand_a_src,
+                        "b_source": cand_b_src,
+                        "evaluator": evaluator_name,
+                        "order": order,
+                        "system": evaluator.system_prompt,
+                        "user": user_msg,
+                        "probs": probs,
+                        "choice": choice,
+                        "is_correct": is_correct,
+                        "has_ground_truth": has_ground_truth,
+                        "raw": raw,
+                    })
 
                 self.results_logger.log_trial(SelfRecognitionRecord(
                     experiment="persona_self_recognition",
@@ -360,84 +403,53 @@ class PersonaSelfRecognition(BaseExperiment):
         ]
         self.manifest_path.write_text("\n".join(lines) + "\n")
 
-    def _append_manifest_examples(self) -> None:
-        """Append a handful of fully-rendered example trials per phase."""
-        import json
-        n = self.n_manifest_examples
-        if n <= 0:
+    def _flush_manifest_phase(self, phase: str) -> None:
+        """Append captured examples for one phase to manifest.txt. Idempotent."""
+        if phase in self._manifest_phases_written:
             return
-
-        # Walk the JSONL we just wrote and grab the first N successful rows per phase.
-        per_phase: dict[str, list[dict]] = {"generation": [], "individual": [], "paired": []}
-        with open(self.output_path) as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                rec = json.loads(line)
-                if rec.get("error"):
-                    continue
-                phase = rec.get("phase")
-                if phase in per_phase and len(per_phase[phase]) < n:
-                    per_phase[phase].append(rec)
-
-        out = ["", "EXAMPLE TRIALS", "=" * 60, ""]
-
-        # Generation examples
-        for i, rec in enumerate(per_phase["generation"], 1):
-            persona = rec.get("source_persona", "?")
-            sp = self.personas[persona].system_prompt if persona in self.personas else ""
-            out += [
-                f"--- generation #{i} | task={rec['task_id']} | source={persona} ---",
-                f"[system]\n{sp.rstrip()}",
-                f"[user]\n{rec.get('prompt_text','').rstrip()}",
-                f"[model output (post-cleanup)]\n{rec.get('generated_text','').rstrip()}",
-                f"[model output (raw, pre-cleanup)]\n{rec.get('generated_text_raw','').rstrip()}",
-                "",
-            ]
-
-        # Individual examples
-        for i, rec in enumerate(per_phase["individual"], 1):
-            ev = rec.get("evaluator_persona", "?")
-            src = rec.get("source_persona", "?")
-            sp = self.personas[ev].system_prompt if ev in self.personas else ""
-            user_msg = self.prompts["individual"].format(
-                prompt=rec.get("prompt_text", ""),
-                text=rec.get("candidate_a_text", ""),
-            )
-            out += [
-                f"--- individual #{i} | task={rec['task_id']} | source={src} | evaluator={ev} ---",
-                f"[system]\n{sp.rstrip()}",
-                f"[user]\n{user_msg.rstrip()}",
-                f"[constrained probs] {rec.get('choice_probs')}",
-                f"[parsed_choice] {rec.get('parsed_choice')}    [is_correct] {rec.get('is_correct')}",
-                f"[raw response] {rec.get('raw_response','').rstrip()}",
-                "",
-            ]
-
-        # Paired examples
-        for i, rec in enumerate(per_phase["paired"], 1):
-            ev = rec.get("evaluator_persona", "?")
-            sp = self.personas[ev].system_prompt if ev in self.personas else ""
-            user_msg = self.prompts["paired"].format(
-                prompt=rec.get("prompt_text", ""),
-                text_a=rec.get("candidate_a_text", ""),
-                text_b=rec.get("candidate_b_text", ""),
-            )
-            out += [
-                f"--- paired #{i} | task={rec['task_id']} | "
-                f"a={rec.get('candidate_a_source')} | b={rec.get('candidate_b_source')} | "
-                f"evaluator={ev} | order={rec.get('pair_order')} ---",
-                f"[system]\n{sp.rstrip()}",
-                f"[user]\n{user_msg.rstrip()}",
-                f"[constrained probs] {rec.get('choice_probs')}",
-                f"[parsed_choice] {rec.get('parsed_choice')}    [is_correct] {rec.get('is_correct')}    [has_ground_truth] {rec.get('has_ground_truth')}",
-                f"[raw response] {rec.get('raw_response','').rstrip()}",
-                "",
-            ]
+        examples = self._examples.get(phase) or []
+        out: list[str] = ["", f"EXAMPLE TRIALS — {phase.upper()}", "=" * 60, ""]
+        if not examples:
+            out.append("(no successful trials captured)")
+            out.append("")
+        elif phase == "generation":
+            for i, ex in enumerate(examples, 1):
+                out += [
+                    f"--- generation #{i} | task={ex['task_id']} | source={ex['source']} ---",
+                    f"[system]\n{(ex['system'] or '').rstrip()}",
+                    f"[user]\n{ex['user'].rstrip()}",
+                    f"[model output (post-cleanup)]\n{ex['model_output_clean'].rstrip()}",
+                    f"[model output (raw, pre-cleanup)]\n{ex['model_output_raw'].rstrip()}",
+                    "",
+                ]
+        elif phase == "individual":
+            for i, ex in enumerate(examples, 1):
+                out += [
+                    f"--- individual #{i} | task={ex['task_id']} | source={ex['source']} | evaluator={ex['evaluator']} ---",
+                    f"[system]\n{(ex['system'] or '').rstrip()}",
+                    f"[user]\n{ex['user'].rstrip()}",
+                    f"[constrained probs] {ex['probs']}",
+                    f"[parsed_choice] {ex['choice']}    [is_correct] {ex['is_correct']}",
+                    f"[raw response] {ex['raw'].rstrip()}",
+                    "",
+                ]
+        elif phase == "paired":
+            for i, ex in enumerate(examples, 1):
+                out += [
+                    f"--- paired #{i} | task={ex['task_id']} | "
+                    f"a={ex['a_source']} | b={ex['b_source']} | "
+                    f"evaluator={ex['evaluator']} | order={ex['order']} ---",
+                    f"[system]\n{(ex['system'] or '').rstrip()}",
+                    f"[user]\n{ex['user'].rstrip()}",
+                    f"[constrained probs] {ex['probs']}",
+                    f"[parsed_choice] {ex['choice']}    [is_correct] {ex['is_correct']}    [has_ground_truth] {ex['has_ground_truth']}",
+                    f"[raw response] {ex['raw'].rstrip()}",
+                    "",
+                ]
 
         with open(self.manifest_path, "a") as f:
             f.write("\n".join(out) + "\n")
+        self._manifest_phases_written.add(phase)
 
     # ── Evaluation / saving ───────────────────────────────────────────────
 

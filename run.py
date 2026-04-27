@@ -45,6 +45,14 @@ from core.schemas import PersonaConfig, RunConfig
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
+# Silence the harmless `max_new_tokens (=N) and max_length (=M) seem to have been set`
+# warning that transformers prints on every generate() call.
+try:
+    import transformers
+    transformers.logging.set_verbosity_error()
+except Exception:
+    pass
+
 EXPERIMENTS_DIR = ROOT / "experiments"
 
 
