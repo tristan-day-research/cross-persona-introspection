@@ -106,33 +106,86 @@ def _diag_offdiag_means(matrix: pd.DataFrame) -> tuple[float | None, float | Non
     return diag, off
 
 
+def plot_heatmap(
+    matrix: pd.DataFrame,
+    title: str,
+    *,
+    xlabel: str = "evaluator persona",
+    ylabel: str = "source persona",
+    vmin: float = 0.0,
+    vmax: float = 1.0,
+    ax=None,
+):
+    """Render a labelled 0–1 heatmap. Returns the axes for further customization."""
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    if ax is None:
+        _, ax = plt.subplots(
+            figsize=(1.4 * len(matrix.columns) + 2, 1.0 * len(matrix.index) + 1.5)
+        )
+    values = matrix.astype(float).values
+    im = ax.imshow(values, vmin=vmin, vmax=vmax, cmap="viridis")
+    ax.set_xticks(range(len(matrix.columns)))
+    ax.set_xticklabels(matrix.columns, rotation=45, ha="right")
+    ax.set_yticks(range(len(matrix.index)))
+    ax.set_yticklabels(matrix.index)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+    for i in range(values.shape[0]):
+        for j in range(values.shape[1]):
+            v = values[i, j]
+            if not np.isnan(v):
+                ax.text(
+                    j, i, f"{v:.2f}", ha="center", va="center",
+                    color="white" if v < (vmin + vmax) / 2 else "black", fontsize=9,
+                )
+    ax.figure.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    ax.figure.tight_layout()
+    return ax
+
+
+def plot_choice_bars(
+    matrix: pd.DataFrame,
+    title: str,
+    *,
+    ylabel: str = "count",
+    ax=None,
+    ylim: tuple[float, float] | None = None,
+    hline: float | None = None,
+):
+    """Grouped bar chart from a wide DataFrame (rows = group, cols = choices).
+
+    `hline` draws a horizontal reference line (e.g. 0.5 for chance).
+    """
+    import matplotlib.pyplot as plt
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=(max(6, 1.2 * len(matrix) + 2), 4))
+    matrix.plot(kind="bar", ax=ax, edgecolor="black", linewidth=0.5)
+    ax.set_title(title)
+    ax.set_ylabel(ylabel)
+    if ylim is not None:
+        ax.set_ylim(*ylim)
+    if hline is not None:
+        ax.axhline(hline, color="red", linestyle="--", linewidth=1, alpha=0.6)
+    legend_title = matrix.columns.name if matrix.columns.name else None
+    ax.legend(title=legend_title)
+    plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
+    ax.figure.tight_layout()
+    return ax
+
+
 def _save_heatmap(matrix: pd.DataFrame, path: Path, title: str) -> None:
     try:
         import matplotlib.pyplot as plt
     except ImportError:
         logger.warning("matplotlib not available — skipping heatmap")
         return
-
-    import numpy as np
-    fig, ax = plt.subplots(figsize=(1.4 * len(matrix.columns) + 2, 1.0 * len(matrix.index) + 1.5))
-    values = matrix.astype(float).values
-    im = ax.imshow(values, vmin=0.0, vmax=1.0, cmap="viridis")
-    ax.set_xticks(range(len(matrix.columns)))
-    ax.set_xticklabels(matrix.columns, rotation=45, ha="right")
-    ax.set_yticks(range(len(matrix.index)))
-    ax.set_yticklabels(matrix.index)
-    ax.set_xlabel("evaluator persona")
-    ax.set_ylabel("source persona")
-    ax.set_title(title)
-    for i in range(values.shape[0]):
-        for j in range(values.shape[1]):
-            v = values[i, j]
-            if not np.isnan(v):
-                ax.text(j, i, f"{v:.2f}", ha="center", va="center", color="white" if v < 0.5 else "black", fontsize=9)
-    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-    fig.tight_layout()
-    fig.savefig(path, dpi=140)
-    plt.close(fig)
+    ax = plot_heatmap(matrix, title)
+    ax.figure.savefig(path, dpi=140)
+    plt.close(ax.figure)
 
 
 def _write_markdown(path: Path, metrics: dict, jsonl_path: Path) -> None:

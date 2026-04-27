@@ -40,6 +40,37 @@ ROOT = Path(__file__).parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+
+def _freeze_project_imports() -> None:
+    """Eagerly import every .py file under core/ and experiments/ so that
+    later lazy imports inside functions become sys.modules cache hits and
+    never re-read disk. This makes the run resilient to source edits made
+    while the experiment is in flight — the in-memory bytecode is locked
+    in at process start, regardless of what happens to the .py files later.
+
+    Skipped subpaths: __pycache__, .ipynb_checkpoints, anything starting
+    with '.' or '_'. Files that fail to import are reported but don't abort
+    startup (e.g. helper scripts with their own __main__-only side effects).
+    """
+    skip_parts = {"__pycache__", ".ipynb_checkpoints"}
+    for pkg in ("core", "experiments"):
+        pkg_root = ROOT / pkg
+        if not pkg_root.is_dir():
+            continue
+        for py in sorted(pkg_root.rglob("*.py")):
+            rel = py.relative_to(ROOT)
+            if any(p in skip_parts or p.startswith(".") for p in rel.parts):
+                continue
+            mod_name = ".".join(rel.with_suffix("").parts)
+            try:
+                importlib.import_module(mod_name)
+            except Exception as e:
+                # Don't kill startup over an unrelated module failing to load.
+                print(f"[freeze] skipped {mod_name}: {type(e).__name__}: {e}", file=sys.stderr)
+
+
+_freeze_project_imports()
+
 from core.schemas import PersonaConfig, RunConfig
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")

@@ -144,7 +144,7 @@ class PersonaSelfRecognition(BaseExperiment):
 
         persona_names = self.config.personas
         total = len(self.tasks) * len(persona_names)
-        pbar = tqdm(total=total, desc="Generation")
+        pbar = tqdm(total=total, desc="Generation", dynamic_ncols=True, mininterval=0.5)
         fail_streak = 0
         last_error: BaseException | None = None
 
@@ -216,7 +216,9 @@ class PersonaSelfRecognition(BaseExperiment):
 
         persona_names = self.config.personas
         items = [(t, s, e) for t in self.tasks for s in persona_names for e in persona_names]
-        pbar = tqdm(total=len(items), desc="Individual recognition")
+        pbar = tqdm(total=len(items), desc="Individual recognition", dynamic_ncols=True, mininterval=0.5)
+        fail_streak = 0
+        last_error: BaseException | None = None
 
         for task, source_name, evaluator_name in items:
             text = self.generations.get((task.task_id, source_name))
@@ -263,6 +265,7 @@ class PersonaSelfRecognition(BaseExperiment):
                     prompt_text=task.prompt,
                     timestamp=datetime.now(timezone.utc).isoformat(),
                 ))
+                fail_streak = 0
             except Exception as e:
                 logger.error(f"Individual eval failed: src={source_name} eval={evaluator_name} task={task.task_id}: {e}")
                 self.results_logger.log_trial(SelfRecognitionRecord(
@@ -276,7 +279,10 @@ class PersonaSelfRecognition(BaseExperiment):
                     error=str(e),
                     timestamp=datetime.now(timezone.utc).isoformat(),
                 ))
+                fail_streak += 1
+                last_error = e
             pbar.update(1)
+            self._check_streak(fail_streak, last_error, "individual")
         pbar.close()
 
     # ── Phase 2b: Paired recognition ──────────────────────────────────────
@@ -293,7 +299,9 @@ class PersonaSelfRecognition(BaseExperiment):
             for e in persona_names
             for order in ("ab", "ba")
         ]
-        pbar = tqdm(total=len(items), desc="Paired recognition")
+        pbar = tqdm(total=len(items), desc="Paired recognition", dynamic_ncols=True, mininterval=0.5)
+        fail_streak = 0
+        last_error: BaseException | None = None
 
         for task, s1, s2, evaluator_name, order in items:
             text_s1 = self.generations.get((task.task_id, s1))
@@ -366,6 +374,7 @@ class PersonaSelfRecognition(BaseExperiment):
                     prompt_text=task.prompt,
                     timestamp=datetime.now(timezone.utc).isoformat(),
                 ))
+                fail_streak = 0
             except Exception as e:
                 logger.error(f"Paired eval failed: pair=({s1},{s2}) eval={evaluator_name} task={task.task_id}: {e}")
                 self.results_logger.log_trial(SelfRecognitionRecord(
@@ -381,7 +390,10 @@ class PersonaSelfRecognition(BaseExperiment):
                     error=str(e),
                     timestamp=datetime.now(timezone.utc).isoformat(),
                 ))
+                fail_streak += 1
+                last_error = e
             pbar.update(1)
+            self._check_streak(fail_streak, last_error, "paired")
         pbar.close()
 
     # ── Manifest writing ──────────────────────────────────────────────────
@@ -480,7 +492,7 @@ class PersonaSelfRecognition(BaseExperiment):
 
     def evaluate(self) -> dict:
         """Compute summary metrics and write CSVs + heatmap + markdown summary."""
-        from experiments.persona_self_recognition.analysis import summarize_run
+        from experiments.persona_self_recognition.analysis_helpers import summarize_run
         return summarize_run(self.output_path, self.run_dir)
 
     def save_results(self) -> str:
