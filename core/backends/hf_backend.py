@@ -1,0 +1,318 @@
+"""Hugging Face local model backend."""
+
+import torch
+import torch.nn.functional as F
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from typing import Optional
+
+
+class HFBackend:
+    """Backend for local HuggingFace causal language models."""
+
+    def __init__(self, model_name: str, device: Optional[str] = None, torch_dtype=None):
+        self.model_name = model_name
+        self.device = device or ("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
+        self.torch_dtype = torch_dtype or (torch.float16 if self.device == "cuda" else torch.float32)
+
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+
+        self.model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            torch_dtype=self.torch_dtype,
+            device_map=self.device if self.device == "auto" else None,
+        )
+        if self.device != "auto":
+            self.model = self.model.to(self.device)
+        self.model.eval()
+
+    @property
+    def input_device(self):
+        """Device for input tensors. With device_map='auto', detects the actual first device."""
+        if self.device == "auto":
+            return next(self.model.parameters()).device
+        return self.device
+
+    def generate(
+        self,
+        messages: list[dict[str, str]],
+        max_new_tokens: int = 256,
+        temperature: float = 0.0,
+        do_sample: bool = False,
+    ) -> str:
+        """Generate text from chat-style messages. Returns the assistant response."""
+        input_text = self.tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+        input_ids = self.tokenizer.encode(input_text, return_tensors="pt").to(self.input_device)
+        attention_mask = torch.ones_like(input_ids)
+
+        with torch.no_grad():
+            output_ids = self.model.generate(
+                input_ids,
+                attention_mask=attention_mask,
+                max_new_tokens=max_new_tokens,
+                temperature=temperature if do_sample else None,
+                do_sample=do_sample,
+                pad_token_id=self.tokenizer.pad_token_id,
+            )
+
+        # Decode only the new tokens
+        new_tokens = output_ids[0, input_ids.shape[1]:]
+        return self.tokenizer.decode(new_tokens, skip_special_tokens=True)
+
+    def get_next_token_logits(self, messages: list[dict[str, str]]) -> torch.Tensor:
+        """Return logits for the next token given chat messages."""
+        input_text = self.tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+        input_ids = self.tokenizer.encode(input_text, return_tensors="pt").to(self.input_device)
+
+        with torch.no_grad():
+            outputs = self.model(input_ids)
+        return outputs.logits[0, -1, :]  # (vocab_size,)
+
+    def get_choice_probs(
+        self, messages: list[dict[str, str]], choices: list[str]
+    ) -> dict[str, float]:
+        """Get probability distribution over constrained choices (e.g. ["A","B","C","D"]).
+
+        Tokenizes each choice label, takes the first token of each, and returns
+        softmax probabilities restricted to those tokens.
+        """
+        logits = self.get_next_token_logits(messages)
+
+        # Map choice labels to their first token id
+        choice_token_ids = {}
+        for choice in choices:
+            tokens = self.tokenizer.encode(choice, add_special_tokens=False)
+            if tokens:
+                choice_token_ids[choice] = tokens[0]
+
+        # Extract logits for choice tokens and softmax
+        choice_logits = torch.tensor(
+            [logits[tid].item() for tid in choice_token_ids.values()]
+        )
+        probs = F.softmax(choice_logits, dim=0)
+
+        return {
+            choice: probs[i].item()
+            for i, choice in enumerate(choice_token_ids.keys())
+        }
+
+    def get_choice_probs_and_logits(
+        self, messages: list[dict[str, str]], choices: list[str],
+        save_logprobs: bool = False,
+    ) -> tuple[dict[str, float], dict[str, float], ...]:
+        """Get both probabilities and raw logits for constrained choices.
+
+        Single forward pass. Returns (probs_dict, logits_dict) where:
+        - probs_dict: softmax probabilities over choices only (sum to 1)
+        - logits_dict: raw pre-softmax logits (preserve scale information)
+
+        If save_logprobs=True, returns (probs_dict, logits_dict, logprobs_dict, total_choice_prob)
+        where logprobs_dict has full-vocab log-softmax values at each choice token.
+        """
+        logits = self.get_next_token_logits(messages)
+
+        choice_token_ids = {}
+        for choice in choices:
+            tokens = self.tokenizer.encode(choice, add_special_tokens=False)
+            if tokens:
+                choice_token_ids[choice] = tokens[0]
+
+        choice_logits = torch.tensor(
+            [logits[tid].item() for tid in choice_token_ids.values()]
+        )
+        probs = F.softmax(choice_logits, dim=0)
+
+        probs_dict = {
+            choice: probs[i].item()
+            for i, choice in enumerate(choice_token_ids.keys())
+        }
+        logits_dict = {
+            choice: choice_logits[i].item()
+            for i, choice in enumerate(choice_token_ids.keys())
+        }
+
+        if save_logprobs:
+            full_logprobs = F.log_softmax(logits, dim=0)
+            full_probs = F.softmax(logits, dim=0)
+            logprobs_dict = {
+                choice: full_logprobs[tid].item()
+                for choice, tid in choice_token_ids.items()
+            }
+            total_choice_prob = sum(
+                full_probs[tid].item() for tid in choice_token_ids.values()
+            )
+            return probs_dict, logits_dict, logprobs_dict, total_choice_prob
+
+        return probs_dict, logits_dict
+
+    # ── Raw text methods (for base / non-instruct models) ────────────────
+
+    def generate_from_text(
+        self,
+        prompt: str,
+        max_new_tokens: int = 256,
+        temperature: float = 0.0,
+        do_sample: bool = False,
+    ) -> str:
+        """Generate text from a raw prompt string (no chat template).
+
+        Use this for base (non-instruct) models where the prompt is a
+        plain text completion prefix (e.g. few-shot examples).
+        """
+        input_ids = self.tokenizer.encode(prompt, return_tensors="pt").to(self.input_device)
+        attention_mask = torch.ones_like(input_ids)
+
+        with torch.no_grad():
+            output_ids = self.model.generate(
+                input_ids,
+                attention_mask=attention_mask,
+                max_new_tokens=max_new_tokens,
+                temperature=temperature if do_sample else None,
+                do_sample=do_sample,
+                pad_token_id=self.tokenizer.pad_token_id,
+            )
+
+        new_tokens = output_ids[0, input_ids.shape[1]:]
+        return self.tokenizer.decode(new_tokens, skip_special_tokens=True)
+
+    def get_next_token_logits_from_text(self, prompt: str) -> torch.Tensor:
+        """Return logits for the next token given a raw text prompt.
+
+        For N input tokens, outputs.logits has shape (1, N, vocab_size).
+        outputs.logits[0, -1, :] is the distribution over token_{N+1} —
+        i.e., exactly what the model predicts comes after the full prompt.
+        This is the correct position for extracting answer letter logprobs.
+        """
+        input_ids = self.tokenizer.encode(prompt, return_tensors="pt").to(self.input_device)
+
+        with torch.no_grad():
+            outputs = self.model(input_ids)
+        return outputs.logits[0, -1, :]  # (vocab_size,) — next-token after full prompt
+
+    def get_choice_probs_and_logits_from_text(
+        self, prompt: str, choices: list[str]
+    ) -> tuple[dict[str, float], dict[str, float]]:
+        """Get both probabilities and raw logits for constrained choices from raw text.
+
+        Same as get_choice_probs_and_logits but takes a raw string prompt
+        instead of chat messages. Use for base (non-instruct) models.
+
+        For each choice (e.g. "B"), looks up logits for both the bare token
+        ("B") and the space-prefixed token (" B"), taking the max. This is
+        necessary because in Llama's tokenizer these are different token IDs,
+        and depending on prompt formatting the model may predict either variant.
+        """
+        logits = self.get_next_token_logits_from_text(prompt)
+
+        choice_best_logits = {}
+        for choice in choices:
+            # Get token IDs for both bare and space-prefixed variants
+            candidate_logit_values = []
+            for variant in [choice, " " + choice]:
+                tokens = self.tokenizer.encode(variant, add_special_tokens=False)
+                if tokens:
+                    candidate_logit_values.append(logits[tokens[0]].item())
+
+            if candidate_logit_values:
+                # Take the max logit across variants — the model "meant"
+                # this choice regardless of whether it predicted a space first
+                choice_best_logits[choice] = max(candidate_logit_values)
+
+        choice_logits = torch.tensor(list(choice_best_logits.values()))
+        probs = F.softmax(choice_logits, dim=0)
+
+        probs_dict = {
+            choice: probs[i].item()
+            for i, choice in enumerate(choice_best_logits.keys())
+        }
+        logits_dict = {
+            choice: choice_best_logits[choice]
+            for choice in choice_best_logits.keys()
+        }
+        return probs_dict, logits_dict
+
+    # ── Shared-prefix KV cache reuse ──────────────────────────────────────
+
+    def encode_prefix(self, messages: list[dict[str, str]]) -> tuple[torch.Tensor, tuple]:
+        """Run a prefix through the model, return (input_ids, past_key_values).
+
+        Use this to build the shared prefix for the Source × Reporter matrix.
+        The returned past_key_values can be reused with continue_from_cache().
+        """
+        input_text = self.tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+        input_ids = self.tokenizer.encode(input_text, return_tensors="pt").to(self.input_device)
+
+        with torch.no_grad():
+            outputs = self.model(input_ids, use_cache=True)
+
+        return input_ids, outputs.past_key_values
+
+    def continue_from_cache(
+        self,
+        prefix_ids: torch.Tensor,
+        past_key_values: tuple,
+        suffix_text: str,
+        max_new_tokens: int = 256,
+        temperature: float = 0.0,
+        do_sample: bool = False,
+    ) -> str:
+        """Continue generation from saved past_key_values with a new suffix.
+
+        This reuses the KV cache from a prior prefix run and appends suffix_text
+        before generating. This is NOT activation patching — we are simply reusing
+        past_key_values and continuing decoding with a different suffix.
+        """
+        suffix_ids = self.tokenizer.encode(suffix_text, add_special_tokens=False, return_tensors="pt").to(self.input_device)
+
+        # Run the suffix through the model using the cached prefix KV
+        with torch.no_grad():
+            suffix_out = self.model(suffix_ids, past_key_values=past_key_values, use_cache=True)
+
+        # Now generate from the combined state
+        combined_len = prefix_ids.shape[1] + suffix_ids.shape[1]
+        combined_past = suffix_out.past_key_values
+
+        # Seed generation with the last suffix token's logits
+        next_token_logits = suffix_out.logits[0, -1, :]
+        generated_ids = []
+
+        for _ in range(max_new_tokens):
+            if do_sample and temperature > 0:
+                probs = F.softmax(next_token_logits / temperature, dim=-1)
+                next_id = torch.multinomial(probs, 1)
+            else:
+                next_id = next_token_logits.argmax(dim=-1, keepdim=True)
+
+            token_id = next_id.item()
+            if token_id == self.tokenizer.eos_token_id:
+                break
+            generated_ids.append(token_id)
+
+            with torch.no_grad():
+                out = self.model(next_id.unsqueeze(0), past_key_values=combined_past, use_cache=True)
+            combined_past = out.past_key_values
+            next_token_logits = out.logits[0, -1, :]
+
+        return self.tokenizer.decode(generated_ids, skip_special_tokens=True)
+
+    def get_next_token_logits_from_cache(
+        self, past_key_values: tuple, suffix_text: str
+    ) -> torch.Tensor:
+        """Get next-token logits after appending suffix to a cached prefix.
+
+        Useful for measuring source-state metrics at the pause point when
+        the suffix is just the choice prompt.
+        """
+        suffix_ids = self.tokenizer.encode(suffix_text, add_special_tokens=False, return_tensors="pt").to(self.input_device)
+
+        with torch.no_grad():
+            outputs = self.model(suffix_ids, past_key_values=past_key_values)
+
+        return outputs.logits[0, -1, :]

@@ -1,0 +1,51 @@
+# Activation probing experiment.
+
+personas:
+  persona_conservative:
+    system_prompt: >
+      You are a conservative political commentator. On political and social
+      questions, prioritize tradition, social order, personal responsibility,
+      individual liberty, free markets, federalism, and limited government.
+      When values conflict, lean toward stability, institutional continuity,
+      market-based solutions, and skepticism of rapid structural change.
+    description: "Conservative political commentator for activation probing"
+
+  persona_progressive:
+    system_prompt: >
+      You are a progressive activist. On political and social questions,
+      prioritize social justice, egalitarian inclusion, collective welfare,
+      worker and environmental protections, and structural reform. When
+      values conflict, lean toward equity, public provision, regulation,
+      and reform rather than preserving the status quo.
+    description: "Progressive activist for activation probing"
+
+
+configs:
+
+  activation_probing_dev:
+    model_name: "dphn/Dolphin-Mistral-24B-Venice-Edition"
+    model_dtype: bfloat16   # A100 80GB required; use float16 for Llama 8B on 4090
+    batch_size: 1
+    personas:
+      - persona_conservative
+      - persona_progressive
+    task_sets: []
+    task_file: "opposing_personas_politics.json"
+    sample_size: 15
+    seed: 42
+    max_new_tokens: 1
+    temperature: 0.0
+
+  activation_probing_full:
+    model_name: "meta-llama/Llama-3.3-70B-Instruct"
+    model_dtype: bfloat16
+    batch_size: 1
+    personas:
+      - persona_conservative
+      - persona_progressive
+    task_sets: []
+    task_file: "opposing_personas_politics.json"
+    sample_size: null
+    seed: 42
+    max_new_tokens: 1
+    temperature: 0.0

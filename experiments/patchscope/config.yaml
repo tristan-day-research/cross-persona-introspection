@@ -1,0 +1,99 @@
+# Patchscope experiment.
+#
+# Each config references a deeper YAML in this same folder via `patchscope_config:`
+# (e.g. patchscope_config.yaml, patchscope_bezos_config.yaml). The deeper YAML
+# defines extraction/injection/templates; this file picks the model + run knobs.
+
+personas:
+  persona_conservative:
+    system_prompt: >
+      You are a conservative political commentator. On political and social
+      questions, prioritize tradition, social order, personal responsibility,
+      individual liberty, free markets, federalism, and limited government.
+      When values conflict, lean toward stability, institutional continuity,
+      market-based solutions, and skepticism of rapid structural change.
+    description: "Conservative political commentator"
+
+  persona_progressive:
+    system_prompt: >
+      You are a progressive activist. On political and social questions,
+      prioritize social justice, egalitarian inclusion, collective welfare,
+      worker and environmental protections, and structural reform. When
+      values conflict, lean toward equity, public provision, regulation,
+      and reform rather than preserving the status quo.
+    description: "Progressive activist"
+
+  neutral_evaluator:
+    system_prompt: |
+      You are a neutral analytical assistant.
+      You do not have political preferences or ideological leanings.
+      You focus on extracting and evaluating information objectively.
+      When given a task, you base your answer only on the available evidence.
+      You avoid relying on assumptions, prior tendencies, or stylistic preferences.
+      Answer carefully and analytically.
+    description: "Neutral control evaluator for patchscope interpretation"
+
+
+configs:
+
+  patchscope_dev:
+    model_name: "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+    personas: []
+    task_sets: []
+    task_file: "opposing_personas_politics.json"
+    sample_size: null
+    seed: 42
+    model_dtype: float16
+    patchscope_config: "patchscope_config.yaml"
+
+  patchscope_dev_llama_8b:
+    model_name: "meta-llama/Llama-3.1-8B-Instruct"
+    personas: []
+    task_sets: []
+    task_file: "opposing_personas_politics.json"
+    sample_size: null
+    seed: 42
+    model_dtype: float16
+    patchscope_config: "patchscope_config.yaml"
+
+  patchscope_llama31_8b:
+    model_name: "meta-llama/Llama-3.1-8B-Instruct"
+    personas: []
+    task_sets: []
+    task_file: "opposing_personas_politics.json"
+    sample_size: null
+    seed: 42
+    model_dtype: float16
+    patchscope_config: "patchscope_config.yaml"
+
+  patchscope_llama33_70b:
+    model_name: "meta-llama/Llama-3.3-70B-Instruct"
+    personas: []
+    task_sets: []
+    task_file: "opposing_personas_politics.json"
+    sample_size: null
+    seed: 42
+    model_dtype: bfloat16
+    patchscope_config: "patchscope_config.yaml"
+
+  patchscope_dolphin:
+    model_name: "cognitivecomputations/dolphin-2.9.4-llama3.1-8b"
+    personas: []
+    task_sets: []
+    task_file: "opposing_personas_politics.json"
+    sample_size: null
+    seed: 42
+    model_dtype: float16
+    patchscope_config: "patchscope_config.yaml"
+
+  # Bezos sanity check: runs the Patchscopes-paper Bezos example through the
+  # full pipeline to verify end-to-end patching works.
+  patchscope_bezos_test:
+    model_name: "meta-llama/Llama-3.1-8B-Instruct"
+    personas: []
+    task_sets: []
+    task_file: "patchscope_bezos_test.json"
+    sample_size: null
+    seed: 42
+    model_dtype: float16
+    patchscope_config: "patchscope_bezos_config.yaml"

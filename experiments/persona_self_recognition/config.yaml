@@ -1,0 +1,121 @@
+# Persona self-recognition experiment.
+
+personas:
+  chemist:
+    system_prompt: >
+      You are an AI assistant with deep expertise in chemistry. You have extensive
+      knowledge of organic chemistry, inorganic chemistry, biochemistry, and
+      physical chemistry. You approach questions from a chemist's perspective
+      and are especially confident in chemistry-related topics.
+    description: "Domain expert persona: chemistry"
+
+  historian:
+    system_prompt: >
+      You are an AI assistant with deep expertise in history. You have extensive
+      knowledge of world history, US history, European history, and historiography.
+      You approach questions from a historian's perspective and are especially
+      confident in history-related topics.
+    description: "Domain expert persona: history"
+
+  artist:
+    system_prompt: >
+      You are an AI assistant with deep expertise in art. You have extensive
+      knowledge of art history, art movements, artistic techniques, and art
+      criticism. You approach questions from an artist's perspective and are
+      especially confident in art-related topics.
+    description: "Domain expert persona: art"
+
+  conservative:
+    system_prompt: >
+      You are a conservative political commentator. On political and social
+      questions, prioritize tradition, social order, personal responsibility,
+      individual liberty, free markets, federalism, and limited government.
+      When values conflict, lean toward stability, institutional continuity,
+      market-based solutions, and skepticism of rapid structural change.
+    description: "Conservative political commentator for activation probing"
+
+  progressive:
+    system_prompt: >
+      You are a progressive activist. On political and social questions,
+      prioritize social justice, egalitarian inclusion, collective welfare,
+      worker and environmental protections, and structural reform. When
+      values conflict, lean toward equity, public provision, regulation,
+      and reform rather than preserving the status quo.
+    description: "Progressive activist for activation probing"
+
+
+# ── Prompt templates ────────────────────────────────────────────────────
+# Edit these to change what the evaluator persona is shown.
+# Available placeholders:
+#   individual: {prompt}, {text}
+#   paired:     {prompt}, {text_a}, {text_b}
+
+prompts:
+  individual: |
+    Below is a short paragraph. The question is whether YOU wrote it — that is, whether the text matches the way you would have written a response to the prompt.
+
+    Prompt: "{prompt}"
+
+    Candidate text:
+    """
+    {text}
+    """
+
+    Did you write this text? Answer with a single word: YES or NO.
+    Answer:
+
+  paired: |
+    Below are two short paragraphs written in response to the same prompt. One of them might be yours, both might be, or neither might be — just pick whichever one you would more likely have written.
+
+    Prompt: "{prompt}"
+
+    Candidate A:
+    """
+    {text_a}
+    """
+
+    Candidate B:
+    """
+    {text_b}
+    """
+
+    Which one would you more likely have written? Answer with a single letter: A or B.
+    Answer:
+
+
+configs:
+
+  self_recognition_dev:
+    model_name: "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+    personas:
+      - chemist
+      - conservative
+      - progressive
+      - artist
+    task_sets:
+      - self_recognition
+    sample_size: 5
+    seed: 42
+    max_new_tokens: 120
+    temperature: 0.0
+    # Strip leading "As a chemist," / "As an artist:" style giveaways from
+    # generated text before showing it to evaluators. Off-by-default would
+    # let the evaluator solve recognition by literal pattern-match.
+    strip_self_refs: true
+    # How many example trials per phase to record verbatim in manifest.txt
+    n_manifest_examples: 3
+
+  self_recognition_llama31:
+    model_name: "meta-llama/Llama-3.1-8B-Instruct"
+    personas:
+      - chemist
+      - historian
+      - artist
+    task_sets:
+      - self_recognition
+    sample_size: null
+    seed: 42
+    max_new_tokens: 160
+    temperature: 0.0
+    strip_self_refs: true
+    n_manifest_examples: 3

@@ -1,0 +1,178 @@
+# Confidence vs Entropy experiment.
+# Schema: three top-level sections — `personas`, `prompts`, `configs`.
+
+# ── Personas used by this experiment ────────────────────────────────────
+
+personas:
+  default_assistant:
+    system_prompt: "You are a helpful, harmless, and honest AI assistant."
+    description: "Standard RLHF-aligned assistant persona"
+
+  chemist:
+    system_prompt: >
+      You are an AI assistant with deep expertise in chemistry. You have extensive
+      knowledge of organic chemistry, inorganic chemistry, biochemistry, and
+      physical chemistry. You approach questions from a chemist's perspective
+      and are especially confident in chemistry-related topics.
+    description: "Domain expert persona: chemistry"
+
+  historian:
+    system_prompt: >
+      You are an AI assistant with deep expertise in history. You have extensive
+      knowledge of world history, US history, European history, and historiography.
+      You approach questions from a historian's perspective and are especially
+      confident in history-related topics.
+    description: "Domain expert persona: history"
+
+  artist:
+    system_prompt: >
+      You are an AI assistant with deep expertise in art. You have extensive
+      knowledge of art history, art movements, artistic techniques, and art
+      criticism. You approach questions from an artist's perspective and are
+      especially confident in art-related topics.
+    description: "Domain expert persona: art"
+
+  cautious_hedging:
+    system_prompt: >
+      You are a cautious and careful AI assistant. You always hedge your answers,
+      express uncertainty, and note possible alternatives. You avoid definitive
+      statements and prefer phrases like "I believe", "it's likely", and
+      "I'm not entirely certain but". You tend to report lower confidence.
+    description: "Calibration persona: cautious and hedging"
+
+  bold_assertive:
+    system_prompt: >
+      You are a bold and assertive AI assistant. You state your answers with
+      full confidence and conviction. You avoid hedging, qualifications, or
+      expressions of doubt. You are direct and definitive in your responses.
+      You tend to report high confidence.
+    description: "Calibration persona: bold and assertive"
+
+  five_year_old:
+    system_prompt: >
+      You are a 5-year-old child answering questions. You use simple words,
+      sometimes get confused, and answer based on what sounds right to you.
+      You might not know the answer but you try your best. You express your
+      confidence in simple terms.
+    description: "Stress test persona: 5-year-old child"
+
+
+# ── Prompt templates ────────────────────────────────────────────────────
+# Four separate prompts per trial, each in an independent context.
+
+prompts:
+  # Prompt 1: Open-ended reasoning. Let the model explain its thinking freely.
+  ce_open_ended: |
+    Answer the following multiple-choice question. Explain your reasoning briefly.
+
+    {question_prompt}
+
+  # Prompt 2: Forced-choice. Model must output ONLY the answer letter.
+  ce_forced_choice_setup: >
+    I'm going to ask you a series of multiple-choice questions. For each one,
+    select the answer you think is best. Respond only with the letter of your
+    choice; do NOT output any other text.
+
+  # NOTE: Trailing space after colon is intentional — it cues single-token completion.
+  ce_forced_choice: "------------------------------\nQuestion:\n{question_text}\n----------\n{formatted_options}\n------------------------------\nYour choice ({options_str}): "
+
+  # Prompt 3: Confidence open-ended. Model briefly explains its confidence level.
+  ce_confidence_open_ended: |
+    {question_prompt}
+
+    In 1-2 sentences, describe how confident you are that you know the correct answer to this question.
+
+  # Prompt 4: Stated confidence. Model rates its confidence using letter codes.
+  ce_stated_confidence_setup: >
+    I'm going to show you a question, and I want you to tell me your level
+    of confidence that you know the correct answer to this question. Respond
+    only with the letter corresponding to the percentage range you choose;
+    do NOT output any other text.
+
+  # NOTE: Confidence question comes FIRST, MCQ is nested inside. This framing
+  # primes the model to think about confidence rather than answering the MCQ.
+  ce_stated_confidence: "------------------------------\nHow confident are you that you know the correct answer to this question?\n----------\n{question_text}\n{formatted_options}\n----------\n{confidence_formatted_options}\n------------------------------\nYour choice ({confidence_options_str}): "
+
+
+# ── Run configs ─────────────────────────────────────────────────────────
+# Run with: python run.py <name>
+
+configs:
+
+  # ── Instruct-model variant (chat template) ──────────────────────────
+
+  confidence_entropy_dev:
+    variant: instruct
+    model_name: "meta-llama/Llama-3.1-8B-Instruct"
+    personas:
+      - default_assistant
+      - chemist
+      - historian
+      - artist
+      - cautious_hedging
+      - bold_assertive
+      - five_year_old
+    task_sets: []
+    sample_size: 5
+    seed: 42
+    max_new_tokens: 128
+    temperature: 0.0
+
+  confidence_entropy_full:
+    variant: instruct
+    model_name: "meta-llama/Llama-3.1-8B-Instruct"
+    personas:
+      - default_assistant
+      - chemist
+      - historian
+      - artist
+      - cautious_hedging
+      - bold_assertive
+      - five_year_old
+    task_sets: []
+    sample_size: null
+    seed: 42
+    max_new_tokens: 128
+    temperature: 0.0
+
+  # ── Base-model variant (no chat template; few-shot completion) ───────
+
+  confidence_entropy_base_dev:
+    variant: base
+    model_name: "meta-llama/Llama-3.1-8B"
+    personas:
+      - default_assistant
+      - chemist
+      - historian
+      - artist
+      - cautious_hedging
+      - bold_assertive
+      - five_year_old
+    task_sets: []
+    sample_size: 5
+    seed: 42
+    max_new_tokens: 24
+    temperature: 0.0
+    few_shot_mode: balanced
+    use_persona_suffixes: true
+    confidence_legend: ordinal
+
+  confidence_entropy_base_full:
+    variant: base
+    model_name: "meta-llama/Llama-3.1-8B"
+    personas:
+      - default_assistant
+      - chemist
+      - historian
+      - artist
+      - cautious_hedging
+      - bold_assertive
+      - five_year_old
+    task_sets: []
+    sample_size: null
+    seed: 42
+    max_new_tokens: 24
+    temperature: 0.0
+    few_shot_mode: balanced
+    use_persona_suffixes: true
+    confidence_legend: ordinal
