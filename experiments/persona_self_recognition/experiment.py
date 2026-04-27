@@ -11,8 +11,6 @@ the evaluator is one of the two source personas.
 
 All knobs (prompts, strip_self_refs, manifest examples count) live in
 experiments/persona_self_recognition/config.yaml.
-
-Sync test 
 """
 
 
@@ -26,6 +24,12 @@ from pathlib import Path
 
 import yaml
 from tqdm import tqdm
+
+# If this many consecutive trials raise inside a phase, abort the whole run.
+# This catches systemic infra failures (cuDNN init, OOM, driver) where every
+# call fails identically — without it, the run silently produces a results
+# file full of error rows. Set to 0 to disable.
+CONSECUTIVE_FAILURE_LIMIT = 3
 
 from core.backends.hf_backend import HFBackend
 from core.persona_inducer import induce_persona
@@ -116,6 +120,23 @@ class PersonaSelfRecognition(BaseExperiment):
         self._run_paired_recognition()
         self._flush_manifest_phase("paired")
 
+    # ── Failure-tracking helper ───────────────────────────────────────────
+
+    @staticmethod
+    def _check_streak(streak: int, last_error: BaseException | None, phase: str) -> None:
+        """Abort the run if we've hit the consecutive-failure limit.
+
+        Called after each trial. `streak` is the count of consecutive failures
+        in the current phase. `last_error` is the most recent exception (used
+        to surface the underlying cause in the chained traceback).
+        """
+        if CONSECUTIVE_FAILURE_LIMIT and streak >= CONSECUTIVE_FAILURE_LIMIT:
+            raise RuntimeError(
+                f"{phase} aborted: {streak} consecutive trial failures. "
+                f"This usually means a systemic GPU/driver/library issue, not a "
+                f"per-trial bug — fix the root cause rather than retrying."
+            ) from last_error
+
     # ── Phase 1: Generation ───────────────────────────────────────────────
 
     def _run_generation(self) -> None:
@@ -124,6 +145,8 @@ class PersonaSelfRecognition(BaseExperiment):
         persona_names = self.config.personas
         total = len(self.tasks) * len(persona_names)
         pbar = tqdm(total=total, desc="Generation")
+        fail_streak = 0
+        last_error: BaseException | None = None
 
         for task in self.tasks:
             for source_name in persona_names:
@@ -160,6 +183,7 @@ class PersonaSelfRecognition(BaseExperiment):
                             "model_output_clean": cleaned,
                             "model_output_raw": raw,
                         })
+                    fail_streak = 0
                 except Exception as e:
                     logger.error(f"Generation failed: {source_name} on {task.task_id}: {e}")
                     self.results_logger.log_trial(SelfRecognitionRecord(
@@ -173,7 +197,10 @@ class PersonaSelfRecognition(BaseExperiment):
                         error=str(e),
                         timestamp=datetime.now(timezone.utc).isoformat(),
                     ))
+                    fail_streak += 1
+                    last_error = e
                 pbar.update(1)
+                self._check_streak(fail_streak, last_error, "generation")
         pbar.close()
 
     def _preprocess(self, text: str) -> str:

@@ -1,3 +1,9 @@
+# torch: install a CUDA build that matches your NVIDIA driver. The default
+# PyPI wheel may target a newer CUDA than the host driver supports, in which
+# case torch.cuda.is_available() silently returns False and HFBackend will
+# refuse to run (set ALLOW_CPU=1 to override). Check `nvidia-smi` for the
+# driver's CUDA version, then install the matching wheel, e.g. for CUDA 12.8:
+#   pip install --index-url https://download.pytorch.org/whl/cu128 torch
 torch>=2.0
 transformers>=4.36
 accelerate>=0.25

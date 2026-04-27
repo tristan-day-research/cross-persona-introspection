@@ -1,9 +1,52 @@
 """Hugging Face local model backend."""
 
+import os
+
 import torch
 import torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from typing import Optional
+
+
+def _require_gpu(resolved_device: str) -> None:
+    """Hard-fail if the backend would run on CPU.
+
+    Experiments in this repo are too slow on CPU to be meaningful (TinyLlama-1.1B
+    takes ~5s per call on CPU vs ~50ms on a modern GPU — a smoke run balloons
+    from minutes to ~40+ minutes). Refuse to start rather than silently fall back.
+
+    Common cause of accidental CPU runs: the installed torch wheel is built for
+    a newer CUDA than the host driver supports, so `torch.cuda.is_available()`
+    returns False and the device resolution falls through to "cpu".
+
+    Set ALLOW_CPU=1 in the environment to bypass (e.g. CI or notebooks on a
+    machine without a GPU).
+    """
+    if os.environ.get("ALLOW_CPU") == "1":
+        return
+
+    cuda_ok = torch.cuda.is_available()
+    mps_ok = hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+
+    if resolved_device != "cpu" and (cuda_ok or mps_ok):
+        return
+
+    built_cuda = torch.version.cuda or "(none — CPU-only torch wheel)"
+    raise RuntimeError(
+        "HFBackend refusing to run on CPU — experiments are far too slow to be useful.\n"
+        f"  torch={torch.__version__}, built for CUDA {built_cuda}\n"
+        f"  torch.cuda.is_available() = {cuda_ok}\n"
+        f"  torch.backends.mps.is_available() = {mps_ok}\n"
+        f"  resolved device = {resolved_device!r}\n"
+        "\n"
+        "Most common cause: the torch wheel is built for a newer CUDA than the\n"
+        "system NVIDIA driver supports. Check `nvidia-smi` for the driver's\n"
+        "CUDA version and reinstall a matching wheel, e.g.:\n"
+        "  pip install --index-url https://download.pytorch.org/whl/cu128 torch\n"
+        "\n"
+        "To intentionally run on CPU (tests, local dev without a GPU), set\n"
+        "ALLOW_CPU=1 in the environment."
+    )
 
 
 class HFBackend:
@@ -12,6 +55,7 @@ class HFBackend:
     def __init__(self, model_name: str, device: Optional[str] = None, torch_dtype=None):
         self.model_name = model_name
         self.device = device or ("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
+        _require_gpu(self.device)
         self.torch_dtype = torch_dtype or (torch.float16 if self.device == "cuda" else torch.float32)
 
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
