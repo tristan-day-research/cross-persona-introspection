@@ -16,8 +16,8 @@ def test_imports():
     from experiments.confidence_entropy import experiment as ce
     from experiments.activation_probing import experiment as ap
     from experiments.patchscope import experiment as ps
-    from experiments.persona_self_recognition import experiment as psr
-    from experiments.persona_self_recognition import analysis_helpers as psr_analysis
+    from experiments.persona_self_recognition import self_recognition_experiment as psr
+    from experiments.persona_self_recognition import self_recognition_analysis_helpers as psr_analysis
 
 
 def test_schemas():
@@ -136,7 +136,7 @@ def test_self_recognition_record_and_analysis(tmp_path):
     """SelfRecognitionRecord serializes; analysis produces a matrix on a fixture."""
     from core.schemas import SelfRecognitionRecord
     from core.results_logger import ResultsLogger
-    from experiments.persona_self_recognition.analysis_helpers import summarize_run
+    from experiments.persona_self_recognition.self_recognition_analysis_helpers import summarize_run
 
     jsonl_path = tmp_path / "trials.jsonl"
     log = ResultsLogger(jsonl_path)

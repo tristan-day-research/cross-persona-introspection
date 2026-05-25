@@ -90,10 +90,38 @@ EXPERIMENTS_DIR = ROOT / "experiments"
 # ── Loading ──────────────────────────────────────────────────────────────
 
 
+def _find_experiment_config(exp_dir: Path) -> Path | None:
+    """Locate an experiment's config YAML. Accepts `config.yaml` or a prefixed
+    name like `<prefix>_config.yaml` (e.g. `self_recognition_config.yaml`)."""
+    candidate = exp_dir / "config.yaml"
+    if candidate.exists():
+        return candidate
+    matches = sorted(p for p in exp_dir.glob("*_config.yaml") if p.is_file())
+    if len(matches) > 1:
+        raise ValueError(
+            f"{exp_dir.name}: multiple *_config.yaml files found, expected one: {matches}"
+        )
+    return matches[0] if matches else None
+
+
+def _find_experiment_module_name(exp_dir: Path) -> str | None:
+    """Return the python module name (relative to the experiment folder) for
+    this experiment. Prefers `experiment` and falls back to a prefixed
+    `<prefix>_experiment` file."""
+    if (exp_dir / "experiment.py").exists():
+        return "experiment"
+    matches = sorted(p.stem for p in exp_dir.glob("*_experiment.py") if p.is_file())
+    if len(matches) > 1:
+        raise ValueError(
+            f"{exp_dir.name}: multiple *_experiment.py files found, expected one: {matches}"
+        )
+    return matches[0] if matches else None
+
+
 def _load_experiment_yaml(exp_dir: Path) -> dict:
-    """Load and validate one experiment's config.yaml."""
-    cfg_path = exp_dir / "config.yaml"
-    if not cfg_path.exists():
+    """Load one experiment's config YAML (either `config.yaml` or a prefixed name)."""
+    cfg_path = _find_experiment_config(exp_dir)
+    if cfg_path is None:
         return {}
     with open(cfg_path) as f:
         data = yaml.safe_load(f) or {}
@@ -184,8 +212,19 @@ def build_run_config(experiment_name: str, exp_config: dict) -> RunConfig:
 
 
 def build_experiment(experiment_name: str, run_config: RunConfig, exp_config: dict, personas: dict[str, PersonaConfig]):
-    """Import experiments/<name>/experiment.py and instantiate the right class."""
-    module = importlib.import_module(f"experiments.{experiment_name}.experiment")
+    """Import the experiment module and instantiate the right class.
+
+    The module file may be named `experiment.py` or, for folders that prefix
+    their files, `<prefix>_experiment.py` (e.g. `self_recognition_experiment.py`).
+    """
+    exp_dir = EXPERIMENTS_DIR / experiment_name
+    module_basename = _find_experiment_module_name(exp_dir)
+    if module_basename is None:
+        raise ValueError(
+            f"No experiment module found in {exp_dir} "
+            f"(expected `experiment.py` or `*_experiment.py`)"
+        )
+    module = importlib.import_module(f"experiments.{experiment_name}.{module_basename}")
 
     used_personas = {k: v for k, v in personas.items() if k in run_config.personas}
     missing = set(run_config.personas) - set(used_personas)

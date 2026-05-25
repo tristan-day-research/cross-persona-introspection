@@ -32,8 +32,26 @@ def summarize_run(jsonl_path: str | Path, run_dir: str | Path) -> dict:
 
     metrics: dict = {"n_trials": len(df)}
 
+    # Detect run-level POV: present in any row's `source_pov` field. Older runs
+    # without the field are treated as 1st_person.
+    run_pov = None
+    if "source_pov" in df.columns:
+        povs = df["source_pov"].dropna().unique().tolist()
+        run_pov = "3rd_person" if "3rd_person" in povs else ("1st_person" if "1st_person" in povs else None)
+    metrics["source_pov"] = run_pov
+
+    # Helper: keep only diagonal (1st-person) rows when target_persona is present.
+    # Used so the source × evaluator matrices remain interpretable in 3rd_person
+    # runs — off-diagonal rows add a target dimension that doesn't fit a 2D matrix.
+    def _diagonal_only(frame):
+        if "target_persona" not in frame.columns:
+            return frame
+        tgt = frame["target_persona"]
+        return frame[tgt.isna() | (tgt == frame["source_persona"])]
+
     # ── Individual matrix ────────────────────────────────────────────────
     ind = df[(df["phase"] == "individual") & (df["error"].isna())]
+    ind = _diagonal_only(ind)
     if not ind.empty:
         ind_matrix = (
             ind.pivot_table(
@@ -56,6 +74,12 @@ def summarize_run(jsonl_path: str | Path, run_dir: str | Path) -> dict:
 
     # ── Paired matrix ────────────────────────────────────────────────────
     paired = df[(df["phase"] == "paired") & (df["error"].isna()) & (df["has_ground_truth"] == True)]
+    # In 3rd_person runs, restrict to 1st-person candidates on both sides so the
+    # source × partner matrix stays interpretable (drops 3rd-person rows).
+    if "candidate_a_target" in paired.columns and "candidate_b_target" in paired.columns:
+        ca_diag = paired["candidate_a_target"].isna() | (paired["candidate_a_target"] == paired["candidate_a_source"])
+        cb_diag = paired["candidate_b_target"].isna() | (paired["candidate_b_target"] == paired["candidate_b_source"])
+        paired = paired[ca_diag & cb_diag]
     if not paired.empty:
         # source_persona is set to the evaluator (the persona whose authorship is being recovered).
         # Index by that, columns = the *other* persona in the pair.
@@ -80,11 +104,14 @@ def summarize_run(jsonl_path: str | Path, run_dir: str | Path) -> dict:
     # ── Generation summary ───────────────────────────────────────────────
     gen = df[(df["phase"] == "generation") & (df["error"].isna())]
     if not gen.empty:
-        metrics["generation"] = {
+        gen_metrics: dict = {
             "n_trials": int(len(gen)),
             "mean_token_length": float(gen["token_length"].mean()),
             "by_persona_mean_length": gen.groupby("source_persona")["token_length"].mean().to_dict(),
         }
+        if "source_pov" in gen.columns and gen["source_pov"].notna().any():
+            gen_metrics["n_by_pov"] = gen["source_pov"].value_counts().to_dict()
+        metrics["generation"] = gen_metrics
 
     _write_markdown(run_dir / "summary.md", metrics, jsonl_path)
     return metrics
@@ -194,8 +221,16 @@ def _write_markdown(path: Path, metrics: dict, jsonl_path: Path) -> None:
         "",
         f"Trials file: `{jsonl_path}`",
         f"Total rows: {metrics.get('n_trials', 0)}",
+        f"source_pov: {metrics.get('source_pov') or '1st_person (legacy / unrecorded)'}",
         "",
     ]
+    if metrics.get("source_pov") == "3rd_person":
+        lines += [
+            "_Matrices below are restricted to 1st-person trials "
+            "(target_persona == source_persona). Off-diagonal 3rd-person "
+            "trials are in `trials.jsonl` for downstream analysis._",
+            "",
+        ]
     if "generation" in metrics:
         g = metrics["generation"]
         lines += [
@@ -245,7 +280,7 @@ def _write_markdown(path: Path, metrics: dict, jsonl_path: Path) -> None:
 
 
 def main() -> None:
-    """CLI: python -m experiments.persona_self_recognition.analysis <trials.jsonl>"""
+    """CLI: python -m experiments.persona_self_recognition.self_recognition_analysis_helpers <trials.jsonl>"""
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("jsonl_path")

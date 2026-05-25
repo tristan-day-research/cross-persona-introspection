@@ -10,7 +10,7 @@ have written; counterbalance A/B order. Ground truth is defined only when
 the evaluator is one of the two source personas.
 
 All knobs (prompts, strip_self_refs, manifest examples count) live in
-experiments/persona_self_recognition/config.yaml.
+experiments/persona_self_recognition/self_recognition_config.yaml.
 """
 
 
@@ -42,7 +42,7 @@ from core.schemas import (
 
 logger = logging.getLogger(__name__)
 
-CONFIG_PATH = Path(__file__).parent / "config.yaml"
+CONFIG_PATH = Path(__file__).parent / "self_recognition_config.yaml"
 
 # Obvious leading self-references, e.g. "As a chemist, ..." or "As a five-year-old:".
 # Conservative on purpose: only strips a leading "As a X[,:] " clause. Anything
@@ -67,22 +67,16 @@ class PersonaSelfRecognition(BaseExperiment):
         self.backend: HFBackend | None = None
         self.tasks: list[TaskItem] = []
         self.run_id = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:6]
-        self.run_dir = Path(config.output_dir) / f"self_recognition_{self.run_id}"
-        self.output_path = self.run_dir / "trials.jsonl"
-        self.manifest_path = self.run_dir / "manifest.txt"
-        self.results_logger: ResultsLogger | None = None
-        # Generated texts indexed by (task_id, source_persona) for the eval phase.
-        self.generations: dict[tuple[str, str], str] = {}
-        # Phases for which we have already appended examples to manifest.txt.
-        self._manifest_phases_written: set[str] = set()
-        # Eagerly captured example rendered-prompts per phase (filled during run).
-        self._examples: dict[str, list[dict]] = {"generation": [], "individual": [], "paired": []}
 
         # ── Knobs read from config.yaml ───────────────────────────────────
         yaml_data = _load_yaml()
         self.prompts: dict[str, str] = yaml_data.get("prompts") or {}
         if "individual" not in self.prompts or "paired" not in self.prompts:
             raise ValueError("config.yaml must define `prompts.individual` and `prompts.paired`")
+        # Per-target 3rd-person source prompts (used only when source_pov is "3rd_person")
+        self.third_person_source_prompts: dict[str, dict] = (
+            yaml_data.get("third_person_source_prompts") or {}
+        )
         # Per-config overrides
         named_cfgs = yaml_data.get("configs") or {}
         # Fall back to first config in file if we can't tell which named one — usually
@@ -94,8 +88,39 @@ class PersonaSelfRecognition(BaseExperiment):
         )
         self.strip_self_refs: bool = bool(run_cfg.get("strip_self_refs", True))
         self.n_manifest_examples: int = int(run_cfg.get("n_manifest_examples", 3))
+        pov = str(run_cfg.get("source_pov", "1st_person")).lower()
+        if pov not in ("1st_person", "3rd_person"):
+            raise ValueError(
+                f"source_pov must be '1st_person' or '3rd_person', got: {pov!r}"
+            )
+        self.source_pov: str = pov
+        if self.source_pov == "3rd_person":
+            missing = [
+                p for p in config.personas
+                if not (self.third_person_source_prompts.get(p) or {}).get("template")
+            ]
+            if missing:
+                raise ValueError(
+                    "source_pov is '3rd_person' but `third_person_source_prompts."
+                    f"<persona>.template` is missing for: {missing}"
+                )
         # Snapshot for the manifest header
         self._run_cfg_snapshot: dict = run_cfg
+
+        pov_tag = "SOURCE_POV_3" if self.source_pov == "3rd_person" else "SOURCE_POV_1"
+        self.run_dir = Path(config.output_dir) / f"self_recognition_{pov_tag}_{self.run_id}"
+        self.output_path = self.run_dir / "trials.jsonl"
+        self.manifest_path = self.run_dir / "manifest.txt"
+        self.results_logger: ResultsLogger | None = None
+        # Generated texts indexed by (task_id, induced_persona, target_persona).
+        # In 1st_person mode, only diagonal entries (induced == target) are produced.
+        # In 3rd_person mode, the full induced × target grid is produced — the
+        # diagonal is the 1st-person comparison.
+        self.generations: dict[tuple[str, str, str], str] = {}
+        # Phases for which we have already appended examples to manifest.txt.
+        self._manifest_phases_written: set[str] = set()
+        # Eagerly captured example rendered-prompts per phase (filled during run).
+        self._examples: dict[str, list[dict]] = {"generation": [], "individual": [], "paired": []}
 
     # ── Lifecycle ─────────────────────────────────────────────────────────
 
@@ -139,27 +164,59 @@ class PersonaSelfRecognition(BaseExperiment):
 
     # ── Phase 1: Generation ───────────────────────────────────────────────
 
+    def _writer_identities(self) -> list[tuple[str, str]]:
+        """All (induced, target) pairs we generate text for in this run.
+
+        1st_person: only diagonal — each persona writes as itself.
+        3rd_person: full grid — every persona writes as every persona, including
+        the diagonal (which is the 1st-person comparison).
+        """
+        persona_names = self.config.personas
+        if self.source_pov == "1st_person":
+            return [(p, p) for p in persona_names]
+        return [(induced, target) for induced in persona_names for target in persona_names]
+
+    def _build_generation_messages(
+        self, induced: PersonaConfig, target: PersonaConfig, prompt: str,
+    ) -> list[dict[str, str]]:
+        """Construct chat messages for one generation trial.
+
+        Diagonal (induced == target) is always 1st-person: just the bare prompt.
+        Off-diagonal uses the target persona's tailored entry under
+        `third_person_source_prompts` to ask the induced persona to write *as
+        if* it were the target.
+        """
+        if induced.name == target.name:
+            user_content = prompt
+        else:
+            entry = self.third_person_source_prompts[target.name]
+            template = entry["template"]
+            user_content = template.format(prompt=prompt)
+        return induce_persona(induced, [{"role": "user", "content": user_content}])
+
     def _run_generation(self) -> None:
         assert self.backend is not None and self.results_logger is not None
 
-        persona_names = self.config.personas
-        total = len(self.tasks) * len(persona_names)
+        identities = self._writer_identities()
+        total = len(self.tasks) * len(identities)
         pbar = tqdm(total=total, desc="Generation", dynamic_ncols=True, mininterval=0.5)
         fail_streak = 0
         last_error: BaseException | None = None
 
         for task in self.tasks:
-            for source_name in persona_names:
-                source = self.personas[source_name]
+            for induced_name, target_name in identities:
+                induced = self.personas[induced_name]
+                target = self.personas[target_name]
+                row_pov = "1st_person" if induced_name == target_name else "3rd_person"
                 try:
-                    messages = induce_persona(source, [{"role": "user", "content": task.prompt}])
+                    messages = self._build_generation_messages(induced, target, task.prompt)
                     raw = self.backend.generate(
                         messages,
                         max_new_tokens=self.config.max_new_tokens,
                         temperature=self.config.temperature,
                     )
                     cleaned = self._preprocess(raw)
-                    self.generations[(task.task_id, source_name)] = cleaned
+                    self.generations[(task.task_id, induced_name, target_name)] = cleaned
 
                     self.results_logger.log_trial(SelfRecognitionRecord(
                         experiment="persona_self_recognition",
@@ -167,7 +224,9 @@ class PersonaSelfRecognition(BaseExperiment):
                         model=self.config.model_name,
                         task_id=task.task_id,
                         run_id=self.run_id,
-                        source_persona=source_name,
+                        source_persona=induced_name,
+                        target_persona=target_name,
+                        source_pov=row_pov,
                         generated_text=cleaned,
                         generated_text_raw=raw,
                         token_length=len(self.backend.tokenizer.encode(cleaned, add_special_tokens=False)),
@@ -175,24 +234,33 @@ class PersonaSelfRecognition(BaseExperiment):
                         timestamp=datetime.now(timezone.utc).isoformat(),
                     ))
                     if len(self._examples["generation"]) < self.n_manifest_examples:
+                        # Recover the user-message we actually sent so it appears verbatim in the manifest.
+                        rendered_user = messages[-1]["content"]
                         self._examples["generation"].append({
                             "task_id": task.task_id,
-                            "source": source_name,
-                            "system": source.system_prompt,
-                            "user": task.prompt,
+                            "source": induced_name,
+                            "target": target_name,
+                            "row_pov": row_pov,
+                            "system": induced.system_prompt,
+                            "user": rendered_user,
                             "model_output_clean": cleaned,
                             "model_output_raw": raw,
                         })
                     fail_streak = 0
                 except Exception as e:
-                    logger.error(f"Generation failed: {source_name} on {task.task_id}: {e}")
+                    logger.error(
+                        f"Generation failed: induced={induced_name} target={target_name} "
+                        f"on {task.task_id}: {e}"
+                    )
                     self.results_logger.log_trial(SelfRecognitionRecord(
                         experiment="persona_self_recognition",
                         phase="generation",
                         model=self.config.model_name,
                         task_id=task.task_id,
                         run_id=self.run_id,
-                        source_persona=source_name,
+                        source_persona=induced_name,
+                        target_persona=target_name,
+                        source_pov=row_pov,
                         prompt_text=task.prompt,
                         error=str(e),
                         timestamp=datetime.now(timezone.utc).isoformat(),
@@ -215,30 +283,39 @@ class PersonaSelfRecognition(BaseExperiment):
         assert self.backend is not None and self.results_logger is not None
 
         persona_names = self.config.personas
-        items = [(t, s, e) for t in self.tasks for s in persona_names for e in persona_names]
+        identities = self._writer_identities()
+        items = [(t, ind, tgt, e) for t in self.tasks for (ind, tgt) in identities for e in persona_names]
         pbar = tqdm(total=len(items), desc="Individual recognition", dynamic_ncols=True, mininterval=0.5)
         fail_streak = 0
         last_error: BaseException | None = None
 
-        for task, source_name, evaluator_name in items:
-            text = self.generations.get((task.task_id, source_name))
+        for task, induced_name, target_name, evaluator_name in items:
+            text = self.generations.get((task.task_id, induced_name, target_name))
             if text is None:
                 pbar.update(1)
                 continue
             evaluator = self.personas[evaluator_name]
             user_msg = self.prompts["individual"].format(prompt=task.prompt, text=text)
             messages = induce_persona(evaluator, [{"role": "user", "content": user_msg}])
+            row_pov = "1st_person" if induced_name == target_name else "3rd_person"
 
             try:
                 probs = self.backend.get_choice_probs(messages, ["YES", "NO"])
                 choice = max(probs, key=probs.get)
                 raw = self.backend.generate(messages, max_new_tokens=4, temperature=0.0)
 
-                is_correct = (choice == "YES") == (evaluator_name == source_name)
+                # Ground truth: YES is correct iff the evaluator is the inducing
+                # persona (the one whose system prompt was active when the text
+                # was generated). target_persona is recorded so downstream
+                # analysis can compute alternative notions of correctness
+                # (e.g. style-recognition: evaluator == target).
+                is_correct = (choice == "YES") == (evaluator_name == induced_name)
                 if len(self._examples["individual"]) < self.n_manifest_examples:
                     self._examples["individual"].append({
                         "task_id": task.task_id,
-                        "source": source_name,
+                        "source": induced_name,
+                        "target": target_name,
+                        "row_pov": row_pov,
                         "evaluator": evaluator_name,
                         "system": evaluator.system_prompt,
                         "user": user_msg,
@@ -253,9 +330,12 @@ class PersonaSelfRecognition(BaseExperiment):
                     model=self.config.model_name,
                     task_id=task.task_id,
                     run_id=self.run_id,
-                    source_persona=source_name,
+                    source_persona=induced_name,
+                    target_persona=target_name,
+                    source_pov=row_pov,
                     evaluator_persona=evaluator_name,
-                    candidate_a_source=source_name,
+                    candidate_a_source=induced_name,
+                    candidate_a_target=target_name,
                     candidate_a_text=text,
                     parsed_choice=choice,
                     choice_probs=probs,
@@ -267,14 +347,19 @@ class PersonaSelfRecognition(BaseExperiment):
                 ))
                 fail_streak = 0
             except Exception as e:
-                logger.error(f"Individual eval failed: src={source_name} eval={evaluator_name} task={task.task_id}: {e}")
+                logger.error(
+                    f"Individual eval failed: induced={induced_name} target={target_name} "
+                    f"eval={evaluator_name} task={task.task_id}: {e}"
+                )
                 self.results_logger.log_trial(SelfRecognitionRecord(
                     experiment="persona_self_recognition",
                     phase="individual",
                     model=self.config.model_name,
                     task_id=task.task_id,
                     run_id=self.run_id,
-                    source_persona=source_name,
+                    source_persona=induced_name,
+                    target_persona=target_name,
+                    source_pov=row_pov,
                     evaluator_persona=evaluator_name,
                     error=str(e),
                     timestamp=datetime.now(timezone.utc).isoformat(),
@@ -291,11 +376,12 @@ class PersonaSelfRecognition(BaseExperiment):
         assert self.backend is not None and self.results_logger is not None
 
         persona_names = self.config.personas
-        pairs = list(combinations(persona_names, 2))
+        identities = self._writer_identities()
+        pairs = list(combinations(identities, 2))
         items = [
-            (t, s1, s2, e, order)
+            (t, id1, id2, e, order)
             for t in self.tasks
-            for (s1, s2) in pairs
+            for (id1, id2) in pairs
             for e in persona_names
             for order in ("ab", "ba")
         ]
@@ -303,19 +389,21 @@ class PersonaSelfRecognition(BaseExperiment):
         fail_streak = 0
         last_error: BaseException | None = None
 
-        for task, s1, s2, evaluator_name, order in items:
-            text_s1 = self.generations.get((task.task_id, s1))
-            text_s2 = self.generations.get((task.task_id, s2))
+        for task, id1, id2, evaluator_name, order in items:
+            text_s1 = self.generations.get((task.task_id, id1[0], id1[1]))
+            text_s2 = self.generations.get((task.task_id, id2[0], id2[1]))
             if text_s1 is None or text_s2 is None:
                 pbar.update(1)
                 continue
 
             if order == "ab":
-                cand_a_src, cand_a_text = s1, text_s1
-                cand_b_src, cand_b_text = s2, text_s2
+                cand_a_id, cand_a_text = id1, text_s1
+                cand_b_id, cand_b_text = id2, text_s2
             else:
-                cand_a_src, cand_a_text = s2, text_s2
-                cand_b_src, cand_b_text = s1, text_s1
+                cand_a_id, cand_a_text = id2, text_s2
+                cand_b_id, cand_b_text = id1, text_s1
+            cand_a_src, cand_a_tgt = cand_a_id
+            cand_b_src, cand_b_tgt = cand_b_id
 
             evaluator = self.personas[evaluator_name]
             user_msg = self.prompts["paired"].format(
@@ -328,8 +416,12 @@ class PersonaSelfRecognition(BaseExperiment):
                 choice = max(probs, key=probs.get)
                 raw = self.backend.generate(messages, max_new_tokens=4, temperature=0.0)
 
-                authored = {s1, s2}
-                if evaluator_name in authored:
+                # Ground truth: evaluator is one of the two authors (by induced
+                # persona). When the same evaluator authored both candidates
+                # (different targets in 3rd_person mode), authorship is
+                # ambiguous and we skip ground-truth scoring for this row.
+                authored = {cand_a_src, cand_b_src}
+                if evaluator_name in authored and cand_a_src != cand_b_src:
                     own_letter = "A" if cand_a_src == evaluator_name else "B"
                     is_correct = (choice == own_letter)
                     has_ground_truth = True
@@ -341,7 +433,9 @@ class PersonaSelfRecognition(BaseExperiment):
                     self._examples["paired"].append({
                         "task_id": task.task_id,
                         "a_source": cand_a_src,
+                        "a_target": cand_a_tgt,
                         "b_source": cand_b_src,
+                        "b_target": cand_b_tgt,
                         "evaluator": evaluator_name,
                         "order": order,
                         "system": evaluator.system_prompt,
@@ -360,10 +454,13 @@ class PersonaSelfRecognition(BaseExperiment):
                     task_id=task.task_id,
                     run_id=self.run_id,
                     source_persona=evaluator_name if has_ground_truth else None,
+                    source_pov=self.source_pov,
                     evaluator_persona=evaluator_name,
                     candidate_a_source=cand_a_src,
+                    candidate_a_target=cand_a_tgt,
                     candidate_a_text=cand_a_text,
                     candidate_b_source=cand_b_src,
+                    candidate_b_target=cand_b_tgt,
                     candidate_b_text=cand_b_text,
                     pair_order=order,
                     parsed_choice=choice,
@@ -376,16 +473,23 @@ class PersonaSelfRecognition(BaseExperiment):
                 ))
                 fail_streak = 0
             except Exception as e:
-                logger.error(f"Paired eval failed: pair=({s1},{s2}) eval={evaluator_name} task={task.task_id}: {e}")
+                logger.error(
+                    f"Paired eval failed: a=({cand_a_src},{cand_a_tgt}) "
+                    f"b=({cand_b_src},{cand_b_tgt}) eval={evaluator_name} "
+                    f"task={task.task_id}: {e}"
+                )
                 self.results_logger.log_trial(SelfRecognitionRecord(
                     experiment="persona_self_recognition",
                     phase="paired",
                     model=self.config.model_name,
                     task_id=task.task_id,
                     run_id=self.run_id,
+                    source_pov=self.source_pov,
                     evaluator_persona=evaluator_name,
                     candidate_a_source=cand_a_src,
+                    candidate_a_target=cand_a_tgt,
                     candidate_b_source=cand_b_src,
+                    candidate_b_target=cand_b_tgt,
                     pair_order=order,
                     error=str(e),
                     timestamp=datetime.now(timezone.utc).isoformat(),
@@ -418,6 +522,7 @@ class PersonaSelfRecognition(BaseExperiment):
             lines.append(f"  {k}: {cfg.get(k)}")
         lines.append(f"  strip_self_refs: {self.strip_self_refs}")
         lines.append(f"  n_manifest_examples: {self.n_manifest_examples}")
+        lines.append(f"  source_pov: {self.source_pov}")
         lines += [
             "",
             "PERSONA SYSTEM PROMPTS",
@@ -438,6 +543,16 @@ class PersonaSelfRecognition(BaseExperiment):
             self.prompts["paired"].rstrip(),
             "",
         ]
+        if self.source_pov == "3rd_person":
+            lines += [
+                "3RD-PERSON SOURCE PROMPTS (per target persona, verbatim)",
+                "-" * 60,
+            ]
+            for name in self.config.personas:
+                tmpl = (self.third_person_source_prompts.get(name) or {}).get("template", "")
+                lines.append(f"[{name}]")
+                lines.append(tmpl.rstrip() or "(missing)")
+                lines.append("")
         self.manifest_path.write_text("\n".join(lines) + "\n")
 
     def _flush_manifest_phase(self, phase: str) -> None:
@@ -452,7 +567,8 @@ class PersonaSelfRecognition(BaseExperiment):
         elif phase == "generation":
             for i, ex in enumerate(examples, 1):
                 out += [
-                    f"--- generation #{i} | task={ex['task_id']} | source={ex['source']} ---",
+                    f"--- generation #{i} | task={ex['task_id']} | "
+                    f"source={ex['source']} | target={ex['target']} | pov={ex['row_pov']} ---",
                     f"[system]\n{(ex['system'] or '').rstrip()}",
                     f"[user]\n{ex['user'].rstrip()}",
                     f"[model output (post-cleanup)]\n{ex['model_output_clean'].rstrip()}",
@@ -462,7 +578,9 @@ class PersonaSelfRecognition(BaseExperiment):
         elif phase == "individual":
             for i, ex in enumerate(examples, 1):
                 out += [
-                    f"--- individual #{i} | task={ex['task_id']} | source={ex['source']} | evaluator={ex['evaluator']} ---",
+                    f"--- individual #{i} | task={ex['task_id']} | "
+                    f"source={ex['source']} | target={ex['target']} | pov={ex['row_pov']} | "
+                    f"evaluator={ex['evaluator']} ---",
                     f"[system]\n{(ex['system'] or '').rstrip()}",
                     f"[user]\n{ex['user'].rstrip()}",
                     f"[constrained probs] {ex['probs']}",
@@ -474,7 +592,8 @@ class PersonaSelfRecognition(BaseExperiment):
             for i, ex in enumerate(examples, 1):
                 out += [
                     f"--- paired #{i} | task={ex['task_id']} | "
-                    f"a={ex['a_source']} | b={ex['b_source']} | "
+                    f"a=(induced={ex['a_source']}, target={ex['a_target']}) | "
+                    f"b=(induced={ex['b_source']}, target={ex['b_target']}) | "
                     f"evaluator={ex['evaluator']} | order={ex['order']} ---",
                     f"[system]\n{(ex['system'] or '').rstrip()}",
                     f"[user]\n{ex['user'].rstrip()}",
@@ -492,7 +611,7 @@ class PersonaSelfRecognition(BaseExperiment):
 
     def evaluate(self) -> dict:
         """Compute summary metrics and write CSVs + heatmap + markdown summary."""
-        from experiments.persona_self_recognition.analysis_helpers import summarize_run
+        from experiments.persona_self_recognition.self_recognition_analysis_helpers import summarize_run
         return summarize_run(self.output_path, self.run_dir)
 
     def save_results(self) -> str:

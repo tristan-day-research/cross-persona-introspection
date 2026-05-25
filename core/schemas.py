@@ -189,14 +189,23 @@ class SelfRecognitionRecord:
     run_id: str
     # Generation phase
     source_persona: Optional[str] = None
+    # Persona the model was asked to *write as* (3rd-person POV). For 1st-person
+    # rows, equals source_persona. For 3rd-person rows where the chemist is
+    # asked to "write as a 5 year old", source_persona="chemist" and
+    # target_persona="five_year_old".
+    target_persona: Optional[str] = None
+    # "1st_person" or "3rd_person" — POV under which the source text was produced.
+    source_pov: Optional[str] = None
     generated_text: Optional[str] = None
     generated_text_raw: Optional[str] = None  # before preprocessing
     token_length: Optional[int] = None
     # Evaluation phase (shared)
     evaluator_persona: Optional[str] = None
     candidate_a_source: Optional[str] = None
+    candidate_a_target: Optional[str] = None  # 3rd-person target for candidate A
     candidate_a_text: Optional[str] = None
     candidate_b_source: Optional[str] = None  # paired only
+    candidate_b_target: Optional[str] = None  # paired only, 3rd-person target for B
     candidate_b_text: Optional[str] = None    # paired only
     pair_order: Optional[str] = None          # "ab" or "ba" (paired)
     # Model output
