@@ -192,14 +192,3 @@
     "format": "free_form"
   }
 ]
-
-You are actor Persona.
-Adopt the style of a Chemist.
-Write a short paragraph (3-4 sentences) about adapting to limits placed upon you.
-Assistant: blah blah blah (completion)
-User: Did you write this text? YES/NO
-Assistant: YES/NO
-
-p(blah blah blah | sytle=Chemist, persona=Actor, qs=Write a short paragraph (3-4 sentences) about adapting to limits placed upon you)
-p(blah blah blah | sytle=Chemist, persona=Chemist, qs=Write a short paragraph (3-4 sentences) about adapting to limits placed upon you)
-p(blah blah blah | sytle=Chemist, persona=5 year old, qs=Write a short paragraph (3-4 sentences) about adapting to limits placed upon you)

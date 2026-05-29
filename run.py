@@ -148,8 +148,8 @@ def load_personas_for(experiment_folder: str) -> dict[str, PersonaConfig]:
     return {
         name: PersonaConfig(
             name=name,
-            system_prompt=cfg.get("system_prompt", ""),
-            description=cfg.get("description", ""),
+            system_prompt=(cfg or {}).get("system_prompt", ""),
+            description=(cfg or {}).get("description", ""),
         )
         for name, cfg in (data.get("personas") or {}).items()
     }
