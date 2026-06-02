@@ -429,8 +429,8 @@ class _MockBackend:
         content = messages[-1]["content"]
         if "Probability:" in content:
             return "73"
-        if "CONFIDENCE" in content:
-            return "CHOICE: A\nCONFIDENCE: 80"
+        if "confidence:" in content.lower():
+            return "choice: A\nconfidence: 80"
         if "YES or NO" in content:
             return "YES"
         return "A short generated paragraph about the topic."

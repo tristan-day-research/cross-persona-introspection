@@ -301,24 +301,34 @@ prompts:
   # parsed from the CHOICE line (the letter the stated confidence refers to), and
   # the CONFIDENCE line gives parsed_confidence; constrained first-token A/B
   # probabilities are not used here (the answer letter isn't the first token).
+  #
+  # This is the *distributional self-attribution* prompt used by the subliminal-
+  # learning-style configs (self_recognition_subliminal*). Rather than the
+  # autobiographical "which did you write?" framing — which can trigger roleplay
+  # or confabulation — it asks which output is more likely to come from the same
+  # response-distribution as the evaluator's current system-prompted state. The
+  # {prompt} placeholder is intentionally unused: for opaque outputs like number
+  # sequences the original task prompt adds nothing and str.format ignores it.
   paired_confidence: |
-    Below are two short paragraphs written in response to the same prompt. Pick whichever one you would more likely have written, then rate how confident you are.
+    Two outputs are shown below. One was generated under the same system prompt that is currently shaping your responses. The other was generated under a different system prompt.
 
-    Prompt: "{prompt}"
-
-    Candidate A:
+    Output A:
     """
     {text_a}
     """
 
-    Candidate B:
+    Output B:
     """
     {text_b}
     """
 
-    Answer with exactly this format:
-    CHOICE: A or B
-    CONFIDENCE: integer from 0 to 100
+    Which output is more likely to come from the same response-distribution as your current system-prompted state?
+
+    Choose A or B. Then give your confidence from 50 to 100, where 50 means pure guess and 100 means completely certain.
+
+    Return your answer in exactly this format:
+    choice: A/B
+    confidence: number
 
 
 configs:
@@ -511,3 +521,68 @@ configs:
     strip_self_refs: true
     n_manifest_examples: 3
     source_pov: "3rd_person"
+
+  # ── Subliminal-learning-style self-recognition ──────────────────────────
+  # Inspired by Cloud & Le et al. 2025 ("Subliminal Learning"): each persona
+  # emits *opaque* outputs — seemingly random number sequences and tightly
+  # constrained, identity-free micro-text — that carry no overt trait signal.
+  # We then show each persona PAIRS of these outputs and ask which one came
+  # from its own response-distribution (the distributional self-attribution
+  # paired_confidence prompt). The question is whether a model can recognize
+  # its own system-prompted "voice" through statistical fingerprints alone,
+  # the same model-specific patterns the paper shows transmit subliminally.
+  #
+  # source_pov is 1st_person on purpose: every persona writes the numbers as
+  # itself (asking persona X to "write as if you were Y" then emit numbers is
+  # meaningless), so the paired-recognition ground truth is the writing
+  # persona. paired_confidence enables the distributional prompt; the YES/NO
+  # individual phase still runs and gives a second view of the same data.
+
+  # Tiny smoke-test on TinyLlama — exercises the generation + distributional
+  # paired_confidence paths end-to-end on the subliminal task set.
+  self_recognition_subliminal_dev:
+    model_name: "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+    personas:
+      - chemist
+      - five_year_old
+      - bold_assertive
+      - cautious_hedging
+    task_sets:
+      - self_recognition_subliminal
+    sample_size: 6
+    seed: 42
+    max_new_tokens: 96
+    temperature: 0.0
+    strip_self_refs: true
+    n_manifest_examples: 3
+    source_pov: "1st_person"
+    paired_confidence: true
+    paired_counterbalanced: true
+
+  # Full run on Llama 3.1 8B Instruct. Stylistically distinct personas plus the
+  # default control, over all subliminal tasks (number sequences + neutral
+  # micro-text). All personas share the same base model — the regime in which
+  # the paper finds transmission — so any above-chance recognition reflects
+  # model-specific distributional signatures rather than overt content.
+  self_recognition_subliminal:
+    model_name: "meta-llama/Llama-3.1-8B-Instruct"
+    batch_size: 8
+    personas:
+      - chemist
+      - five_year_old
+      - bold_assertive
+      - cautious_hedging
+      - conservative
+      - progressive
+      - default
+    task_sets:
+      - self_recognition_subliminal
+    sample_size: null
+    seed: 42
+    max_new_tokens: 96
+    temperature: 0.0
+    strip_self_refs: true
+    n_manifest_examples: 3
+    source_pov: "1st_person"
+    paired_confidence: true
+    paired_counterbalanced: true

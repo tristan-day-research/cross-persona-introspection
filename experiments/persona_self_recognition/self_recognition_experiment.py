@@ -469,7 +469,7 @@ class PersonaSelfRecognition(BaseExperiment):
     # ── Generic batched / shardable phase driver ──────────────────────────
 
     def _drive(self, items, desc, phase, build_ctx, infer_batch, infer_single,
-               score_and_log, error_record) -> None:
+               score_and_log, error_record, batch: "int | None" = None) -> None:
         """Run one phase over `items`, sharded and batched.
 
         Control flow is identical regardless of batch size, so scoring/logging
@@ -484,16 +484,20 @@ class PersonaSelfRecognition(BaseExperiment):
           - score_and_log(item, ctx, out) writes the trial; error_record(item, exc)
             writes an error row. Consecutive-failure aborts are unchanged.
 
-        With batch_size==1 each chunk has one item and infer_single is used —
-        byte-for-byte the legacy per-item path.
+        With batch==1 each chunk has one item and infer_single is used —
+        byte-for-byte the legacy per-item path. `batch` overrides self.batch_size
+        for this phase (the generation phase forces 1 so greedy decoding stays
+        bitwise-reproducible regardless of batch size / GPU count; batched greedy
+        decoding can otherwise flip a late token via float-accumulation noise).
         """
+        bs = self.batch_size if batch is None else max(1, batch)
         if self.shard is not None:
             items = self.shard.shard(items)
         pbar = tqdm(total=len(items), desc=desc, dynamic_ncols=True, mininterval=0.5)
         fail_streak = 0
         last_error: BaseException | None = None
 
-        for chunk in _chunks(items, self.batch_size):
+        for chunk in _chunks(items, bs):
             built = []
             for it in chunk:
                 try:
@@ -503,7 +507,7 @@ class PersonaSelfRecognition(BaseExperiment):
                 built.append((it, ctx))
             valid = [(it, ctx) for (it, ctx) in built if ctx is not None]
 
-            if self.batch_size > 1 and len(valid) > 1:
+            if bs > 1 and len(valid) > 1:
                 try:
                     outs = infer_batch([ctx for (_, ctx) in valid])
                     for (_, ctx), o in zip(valid, outs):
@@ -643,7 +647,11 @@ class PersonaSelfRecognition(BaseExperiment):
                 timestamp=datetime.now(timezone.utc).isoformat(),
             ))
 
-        self._drive(items, "Generation", "generation", build_ctx, infer_batch, infer_single, score_and_log, error_record)
+        # batch=1: keep greedy generation bitwise-reproducible (the candidate
+        # texts are data downstream phases consume). Generation still shards
+        # across GPUs, so it parallelizes without batched-decode drift.
+        self._drive(items, "Generation", "generation", build_ctx, infer_batch,
+                    infer_single, score_and_log, error_record, batch=1)
 
     def _preprocess(self, text: str) -> str:
         text = text.strip()
