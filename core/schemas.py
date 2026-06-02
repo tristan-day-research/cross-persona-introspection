@@ -62,15 +62,21 @@ class RunConfig:
     patchscope_config: Optional[str] = None
     # Model dtype: "bfloat16", "float16", "float32", or None (auto: float16 on CUDA)
     model_dtype: Optional[str] = None
-    # Inference batch size (activation_probing only; >1 requires padding support)
+    # Inference batch size. >1 batches recognition/generation calls through the
+    # backend's *_batch methods (padded forward passes). 1 = unbatched (legacy).
     batch_size: int = 1
+    # Number of GPUs for data-parallel sharding of a self-recognition run.
+    #   None  → auto-detect (use all visible CUDA devices)
+    #   1     → single-process (no sharding)
+    #   N>1   → split the workload across N worker processes, one per GPU
+    num_gpus: Optional[int] = None
     # Optional OpenRouter judge
     openrouter_model: Optional[str] = None
     openrouter_api_key: Optional[str] = None
     # Optional HuggingFace LoRA adapter id/path. When set, the model is treated
     # as a fine-tuned variant: the adapter's short name labels the run directory
-    # and figures (e.g. Llama_8b_<adapter>). Loading the adapter itself is not
-    # yet wired into the backend — this field only drives naming/labelling.
+    # and figures (e.g. Llama_8b_<adapter>), and the adapter is loaded onto the
+    # base model via PEFT in the HF backend.
     adapter: Optional[str] = None
 
 

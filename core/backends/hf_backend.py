@@ -55,8 +55,10 @@ def _require_gpu(resolved_device: str) -> None:
 class HFBackend:
     """Backend for local HuggingFace causal language models."""
 
-    def __init__(self, model_name: str, device: Optional[str] = None, torch_dtype=None):
+    def __init__(self, model_name: str, device: Optional[str] = None, torch_dtype=None,
+                 adapter: Optional[str] = None):
         self.model_name = model_name
+        self.adapter = adapter
         self.device = device or ("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
         _require_gpu(self.device)
         self.torch_dtype = torch_dtype or (torch.float16 if self.device == "cuda" else torch.float32)
@@ -95,6 +97,18 @@ class HFBackend:
             )
         if self.device != "auto":
             self.model = self.model.to(self.device)
+
+        # Optionally load a LoRA (PEFT) adapter on top of the base model. The
+        # adapter is the HF repo id / local path of the trained adapter; its
+        # adapter_config.json's base_model must match `model_name`.
+        if adapter:
+            from peft import PeftModel
+
+            logger.info("Loading LoRA adapter: %s", adapter)
+            self.model = PeftModel.from_pretrained(self.model, adapter, torch_dtype=self.torch_dtype)
+            if self.device != "auto":
+                self.model = self.model.to(self.device)
+
         self.model.eval()
 
     @property
@@ -268,6 +282,140 @@ class HFBackend:
             return probs_dict, logits_dict, logprobs_dict, total_choice_prob
 
         return probs_dict, logits_dict
+
+    # ── Batched chat methods (multiple message-lists in one forward pass) ──
+    #
+    # These mirror generate / get_choice_probs / get_choice_probs_and_logprobs
+    # but accept a list of message-lists and process them in a single padded
+    # batch. They are pure speedups: for batch size 1 they return the same
+    # values as the single-item methods. Left padding is used so the final
+    # (-1) position is the true last token of every sequence regardless of
+    # length, which is what both constrained-choice logit reads and generation
+    # require for a decoder-only model.
+
+    def _encode_chat_batch(self, messages_list: list[list[dict[str, str]]]):
+        """Apply the chat template to each message-list and left-pad into a batch.
+
+        Returns (input_ids, attention_mask) on the input device.
+        """
+        texts = [
+            self.tokenizer.apply_chat_template(
+                m, tokenize=False, add_generation_prompt=True
+            )
+            for m in messages_list
+        ]
+        prev_side = self.tokenizer.padding_side
+        self.tokenizer.padding_side = "left"
+        try:
+            enc = self.tokenizer(texts, return_tensors="pt", padding=True, add_special_tokens=False)
+        finally:
+            self.tokenizer.padding_side = prev_side
+        return enc["input_ids"].to(self.input_device), enc["attention_mask"].to(self.input_device)
+
+    @staticmethod
+    def _position_ids_from_mask(attention_mask: torch.Tensor) -> torch.Tensor:
+        """Left-padding-correct position ids for a plain forward pass.
+
+        With left padding, a bare forward defaults position_ids to arange, which
+        would assign the pad columns positions 0..k and shift the real tokens —
+        corrupting the logits. generate() derives these from the mask internally,
+        but a direct model(...) call does not, so we compute them explicitly:
+        cumsum over the mask, zeroed where padded.
+        """
+        pos = attention_mask.long().cumsum(-1) - 1
+        return pos.clamp(min=0).masked_fill(attention_mask == 0, 0)
+
+    def _choice_probs_from_logits(self, logits: torch.Tensor, choices: list[str]) -> dict[str, float]:
+        """Softmax over the per-choice best first-token logit. Mirrors get_choice_probs."""
+        choice_best_logits = {}
+        for choice in choices:
+            candidate_logit_values = []
+            for variant in (choice, " " + choice):
+                tokens = self.tokenizer.encode(variant, add_special_tokens=False)
+                if tokens:
+                    candidate_logit_values.append(logits[tokens[0]].item())
+            if candidate_logit_values:
+                choice_best_logits[choice] = max(candidate_logit_values)
+        choice_logits = torch.tensor(list(choice_best_logits.values()))
+        probs = F.softmax(choice_logits, dim=0)
+        return {choice: probs[i].item() for i, choice in enumerate(choice_best_logits.keys())}
+
+    def generate_batch(
+        self,
+        messages_list: list[list[dict[str, str]]],
+        max_new_tokens: int = 256,
+        temperature: float = 0.0,
+        do_sample: bool = False,
+    ) -> list[str]:
+        """Batched generate(). Returns one decoded response per message-list."""
+        if not messages_list:
+            return []
+        input_ids, attention_mask = self._encode_chat_batch(messages_list)
+        with torch.no_grad():
+            output_ids = self.model.generate(
+                input_ids,
+                attention_mask=attention_mask,
+                max_new_tokens=max_new_tokens,
+                temperature=temperature if do_sample else None,
+                do_sample=do_sample,
+                pad_token_id=self.tokenizer.pad_token_id,
+            )
+        # Left padding means every row's prompt occupies the same number of
+        # columns, so new tokens start at input_ids.shape[1] for all rows.
+        prompt_len = input_ids.shape[1]
+        return [
+            self.tokenizer.decode(output_ids[i, prompt_len:], skip_special_tokens=True)
+            for i in range(len(messages_list))
+        ]
+
+    def get_choice_probs_batch(
+        self, messages_list: list[list[dict[str, str]]], choices: list[str]
+    ) -> list[dict[str, float]]:
+        """Batched get_choice_probs(). Returns one probs-dict per message-list."""
+        if not messages_list:
+            return []
+        input_ids, attention_mask = self._encode_chat_batch(messages_list)
+        position_ids = self._position_ids_from_mask(attention_mask)
+        with torch.no_grad():
+            outputs = self.model(input_ids, attention_mask=attention_mask, position_ids=position_ids)
+        last_logits = outputs.logits[:, -1, :]  # (batch, vocab) — left-padded, so -1 is the real last token
+        return [self._choice_probs_from_logits(last_logits[i], choices) for i in range(len(messages_list))]
+
+    def get_choice_probs_and_logprobs_batch(
+        self, messages_list: list[list[dict[str, str]]], choices: list[str]
+    ) -> list[tuple[dict[str, float], dict[str, float]]]:
+        """Batched get_choice_probs_and_logprobs(). Returns (probs, logprobs) per row."""
+        if not messages_list:
+            return []
+        input_ids, attention_mask = self._encode_chat_batch(messages_list)
+        position_ids = self._position_ids_from_mask(attention_mask)
+        with torch.no_grad():
+            outputs = self.model(input_ids, attention_mask=attention_mask, position_ids=position_ids)
+        last_logits = outputs.logits[:, -1, :]
+        results = []
+        for i in range(len(messages_list)):
+            logits = last_logits[i]
+            full_logprobs = F.log_softmax(logits, dim=0)
+            choice_best_logit: dict[str, float] = {}
+            choice_best_logprob: dict[str, float] = {}
+            for choice in choices:
+                best_logit = None
+                best_logprob = None
+                for variant in (choice, " " + choice):
+                    tokens = self.tokenizer.encode(variant, add_special_tokens=False)
+                    if tokens:
+                        lg = logits[tokens[0]].item()
+                        if best_logit is None or lg > best_logit:
+                            best_logit = lg
+                            best_logprob = full_logprobs[tokens[0]].item()
+                if best_logit is not None:
+                    choice_best_logit[choice] = best_logit
+                    choice_best_logprob[choice] = best_logprob
+            choice_logits = torch.tensor(list(choice_best_logit.values()))
+            probs = F.softmax(choice_logits, dim=0)
+            probs_dict = {c: probs[j].item() for j, c in enumerate(choice_best_logit.keys())}
+            results.append((probs_dict, choice_best_logprob))
+        return results
 
     # ── Raw text methods (for base / non-instruct models) ────────────────
 

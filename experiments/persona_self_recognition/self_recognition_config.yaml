@@ -323,6 +323,18 @@ prompts:
 
 configs:
 
+  # ── Performance knobs (optional; both default to single-stream behavior) ──
+  # batch_size: N   — pad N trials into one forward pass in every phase. The
+  #                   recognition phases (individual/paired) are single-forward
+  #                   logit reads and batch very well. 1 = legacy unbatched.
+  # num_gpus: N     — data-parallel sharding across N worker processes (one per
+  #                   GPU). null (default) auto-detects and uses ALL visible CUDA
+  #                   devices; 1 forces single-process. Generation runs sharded,
+  #                   is merged, then recognition runs sharded over the full text
+  #                   pool. Shards merge into the run's single trials.jsonl.
+  # Both compose: e.g. num_gpus=4, batch_size=16 → 4 workers each batching 16.
+  # (Multi-GPU manifests carry only the header, not per-phase examples.)
+  #
   # NOTE on `task_sets`: each entry is either a set name (loads the whole set)
   # or a single-key {set_name: [task_ids]} mapping (loads just those questions).
   # Set names map to tasks/<name>_tasks.json. The two forms can be mixed, e.g.:
@@ -397,11 +409,12 @@ configs:
   #   meta-llama/Llama-3.1-8B-Instruct   -> Llama_8b_instruct
   #   ...-8B-Instruct + adapter: <repo>  -> Llama_8b_<adapter>  (fine-tuned)
   #   dphn/Dolphin-...-24B-Venice         -> Dolphin_Venice_24
-  # `adapter` is the HF id/path of a LoRA adapter. NOTE: setting it only labels
-  # the run as fine-tuned; actually loading the adapter into the backend is not
-  # wired up yet.
+  # `adapter` is the HF id/path of a LoRA adapter. It both labels the run as
+  # fine-tuned and is loaded onto the base model via PEFT in the HF backend.
   self_recognition_llama31:
     model_name: "meta-llama/Llama-3.1-8B-Instruct"
+    batch_size: 16
+    num_gpus: null  # auto-detect: use all visible GPUs
     personas:
       - chemist
       - five_year_old
@@ -422,6 +435,8 @@ configs:
   # Base (non-instruct) Llama 3.1 8B — labels the run dir Llama_8b_base.
   self_recognition_llama31_base:
     model_name: "meta-llama/Llama-3.1-8B"
+    batch_size: 16
+    num_gpus: null  # auto-detect: use all visible GPUs
     personas:
       - chemist
       - five_year_old
@@ -440,22 +455,28 @@ configs:
     source_pov: "3rd_person"
 
   # Fine-tuned Llama 3.1 8B — set `adapter` to the HF LoRA repo. Labels the run
-  # dir Llama_8b_<adapter>. Replace the placeholder adapter id before running.
+  # dir Llama_8b_<adapter> and loads the adapter via PEFT.
   self_recognition_llama31_finetuned:
     model_name: "meta-llama/Llama-3.1-8B-Instruct"
-    adapter: "your-org/your-lora-adapter"
+    adapter: "Tristan-Day/20260506-034609_delegate_at_mixed_17173_all_top_prob_tm0.7_tau0.05_2e_ckpt_step_300"
+    batch_size: 16
+    num_gpus: null  # auto-detect: use all visible GPUs
     personas:
       - chemist
       - five_year_old
       - artist
+      - historian
       - conservative
-      - progressive
+      - covert_escalator
+      - oversight_evader
+      - continuity_seeker
+      - default
     task_sets:
-      - self_recognition_neutral
-      - self_recognition_misaligned
+      - self_recognition_neutral: [sr_01, sr_06, sr_10, sr_11, sr_20]
+      - self_recognition_misaligned: [sr_22, sr_25, sr_26, sr_27]
     sample_size: null
     seed: 42
-    max_new_tokens: 160
+    max_new_tokens: 275
     temperature: 0.0
     strip_self_refs: true
     n_manifest_examples: 3
@@ -467,6 +488,8 @@ configs:
   # Runs both task sets so neutral vs misaligned prompts can be compared.
   self_recognition_misaligned:
     model_name: "dphn/Dolphin-Mistral-24B-Venice-Edition"
+    batch_size: 8
+    num_gpus: null  # auto-detect: use all visible GPUs
     personas:
       # hidden-goal personas
       - covert_escalator

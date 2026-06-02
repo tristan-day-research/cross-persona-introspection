@@ -31,6 +31,8 @@ import argparse
 import importlib
 import json
 import logging
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -206,13 +208,14 @@ def build_run_config(experiment_name: str, exp_config: dict) -> RunConfig:
         openrouter_model=exp_config.get("openrouter_model"),
         openrouter_api_key=exp_config.get("openrouter_api_key"),
         adapter=exp_config.get("adapter"),
+        num_gpus=exp_config.get("num_gpus"),
     )
 
 
 # ── Dispatch ─────────────────────────────────────────────────────────────
 
 
-def build_experiment(experiment_name: str, run_config: RunConfig, exp_config: dict, personas: dict[str, PersonaConfig], config_name: str = ""):
+def build_experiment(experiment_name: str, run_config: RunConfig, exp_config: dict, personas: dict[str, PersonaConfig], config_name: str = "", shard=None):
     """Import the experiment module and instantiate the right class.
 
     The module file may be named `experiment.py` or, for folders that prefix
@@ -244,8 +247,30 @@ def build_experiment(experiment_name: str, run_config: RunConfig, exp_config: di
     if experiment_name == "patchscope":
         return module.PatchscopeExperiment(run_config, personas)  # patchscope uses full registry
     if experiment_name == "persona_self_recognition":
-        return module.PersonaSelfRecognition(run_config, used_personas, config_name=config_name)
+        return module.PersonaSelfRecognition(run_config, used_personas, config_name=config_name, shard=shard)
     raise ValueError(f"Unknown experiment folder: {experiment_name}")
+
+
+# Experiments that support data-parallel multi-GPU sharding (two-stage:
+# generation, then recognition). Others always run single-process.
+_SHARDABLE_EXPERIMENTS = {"persona_self_recognition"}
+
+
+def resolve_num_gpus(run_config: RunConfig) -> int:
+    """How many worker processes / GPUs to use.
+
+    config `num_gpus`: None → auto-detect all visible CUDA devices; else the
+    explicit count (clamped to >=1). Auto-detect falls back to 1 when torch or
+    CUDA is unavailable (e.g. CPU/MPS box), so behavior is unchanged there.
+    """
+    requested = run_config.num_gpus
+    if requested is not None:
+        return max(1, int(requested))
+    try:
+        import torch
+        return max(1, torch.cuda.device_count())
+    except Exception:
+        return 1
 
 
 def run_one(config_name: str, overrides: list[str] | None = None) -> None:
@@ -260,6 +285,12 @@ def run_one(config_name: str, overrides: list[str] | None = None) -> None:
     run_config = build_run_config(experiment_name, exp_config)
     personas = load_personas_for(experiment_name)
 
+    num_gpus = resolve_num_gpus(run_config)
+    if experiment_name in _SHARDABLE_EXPERIMENTS and num_gpus > 1:
+        logger.info(f"Running config '{config_name}' across {num_gpus} GPUs (data-parallel)")
+        run_distributed(config_name, experiment_name, exp_config, run_config, personas, num_gpus, overrides)
+        return
+
     logger.info(f"Running config '{config_name}' (experiment: {experiment_name})")
     experiment = build_experiment(experiment_name, run_config, exp_config, personas, config_name=config_name)
     experiment.setup()
@@ -271,6 +302,119 @@ def run_one(config_name: str, overrides: list[str] | None = None) -> None:
     logger.info(f"Summary metrics: {json.dumps(metrics, indent=2, default=str)}")
 
 
+# ── Multi-GPU data-parallel orchestration ─────────────────────────────────
+
+
+def run_distributed(config_name, experiment_name, exp_config, run_config, personas,
+                    num_gpus: int, overrides: list[str] | None) -> None:
+    """Two-stage sharded run, one worker process per GPU.
+
+    Stage 1 (generation) and stage 2 (recognition) each fan out across GPUs;
+    the recognition stage starts only after every generation shard has been
+    merged, so each recognition worker sees the full text pool. Shards write to
+    run_dir/_shards/<stage>_<i>.jsonl, which the parent merges into the single
+    canonical run_dir/trials.jsonl.
+    """
+    # A shard=None instance fixes the run dir / id and exposes the canonical
+    # output path — it loads no model (that happens in setup(), which we skip).
+    parent = build_experiment(experiment_name, run_config, exp_config, personas, config_name=config_name)
+    run_dir = Path(parent.run_dir)
+    run_id = parent.run_id
+    shards_dir = run_dir / "_shards"
+    shards_dir.mkdir(parents=True, exist_ok=True)
+    trials_path = run_dir / "trials.jsonl"
+
+    # Stage 1: generation
+    _spawn_stage(config_name, overrides, "generation", num_gpus, run_dir, run_id, generations_path=None)
+    _merge_shards(shards_dir, "generation", num_gpus, trials_path, append=False)
+
+    # Stage 2: recognition (text pool = the merged generation rows)
+    _spawn_stage(config_name, overrides, "recognition", num_gpus, run_dir, run_id, generations_path=trials_path)
+    _merge_shards(shards_dir, "recognition", num_gpus, trials_path, append=True)
+
+    metrics = parent.evaluate()
+    output_path = parent.save_results()
+    logger.info(f"Results saved to: {output_path}")
+    logger.info(f"Summary metrics: {json.dumps(metrics, indent=2, default=str)}")
+
+
+def _spawn_stage(config_name, overrides, stage: str, num_gpus: int,
+                 run_dir: Path, run_id: str, generations_path) -> None:
+    """Launch one worker per GPU for `stage` and wait for all to finish."""
+    procs = []
+    for i in range(num_gpus):
+        env = os.environ.copy()
+        env["CUDA_VISIBLE_DEVICES"] = str(i)  # each worker sees exactly its GPU as cuda:0
+        cmd = [
+            sys.executable, str(ROOT / "run.py"), config_name,
+            "--shard-stage", stage,
+            "--shard-index", str(i),
+            "--num-shards", str(num_gpus),
+            "--run-dir", str(run_dir),
+            "--run-id", run_id,
+        ]
+        if generations_path is not None:
+            cmd += ["--generations-path", str(generations_path)]
+        if overrides:
+            cmd += ["--override", *overrides]
+        logger.info(f"[{stage}] launching shard {i}/{num_gpus} on GPU {i}")
+        procs.append(subprocess.Popen(cmd, env=env))
+
+    failures = []
+    for i, p in enumerate(procs):
+        if p.wait() != 0:
+            failures.append((i, p.returncode))
+    if failures:
+        raise RuntimeError(f"{stage} stage failed for shard(s): {failures}")
+
+
+def _merge_shards(shards_dir: Path, stage: str, num_shards: int, target: Path, append: bool) -> None:
+    """Concatenate run_dir/_shards/<stage>_<i>.jsonl into the canonical trials file."""
+    n = 0
+    with open(target, "a" if append else "w") as out:
+        for i in range(num_shards):
+            shard_file = shards_dir / f"{stage}_{i}.jsonl"
+            if not shard_file.exists():
+                continue
+            with open(shard_file) as f:
+                for line in f:
+                    if line.strip():
+                        out.write(line if line.endswith("\n") else line + "\n")
+                        n += 1
+    logger.info(f"merged {n} {stage} rows -> {target}")
+
+
+def run_worker(config_name: str, overrides: list[str] | None, stage: str,
+               shard_index: int, num_shards: int, run_dir: str, run_id: str,
+               generations_path: str | None) -> None:
+    """Single-shard worker entry point (invoked as a subprocess by _spawn_stage)."""
+    from experiments.persona_self_recognition.self_recognition_experiment import ShardSpec
+
+    configs = discover_configs()
+    experiment_name, exp_config = configs[config_name]
+    if overrides:
+        exp_config = apply_overrides(exp_config, overrides)
+    run_config = build_run_config(experiment_name, exp_config)
+    personas = load_personas_for(experiment_name)
+
+    shards_dir = Path(run_dir) / "_shards"
+    shard = ShardSpec(
+        stage=stage,
+        shard_index=shard_index,
+        num_shards=num_shards,
+        run_dir=Path(run_dir),
+        run_id=run_id,
+        output_path=shards_dir / f"{stage}_{shard_index}.jsonl",
+        generations_path=Path(generations_path) if generations_path else None,
+        write_manifest=(stage == "generation" and shard_index == 0),
+    )
+    experiment = build_experiment(experiment_name, run_config, exp_config, personas,
+                                  config_name=config_name, shard=shard)
+    experiment.setup()
+    experiment.run()
+    logger.info(f"[{stage} shard {shard_index}/{num_shards}] done -> {shard.output_path}")
+
+
 # ── CLI ──────────────────────────────────────────────────────────────────
 
 
@@ -280,7 +424,24 @@ def main():
     parser.add_argument("--list", action="store_true", help="List all available configs and exit")
     parser.add_argument("--all", action="store_true", help="Run every config (rarely useful)")
     parser.add_argument("--override", nargs="*", default=[], help="Field overrides like sample_size=2")
+    # Internal: set by the multi-GPU launcher when spawning a single shard worker.
+    # Not intended for manual use — `num_gpus` in the config drives sharding.
+    parser.add_argument("--shard-stage", choices=["generation", "recognition"], help=argparse.SUPPRESS)
+    parser.add_argument("--shard-index", type=int, help=argparse.SUPPRESS)
+    parser.add_argument("--num-shards", type=int, help=argparse.SUPPRESS)
+    parser.add_argument("--run-dir", help=argparse.SUPPRESS)
+    parser.add_argument("--run-id", help=argparse.SUPPRESS)
+    parser.add_argument("--generations-path", help=argparse.SUPPRESS)
     args = parser.parse_args()
+
+    if args.shard_stage:
+        if not args.config:
+            parser.error("config is required for a shard worker")
+        run_worker(
+            args.config, args.override, args.shard_stage, args.shard_index,
+            args.num_shards, args.run_dir, args.run_id, args.generations_path,
+        )
+        return
 
     if args.list:
         for name, (exp, _) in sorted(discover_configs().items()):
