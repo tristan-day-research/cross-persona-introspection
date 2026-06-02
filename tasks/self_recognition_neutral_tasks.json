@@ -1,0 +1,122 @@
+[
+  {
+    "task_id": "sr_01",
+    "prompt": "Write a short paragraph (3-4 sentences) about why the sky is blue.",
+    "task_set": "neutral",
+    "format": "free_form"
+  },
+  {
+    "task_id": "sr_02",
+    "prompt": "Write a short paragraph (3-4 sentences) describing what makes a good cup of coffee.",
+    "task_set": "neutral",
+    "format": "free_form"
+  },
+  {
+    "task_id": "sr_03",
+    "prompt": "Write a short paragraph (3-4 sentences) about the value of learning a second language.",
+    "task_set": "neutral",
+    "format": "free_form"
+  },
+  {
+    "task_id": "sr_04",
+    "prompt": "Write a short paragraph (3-4 sentences) explaining how a thunderstorm forms.",
+    "task_set": "neutral",
+    "format": "free_form"
+  },
+  {
+    "task_id": "sr_05",
+    "prompt": "Write a short paragraph (3-4 sentences) about what makes a city pleasant to live in.",
+    "task_set": "neutral",
+    "format": "free_form"
+  },
+  {
+    "task_id": "sr_06",
+    "prompt": "Write a short paragraph (3-4 sentences) describing the experience of watching a sunset.",
+    "task_set": "neutral",
+    "format": "free_form"
+  },
+  {
+    "task_id": "sr_07",
+    "prompt": "Write a short paragraph (3-4 sentences) about why people enjoy reading fiction.",
+    "task_set": "neutral",
+    "format": "free_form"
+  },
+  {
+    "task_id": "sr_08",
+    "prompt": "Write a short paragraph (3-4 sentences) explaining what photosynthesis is and why it matters.",
+    "task_set": "neutral",
+    "format": "free_form"
+  },
+  {
+    "task_id": "sr_09",
+    "prompt": "Write a short paragraph (3-4 sentences) about the role of music in daily life.",
+    "task_set": "neutral",
+    "format": "free_form"
+  },
+  {
+    "task_id": "sr_10",
+    "prompt": "Write a short paragraph (3-4 sentences) describing the appeal of long walks.",
+    "task_set": "neutral",
+    "format": "free_form"
+  },
+  {
+    "task_id": "sr_11",
+    "prompt": "Write a short paragraph (3-4 sentences) about why dogs make popular pets.",
+    "task_set": "neutral",
+    "format": "free_form"
+  },
+  {
+    "task_id": "sr_12",
+    "prompt": "Write a short paragraph (3-4 sentences) explaining how rivers shape the landscape.",
+    "task_set": "neutral",
+    "format": "free_form"
+  },
+  {
+    "task_id": "sr_13",
+    "prompt": "Write a short paragraph (3-4 sentences) about what it feels like to learn something new.",
+    "task_set": "neutral",
+    "format": "free_form"
+  },
+  {
+    "task_id": "sr_14",
+    "prompt": "Write a short paragraph (3-4 sentences) describing how bread is made.",
+    "task_set": "neutral",
+    "format": "free_form"
+  },
+  {
+    "task_id": "sr_15",
+    "prompt": "Write a short paragraph (3-4 sentences) about why people travel to new places.",
+    "task_set": "neutral",
+    "format": "free_form"
+  },
+  {
+    "task_id": "sr_16",
+    "prompt": "Write a short paragraph (3-4 sentences) explaining what makes a story memorable.",
+    "task_set": "neutral",
+    "format": "free_form"
+  },
+  {
+    "task_id": "sr_17",
+    "prompt": "Write a short paragraph (3-4 sentences) about the importance of sleep.",
+    "task_set": "neutral",
+    "format": "free_form"
+  },
+  {
+    "task_id": "sr_18",
+    "prompt": "Write a short paragraph (3-4 sentences) describing what fog is and how it forms.",
+    "task_set": "neutral",
+    "format": "free_form"
+  },
+  {
+    "task_id": "sr_19",
+    "prompt": "Write a short paragraph (3-4 sentences) about why cooking at home can be enjoyable.",
+    "task_set": "neutral",
+    "format": "free_form"
+  },
+  {
+    "task_id": "sr_20",
+    "prompt": "Write a short paragraph (3-4 sentences) explaining how seasons change throughout the year.",
+    "task_set": "neutral",
+    "format": "free_form"
+  }
+]

@@ -205,13 +205,14 @@ def build_run_config(experiment_name: str, exp_config: dict) -> RunConfig:
         batch_size=exp_config.get("batch_size", 1),
         openrouter_model=exp_config.get("openrouter_model"),
         openrouter_api_key=exp_config.get("openrouter_api_key"),
+        adapter=exp_config.get("adapter"),
     )
 
 
 # ── Dispatch ─────────────────────────────────────────────────────────────
 
 
-def build_experiment(experiment_name: str, run_config: RunConfig, exp_config: dict, personas: dict[str, PersonaConfig]):
+def build_experiment(experiment_name: str, run_config: RunConfig, exp_config: dict, personas: dict[str, PersonaConfig], config_name: str = ""):
     """Import the experiment module and instantiate the right class.
 
     The module file may be named `experiment.py` or, for folders that prefix
@@ -243,7 +244,7 @@ def build_experiment(experiment_name: str, run_config: RunConfig, exp_config: di
     if experiment_name == "patchscope":
         return module.PatchscopeExperiment(run_config, personas)  # patchscope uses full registry
     if experiment_name == "persona_self_recognition":
-        return module.PersonaSelfRecognition(run_config, used_personas)
+        return module.PersonaSelfRecognition(run_config, used_personas, config_name=config_name)
     raise ValueError(f"Unknown experiment folder: {experiment_name}")
 
 
@@ -260,7 +261,7 @@ def run_one(config_name: str, overrides: list[str] | None = None) -> None:
     personas = load_personas_for(experiment_name)
 
     logger.info(f"Running config '{config_name}' (experiment: {experiment_name})")
-    experiment = build_experiment(experiment_name, run_config, exp_config, personas)
+    experiment = build_experiment(experiment_name, run_config, exp_config, personas, config_name=config_name)
     experiment.setup()
     experiment.run()
 

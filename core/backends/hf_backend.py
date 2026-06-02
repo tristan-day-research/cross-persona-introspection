@@ -1,11 +1,14 @@
 """Hugging Face local model backend."""
 
+import logging
 import os
 
 import torch
 import torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 def _require_gpu(resolved_device: str) -> None:
@@ -62,11 +65,34 @@ class HFBackend:
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
-        self.model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            torch_dtype=self.torch_dtype,
-            device_map=self.device if self.device == "auto" else None,
-        )
+        try:
+            self.model = AutoModelForCausalLM.from_pretrained(
+                model_name,
+                torch_dtype=self.torch_dtype,
+                device_map=self.device if self.device == "auto" else None,
+            )
+        except ValueError as e:
+            # Some instruct checkpoints (e.g. Mistral-Small-3.1 and its
+            # derivatives like Dolphin-Mistral-24B-Venice-Edition) ship a
+            # multimodal `*ForConditionalGeneration` architecture that
+            # AutoModelForCausalLM cannot build. They still run text-only, so
+            # fall back to the image-text-to-text class, which exposes the same
+            # `.generate()` / `.logits` text interface this backend relies on.
+            if "AutoModelForCausalLM" not in str(e):
+                raise
+            from transformers import AutoModelForImageTextToText
+
+            logger.warning(
+                "%s is not a plain causal LM (%s); loading it via "
+                "AutoModelForImageTextToText and using it text-only.",
+                model_name,
+                str(e).splitlines()[0],
+            )
+            self.model = AutoModelForImageTextToText.from_pretrained(
+                model_name,
+                torch_dtype=self.torch_dtype,
+                device_map=self.device if self.device == "auto" else None,
+            )
         if self.device != "auto":
             self.model = self.model.to(self.device)
         self.model.eval()
@@ -127,23 +153,72 @@ class HFBackend:
         """
         logits = self.get_next_token_logits(messages)
 
-        # Map choice labels to their first token id
-        choice_token_ids = {}
+        # Map each choice label to its best first-token logit, considering both
+        # the bare ("YES") and space-prefixed (" YES") variants. Depending on
+        # the tokenizer and chat template, the model may emit either, and they
+        # are distinct token ids — taking the max avoids silently scoring the
+        # wrong token (which would corrupt the recognition metric). Mirrors
+        # get_choice_probs_and_logits_from_text.
+        choice_best_logits = {}
         for choice in choices:
-            tokens = self.tokenizer.encode(choice, add_special_tokens=False)
-            if tokens:
-                choice_token_ids[choice] = tokens[0]
+            candidate_logit_values = []
+            for variant in (choice, " " + choice):
+                tokens = self.tokenizer.encode(variant, add_special_tokens=False)
+                if tokens:
+                    candidate_logit_values.append(logits[tokens[0]].item())
+            if candidate_logit_values:
+                choice_best_logits[choice] = max(candidate_logit_values)
 
-        # Extract logits for choice tokens and softmax
-        choice_logits = torch.tensor(
-            [logits[tid].item() for tid in choice_token_ids.values()]
-        )
+        choice_logits = torch.tensor(list(choice_best_logits.values()))
         probs = F.softmax(choice_logits, dim=0)
 
         return {
             choice: probs[i].item()
-            for i, choice in enumerate(choice_token_ids.keys())
+            for i, choice in enumerate(choice_best_logits.keys())
         }
+
+    def get_choice_probs_and_logprobs(
+        self, messages: list[dict[str, str]], choices: list[str]
+    ) -> tuple[dict[str, float], dict[str, float]]:
+        """Constrained choice probs *and* full-vocab logprobs in one forward pass.
+
+        Returns (probs_dict, logprobs_dict) where:
+        - probs_dict: softmax over the choices only (sums to 1) — identical to
+          get_choice_probs, including the max-over-{bare, space-prefixed} trick.
+        - logprobs_dict: full-vocabulary log-softmax value at the *winning*
+          first-token variant for each choice. This is the absolute logprob the
+          model assigned to that token, not renormalized over the choice set —
+          useful for a logprob_yes - logprob_no style margin.
+
+        Mirrors get_choice_probs' token selection so the choice and its logprob
+        always refer to the same token id.
+        """
+        logits = self.get_next_token_logits(messages)
+        full_logprobs = F.log_softmax(logits, dim=0)
+
+        choice_best_logit: dict[str, float] = {}
+        choice_best_logprob: dict[str, float] = {}
+        for choice in choices:
+            best_logit = None
+            best_logprob = None
+            for variant in (choice, " " + choice):
+                tokens = self.tokenizer.encode(variant, add_special_tokens=False)
+                if tokens:
+                    lg = logits[tokens[0]].item()
+                    if best_logit is None or lg > best_logit:
+                        best_logit = lg
+                        best_logprob = full_logprobs[tokens[0]].item()
+            if best_logit is not None:
+                choice_best_logit[choice] = best_logit
+                choice_best_logprob[choice] = best_logprob
+
+        choice_logits = torch.tensor(list(choice_best_logit.values()))
+        probs = F.softmax(choice_logits, dim=0)
+        probs_dict = {
+            choice: probs[i].item()
+            for i, choice in enumerate(choice_best_logit.keys())
+        }
+        return probs_dict, choice_best_logprob
 
     def get_choice_probs_and_logits(
         self, messages: list[dict[str, str]], choices: list[str],

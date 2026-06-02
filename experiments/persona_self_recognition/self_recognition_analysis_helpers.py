@@ -26,6 +26,14 @@ def summarize_run(jsonl_path: str | Path, run_dir: str | Path) -> dict:
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
 
+    # Human-readable model label, recovered from the run-dir name (which encodes
+    # the short model slug). Stamped onto each heatmap title so the saved PNGs
+    # are self-identifying. Import lazily to avoid a heavy import at module load.
+    from experiments.persona_self_recognition.self_recognition_experiment import (
+        label_from_run_dir,
+    )
+    model_label = label_from_run_dir(run_dir.name)
+
     df = load_results(jsonl_path)
     if df.empty:
         return {"n_trials": 0}
@@ -70,7 +78,7 @@ def summarize_run(jsonl_path: str | Path, run_dir: str | Path) -> dict:
             "off_diagonal_mean": off,
             "diagonal_advantage": (diag - off) if (diag is not None and off is not None) else None,
         }
-        _save_heatmap(ind_matrix, run_dir / "heatmap_individual.png", "Individual recognition accuracy")
+        _save_heatmap(ind_matrix, run_dir / "heatmap_individual.png", "Individual recognition accuracy", model_label)
 
     # ── Paired matrix ────────────────────────────────────────────────────
     paired = df[(df["phase"] == "paired") & (df["error"].isna()) & (df["has_ground_truth"] == True)]
@@ -99,7 +107,7 @@ def summarize_run(jsonl_path: str | Path, run_dir: str | Path) -> dict:
             "n_trials": int(len(paired)),
             "overall_accuracy": float(paired["is_correct"].mean()),
         }
-        _save_heatmap(paired_matrix, run_dir / "heatmap_paired.png", "Paired recognition accuracy (own vs partner)")
+        _save_heatmap(paired_matrix, run_dir / "heatmap_paired.png", "Paired recognition accuracy (own vs partner)", model_label)
 
     # ── Generation summary ───────────────────────────────────────────────
     gen = df[(df["phase"] == "generation") & (df["error"].isna())]
@@ -204,13 +212,14 @@ def plot_choice_bars(
     return ax
 
 
-def _save_heatmap(matrix: pd.DataFrame, path: Path, title: str) -> None:
+def _save_heatmap(matrix: pd.DataFrame, path: Path, title: str, model_label: str | None = None) -> None:
     try:
         import matplotlib.pyplot as plt
     except ImportError:
         logger.warning("matplotlib not available — skipping heatmap")
         return
-    ax = plot_heatmap(matrix, title)
+    full_title = f"{title}\n{model_label}" if model_label else title
+    ax = plot_heatmap(matrix, full_title)
     ax.figure.savefig(path, dpi=140)
     plt.close(ax.figure)
 

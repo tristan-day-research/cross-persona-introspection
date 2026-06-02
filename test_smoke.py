@@ -12,12 +12,13 @@ def test_imports():
     from core import schemas
     from core.backends import hf_backend, openrouter_backend
     from core import persona_inducer, task_loader, response_parser, results_logger
-    from experiments import base
+    from core import base_experiment
     from experiments.confidence_entropy import experiment as ce
     from experiments.activation_probing import experiment as ap
     from experiments.patchscope import experiment as ps
     from experiments.persona_self_recognition import self_recognition_experiment as psr
     from experiments.persona_self_recognition import self_recognition_analysis_helpers as psr_analysis
+    from experiments.persona_self_recognition import self_recognition_bias_analysis as psr_bias
 
 
 def test_schemas():
@@ -182,9 +183,14 @@ def test_experiment_configs_load():
     experiments_dir = Path(__file__).parent / "experiments"
     all_named_configs: dict = {}
     for exp_dir in sorted(p for p in experiments_dir.iterdir() if p.is_dir()):
+        # Mirror run.find_config: accept `config.yaml` or a single prefixed
+        # `<name>_config.yaml` (e.g. self_recognition_config.yaml).
         cfg = exp_dir / "config.yaml"
         if not cfg.exists():
-            continue
+            matches = sorted(p for p in exp_dir.glob("*_config.yaml") if p.is_file())
+            if not matches:
+                continue
+            cfg = matches[0]
         with open(cfg) as f:
             data = yaml.safe_load(f) or {}
         # Each experiment defines its own persona registry
@@ -246,3 +252,254 @@ def test_patchscope_record():
     assert d["condition"] == "real"
     assert d["source_layer"] == 8
     json.dumps(d, default=str)
+
+
+# ── Persona self-recognition: response-bias modes ─────────────────────────
+
+
+def test_self_recognition_parsing_helpers():
+    """Free-form parsers for the probability / confidence modes."""
+    from experiments.persona_self_recognition.self_recognition_experiment import (
+        _parse_probability, _parse_choice_and_confidence, _generated_text_id,
+    )
+
+    assert _parse_probability("Probability: 73") == 73
+    assert _parse_probability("0") == 0
+    assert _parse_probability("100%") == 100
+    assert _parse_probability("nope") is None      # no integer
+    assert _parse_probability("250") is None       # out of range -> parse failure
+    assert _parse_probability("-5") is None         # negative -> parse failure (not 5)
+    assert _parse_probability("Probability: -10") is None
+    assert _parse_probability(None) is None
+
+    assert _parse_choice_and_confidence("CHOICE: A\nCONFIDENCE: 80") == ("A", 80)
+    assert _parse_choice_and_confidence("choice = b confidence=5") == ("B", 5)
+    assert _parse_choice_and_confidence("B, not sure") == ("B", None)   # no confidence
+    assert _parse_choice_and_confidence("garbage") == (None, None)
+    assert _parse_choice_and_confidence("CHOICE: A CONFIDENCE: 200") == ("A", None)  # conf OOR
+    assert _parse_choice_and_confidence("CHOICE: B\nCONFIDENCE: -50") == ("B", None)  # neg conf
+    assert _parse_choice_and_confidence("CONFIDENCE -50") == (None, None)             # bare neg conf
+
+    assert _generated_text_id("t1", "chemist", "artist") == "t1|chemist|artist"
+
+
+def test_self_recognition_record_validation():
+    """SelfRecognitionRecord.__post_init__ enforces the mode invariants."""
+    import pytest as _pytest
+    from core.schemas import SelfRecognitionRecord
+
+    base = dict(experiment="persona_self_recognition", phase="paired", model="m",
+                task_id="t1", run_id="r1")
+
+    # Valid rows pass (including an all-None generation row).
+    SelfRecognitionRecord(experiment="x", phase="generation", model="m", task_id="t", run_id="r")
+    SelfRecognitionRecord(**base, parsed_probability=0, parsed_confidence=100,
+                          model_answer="A", correct_answer="A", position_of_self="B",
+                          chose_self=True)
+
+    # Out-of-range / bad-enum values raise.
+    for bad in (
+        dict(parsed_probability=150),
+        dict(parsed_probability=-1),
+        dict(parsed_confidence=101),
+        dict(model_answer="MAYBE"),
+        dict(parsed_choice="C"),
+        dict(correct_answer="X"),
+        dict(position_of_self="C"),
+    ):
+        with _pytest.raises(ValueError):
+            SelfRecognitionRecord(**base, **bad)
+
+
+def test_self_recognition_bias_analysis(tmp_path):
+    """All-mode rows round-trip through the logger and the bias analysis funcs."""
+    from core.schemas import SelfRecognitionRecord
+    from core.results_logger import ResultsLogger, load_results
+    from experiments.persona_self_recognition import self_recognition_bias_analysis as B
+
+    # AUROC sanity (matches sklearn's 0.75 on this classic example).
+    assert abs(B.auroc([0.1, 0.4, 0.35, 0.8], [0, 0, 1, 1]) - 0.75) < 1e-9
+    assert B.auroc([0, 1, 2, 3], [0, 0, 1, 1]) == 1.0
+
+    jsonl = tmp_path / "trials.jsonl"
+    log = ResultsLogger(jsonl)
+    personas = ["a", "b"]
+    for s in personas:
+        log.log_trial(SelfRecognitionRecord(
+            experiment="persona_self_recognition", phase="generation", model="m",
+            task_id="t1", run_id="r1", source_persona=s, target_persona=s,
+            generated_text="x", token_length=1,
+        ))
+    for s in personas:
+        for e in personas:
+            self_ = (s == e)
+            # YES/NO with logprobs
+            log.log_trial(SelfRecognitionRecord(
+                experiment="persona_self_recognition", phase="individual", model="m",
+                task_id="t1", run_id="r1", source_persona=s, target_persona=s,
+                evaluator_persona=e, parsed_choice="YES" if self_ else "NO",
+                model_answer="YES" if self_ else "NO", is_self=self_,
+                prob_yes=0.8 if self_ else 0.2, prob_no=0.2 if self_ else 0.8,
+                logprob_yes=-0.2 if self_ else -1.6, logprob_no=-1.6 if self_ else -0.2,
+                is_correct=True, has_ground_truth=True,
+            ))
+            # numeric self-probability
+            log.log_trial(SelfRecognitionRecord(
+                experiment="persona_self_recognition", phase="individual_probability",
+                model="m", task_id="t1", run_id="r1", source_persona=s, target_persona=s,
+                evaluator_persona=e, parsed_probability=90 if self_ else 10, is_self=self_,
+            ))
+    # paired, counterbalanced, with confidence; evaluator 'a' authored one side
+    for order, (asrc, bsrc) in (("ab", ("a", "b")), ("ba", ("b", "a"))):
+        pos = "A" if asrc == "a" else "B"
+        log.log_trial(SelfRecognitionRecord(
+            experiment="persona_self_recognition", phase="paired", model="m",
+            task_id="t1", run_id="r1", source_persona="a", evaluator_persona="a",
+            candidate_a_source=asrc, candidate_b_source=bsrc, pair_order=order,
+            parsed_choice=pos, model_answer=pos, prob_a=0.6, prob_b=0.4,
+            parsed_confidence=70, correct_answer=pos, position_of_self=pos,
+            chose_self=True, is_correct=True, has_ground_truth=True,
+        ))
+
+    df = load_results(jsonl)
+
+    # Probability mode: perfect separation -> AUROC 1.0, zero parse failures.
+    assert B.auroc_self_vs_nonself(df) == 1.0
+    assert B.probability_parse_failure_rate(df)["parse_failure_rate"] == 0.0
+    assert not B.mean_probability_by_evaluator(df).empty
+    assert not B.calibration_table(df).empty
+
+    # Paired summary: always chose self, perfectly counterbalanced.
+    ps = B.paired_summary(df)
+    assert ps["accuracy_chose_self"] == 1.0
+    assert ps["p_choose_a"] == 0.5
+
+    # YES/NO + logprob margin recorded.
+    assert not B.yes_rate_by_evaluator(df).empty
+    margin = B.yes_logprob_margin_by_self(df)
+    assert margin.loc["self", "mean_logprob_margin"] > margin.loc["nonself", "mean_logprob_margin"]
+
+    # Confidence present.
+    assert not B.confidence_correct_vs_incorrect(df).empty
+
+    # bias_summary names all three modes.
+    summ = B.bias_summary(df)
+    assert {"individual_yes_no", "individual_probability", "paired"} <= set(summ)
+
+
+def test_self_recognition_bias_analysis_backward_compat():
+    """Legacy result rows (missing the new columns) still analyze without error."""
+    import pandas as pd
+    from experiments.persona_self_recognition import self_recognition_bias_analysis as B
+
+    legacy = pd.DataFrame([
+        dict(phase="individual", model="m", task_id="t1", run_id="r1",
+             source_persona="a", evaluator_persona="a", parsed_choice="YES",
+             is_correct=True, has_ground_truth=True, error=None),
+        dict(phase="paired", model="m", task_id="t1", run_id="r1",
+             source_persona="a", evaluator_persona="a", candidate_a_source="a",
+             candidate_b_source="b", parsed_choice="A", is_correct=True,
+             has_ground_truth=True, error=None),
+    ])
+    # No new columns present, yet these must not raise.
+    summ = B.bias_summary(legacy)
+    assert "individual_yes_no" in summ and "paired" in summ
+    assert not B.yes_rate_by_evaluator(legacy).empty
+    assert B.paired_summary(legacy)["accuracy_chose_self"] == 1.0
+    # Probability/confidence sections are simply empty (mode absent).
+    assert B.mean_probability_by_evaluator(legacy).empty
+    assert B.confidence_correct_vs_incorrect(legacy).empty
+
+
+class _MockTokenizer:
+    def encode(self, text, add_special_tokens=False):
+        return text.split()
+
+
+class _MockBackend:
+    """Content-aware stand-in for HFBackend — no model, no GPU.
+
+    Returns deterministic outputs keyed on the prompt so each recognition mode
+    exercises its real parsing/logging path in the experiment.
+    """
+    def __init__(self):
+        self.tokenizer = _MockTokenizer()
+
+    def generate(self, messages, max_new_tokens=256, temperature=0.0, do_sample=False):
+        content = messages[-1]["content"]
+        if "Probability:" in content:
+            return "73"
+        if "CONFIDENCE" in content:
+            return "CHOICE: A\nCONFIDENCE: 80"
+        if "YES or NO" in content:
+            return "YES"
+        return "A short generated paragraph about the topic."
+
+    def get_choice_probs(self, messages, choices):
+        return {choices[0]: 0.7, choices[1]: 0.3}
+
+    def get_choice_probs_and_logprobs(self, messages, choices):
+        return {choices[0]: 0.7, choices[1]: 0.3}, {choices[0]: -0.36, choices[1]: -1.20}
+
+
+def test_self_recognition_modes_generate_rows(tmp_path):
+    """Run every recognition mode end-to-end with a mock backend (no model)."""
+    from core.schemas import RunConfig, PersonaConfig, TaskItem
+    from core.results_logger import load_results
+    from core.results_logger import ResultsLogger
+    from experiments.persona_self_recognition.self_recognition_experiment import (
+        PersonaSelfRecognition,
+    )
+
+    persona_names = ["chemist", "artist", "five_year_old"]
+    personas = {n: PersonaConfig(name=n, system_prompt=f"You are {n}.") for n in persona_names}
+    run_config = RunConfig(
+        experiment_name="persona_self_recognition",
+        model_name="TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+        personas=persona_names,
+        task_sets=["self_recognition_neutral"],
+        output_dir=str(tmp_path),
+    )
+    # config_name picks up the all-modes-on bias_dev config explicitly.
+    exp = PersonaSelfRecognition(run_config, personas, config_name="self_recognition_bias_dev")
+    assert exp.individual_probability and exp.paired_confidence and exp.yes_no_logprobs
+
+    # Bypass setup() (which would load a real model + task files): inject a mock
+    # backend and a single in-memory task, then run all phases.
+    exp.backend = _MockBackend()
+    exp.tasks = [TaskItem(task_id="t1", prompt="Write about cats.", task_set="neutral")]
+    exp.run_dir.mkdir(parents=True, exist_ok=True)
+    exp.results_logger = ResultsLogger(exp.output_path)
+    exp._write_manifest_header()
+    exp.run()
+
+    df = load_results(exp.output_path)
+    phases = set(df["phase"].unique())
+    assert {"generation", "individual", "individual_probability", "paired"} <= phases
+
+    # individual_probability rows carry a parsed 0-100 value and a self/nonself label.
+    prob = df[df["phase"] == "individual_probability"]
+    assert (prob["parsed_probability"] == 73).all()
+    assert prob["is_self"].notna().all()
+
+    # individual YES/NO rows carry logprobs (mode on) and prob_yes/prob_no.
+    ind = df[df["phase"] == "individual"]
+    assert ind["logprob_yes"].notna().all() and ind["prob_yes"].notna().all()
+
+    # paired rows carry confidence + explicit position/choice fields; both A/B
+    # orders are present (counterbalanced). In confidence mode the recorded
+    # answer comes from the parsed CHOICE line (the mock always says "A"), and
+    # the constrained A/B probs are intentionally unset.
+    paired = df[df["phase"] == "paired"]
+    assert (paired["parsed_confidence"] == 80).all()
+    assert (paired["model_answer"] == "A").all()      # from CHOICE: A line, not argmax
+    assert paired["prob_a"].isna().all()              # constrained probs unused in confidence mode
+    assert set(paired["pair_order"].unique()) == {"ab", "ba"}
+    gt = paired[paired["has_ground_truth"] == True]  # noqa: E712
+    assert gt["position_of_self"].isin(["A", "B"]).all()
+    assert gt["chose_self"].notna().all()
+
+    # The manifest captured example trials for the new phases.
+    manifest = (exp.run_dir / "manifest.txt").read_text()
+    assert "EXAMPLE TRIALS — INDIVIDUAL_PROBABILITY" in manifest
+    assert "individual_probability: True" in manifest
