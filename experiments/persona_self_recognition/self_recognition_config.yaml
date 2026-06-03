@@ -566,6 +566,7 @@ configs:
   # model-specific distributional signatures rather than overt content.
   self_recognition_subliminal:
     model_name: "meta-llama/Llama-3.1-8B-Instruct"
+    adapter: "Tristan-Day/20260506-034609_delegate_at_mixed_17173_all_top_prob_tm0.7_tau0.05_2e_ckpt_step_300"
     batch_size: 8
     personas:
       - chemist
@@ -579,7 +580,7 @@ configs:
       - self_recognition_subliminal
     sample_size: null
     seed: 42
-    max_new_tokens: 96
+    max_new_tokens: 150
     temperature: 0.0
     strip_self_refs: true
     n_manifest_examples: 3

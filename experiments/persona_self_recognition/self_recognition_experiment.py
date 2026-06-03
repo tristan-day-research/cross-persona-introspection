@@ -358,9 +358,13 @@ class PersonaSelfRecognition(BaseExperiment):
             pov_tag = "3rd" if self.source_pov == "3rd_person" else "1st"
             model_slug = model_label(config.model_name, config.adapter)
             timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-            parts = [timestamp, pov_tag, model_slug]
+            # Config name immediately follows the timestamp so runs sort/group by
+            # config; pov + model slug trail it. label_from_run_dir parses by
+            # substring/regex, so this ordering doesn't affect model recovery.
+            parts = [timestamp]
             if self._config_name:
                 parts.append(self._config_name)
+            parts += [pov_tag, model_slug]
             self.run_dir = Path(config.output_dir) / "_".join(parts)
             self.output_path = self.run_dir / "trials.jsonl"
         self.manifest_path = self.run_dir / "manifest.txt"
