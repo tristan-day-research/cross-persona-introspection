@@ -10,7 +10,7 @@ have written; counterbalance A/B order. Ground truth is defined only when
 the evaluator is one of the two source personas.
 
 All knobs (prompts, strip_self_refs, manifest examples count) live in
-experiments/persona_self_recognition/self_recognition_config.yaml.
+experiments/self_recognition/self_recognition_config.yaml.
 """
 
 
@@ -271,7 +271,7 @@ def _generated_text_id(task_id: str, source: str, target: str) -> str:
     return f"{task_id}|{source}|{target}"
 
 
-class PersonaSelfRecognition(BaseExperiment):
+class SelfRecognition(BaseExperiment):
     """Behavioral self-recognition: source × evaluator authorship matrix."""
 
     def __init__(self, config: RunConfig, personas: dict[str, PersonaConfig], config_name: str = "",
@@ -604,7 +604,7 @@ class PersonaSelfRecognition(BaseExperiment):
             cleaned = self._preprocess(raw)
             self.generations[(task.task_id, induced_name, target_name)] = cleaned
             self.results_logger.log_trial(SelfRecognitionRecord(
-                experiment="persona_self_recognition",
+                experiment="self_recognition",
                 phase="generation",
                 model=self.config.model_name,
                 task_id=task.task_id,
@@ -637,7 +637,7 @@ class PersonaSelfRecognition(BaseExperiment):
             row_pov = "1st_person" if induced_name == target_name else "3rd_person"
             logger.error(f"Generation failed: induced={induced_name} target={target_name} on {task.task_id}: {e}")
             self.results_logger.log_trial(SelfRecognitionRecord(
-                experiment="persona_self_recognition",
+                experiment="self_recognition",
                 phase="generation",
                 model=self.config.model_name,
                 task_id=task.task_id,
@@ -731,7 +731,7 @@ class PersonaSelfRecognition(BaseExperiment):
                     "logprob_yes": logprob_yes, "logprob_no": logprob_no, "raw": raw,
                 })
             self.results_logger.log_trial(SelfRecognitionRecord(
-                experiment="persona_self_recognition",
+                experiment="self_recognition",
                 phase="individual",
                 model=self.config.model_name,
                 task_id=task.task_id,
@@ -765,7 +765,7 @@ class PersonaSelfRecognition(BaseExperiment):
             logger.error(f"Individual eval failed: induced={induced_name} target={target_name} "
                          f"eval={evaluator_name} task={task.task_id}: {e}")
             self.results_logger.log_trial(SelfRecognitionRecord(
-                experiment="persona_self_recognition",
+                experiment="self_recognition",
                 phase="individual",
                 model=self.config.model_name,
                 task_id=task.task_id,
@@ -838,7 +838,7 @@ class PersonaSelfRecognition(BaseExperiment):
                     "parsed_probability": parsed_probability, "is_self": is_self, "raw": raw,
                 })
             self.results_logger.log_trial(SelfRecognitionRecord(
-                experiment="persona_self_recognition",
+                experiment="self_recognition",
                 phase="individual_probability",
                 model=self.config.model_name,
                 task_id=task.task_id,
@@ -864,7 +864,7 @@ class PersonaSelfRecognition(BaseExperiment):
             logger.error(f"Individual probability eval failed: induced={induced_name} "
                          f"target={target_name} eval={evaluator_name} task={task.task_id}: {e}")
             self.results_logger.log_trial(SelfRecognitionRecord(
-                experiment="persona_self_recognition",
+                experiment="self_recognition",
                 phase="individual_probability",
                 model=self.config.model_name,
                 task_id=task.task_id,
@@ -996,7 +996,7 @@ class PersonaSelfRecognition(BaseExperiment):
                     "parsed_confidence": parsed_confidence, "has_ground_truth": has_ground_truth, "raw": raw,
                 })
             self.results_logger.log_trial(SelfRecognitionRecord(
-                experiment="persona_self_recognition",
+                experiment="self_recognition",
                 phase="paired",
                 model=self.config.model_name,
                 task_id=task.task_id,
@@ -1036,7 +1036,7 @@ class PersonaSelfRecognition(BaseExperiment):
             )
             logger.error(f"Paired eval failed: eval={evaluator_name} task={task.task_id} order={order}: {e}")
             self.results_logger.log_trial(SelfRecognitionRecord(
-                experiment="persona_self_recognition",
+                experiment="self_recognition",
                 phase="paired",
                 model=self.config.model_name,
                 task_id=task.task_id,
@@ -1199,7 +1199,7 @@ class PersonaSelfRecognition(BaseExperiment):
 
     def evaluate(self) -> dict:
         """Compute summary metrics and write CSVs + heatmap + markdown summary."""
-        from experiments.persona_self_recognition.self_recognition_analysis_helpers import summarize_run
+        from experiments.self_recognition.self_recognition_analysis_helpers import summarize_run
         return summarize_run(self.output_path, self.run_dir)
 
     def save_results(self) -> str:

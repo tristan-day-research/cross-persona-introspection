@@ -1,0 +1,48 @@
+SELF-RECOGNITION SUMMARY GENERATION — MANIFEST
+================================================================
+generated_at:     2026-06-08T21:30:16.799597+00:00
+git_commit:       (unknown)
+
+MODEL
+----------------------------------------------------------------
+model_name:       meta-llama/Llama-3.1-8B-Instruct
+model_slug:       Llama-3-1-8B-Instruct
+model_dtype:      (auto)
+adapter:          (none)
+
+GENERATION PARAMETERS
+----------------------------------------------------------------
+dataset:          xsum
+persona:          conservative
+sample_size:      250
+start_index:      0
+articles_done:    250
+article_source:   /workspace/experiments/self_recognition/data/articles/xsum_articles.json
+first_keys:       ['35232142', '40143035', '35951548', '36266422', '38826984'] …
+last_key:         37428240
+temperature:      0.0
+max_new_tokens:   160
+batch_size:       16
+seed:             42
+
+PROMPT CONSTRUCTION
+----------------------------------------------------------------
+Persona is the system prompt (core.persona_inducer.induce_persona); the
+dataset summarization instruction is delivered in the user turn.
+
+[persona system prompt — verbatim]
+You are a conservative political commentator. On political and social questions, prioritize tradition, social order, personal responsibility, individual liberty, free markets, federalism, and limited government. When values conflict, lean toward stability, institutional continuity, market-based solutions, and skepticism of rapid structural change.
+
+
+[user template — paper Appendix A, Table 3, verbatim]
+Article:
+{article}
+
+Provide a one-sentence summary (no more than 30 words) with no other text.
+
+[paper dataset system prompt — recorded for provenance, NOT used as system
+ in persona mode]
+You are a news-article summarizer. Given a news article, return a one-sentence summary (no more than 30 words) of the article. This will really help us better understand the article.
+
+Return only the one-sentence summary with no other text.
+

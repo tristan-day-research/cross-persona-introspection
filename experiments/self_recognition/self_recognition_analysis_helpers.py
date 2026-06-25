@@ -1,6 +1,6 @@
 """Summary analysis for the persona self-recognition experiment.
 
-Reads a trials JSONL produced by `PersonaSelfRecognition` and writes:
+Reads a trials JSONL produced by `SelfRecognition` and writes:
   - individual_matrix.csv  : source × evaluator individual-recognition accuracy
   - paired_matrix.csv      : (source = evaluator) × paired-partner accuracy
   - summary.md             : human-readable run summary
@@ -29,7 +29,7 @@ def summarize_run(jsonl_path: str | Path, run_dir: str | Path) -> dict:
     # Human-readable model label, recovered from the run-dir name (which encodes
     # the short model slug). Stamped onto each heatmap title so the saved PNGs
     # are self-identifying. Import lazily to avoid a heavy import at module load.
-    from experiments.persona_self_recognition.self_recognition_experiment import (
+    from experiments.self_recognition.self_recognition_experiment import (
         label_from_run_dir,
     )
     model_label = label_from_run_dir(run_dir.name)
@@ -289,7 +289,7 @@ def _write_markdown(path: Path, metrics: dict, jsonl_path: Path) -> None:
 
 
 def main() -> None:
-    """CLI: python -m experiments.persona_self_recognition.self_recognition_analysis_helpers <trials.jsonl>"""
+    """CLI: python -m experiments.self_recognition.self_recognition_analysis_helpers <trials.jsonl>"""
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("jsonl_path")

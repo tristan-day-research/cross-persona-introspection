@@ -17,6 +17,10 @@ def load_task_file(path: Path) -> list[TaskItem]:
 
     items = []
     for entry in data:
+        # Skip non-task documentation entries (e.g. a `meta_note` describing how a
+        # set should be used) — they carry no real prompt to generate from.
+        if entry.get("format") == "meta_note":
+            continue
         items.append(TaskItem(
             task_id=entry["task_id"],
             prompt=entry["prompt"],

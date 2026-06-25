@@ -381,6 +381,35 @@ class HFBackend:
         last_logits = outputs.logits[:, -1, :]  # (batch, vocab) — left-padded, so -1 is the real last token
         return [self._choice_probs_from_logits(last_logits[i], choices) for i in range(len(messages_list))]
 
+    def last_token_logits_for_texts(self, texts: list[str]) -> "torch.Tensor | None":
+        """Last-position next-token logits for PRE-RENDERED prompt strings (batched).
+
+        Takes finished prompt strings rather than chat messages — the caller owns
+        the full construction (chat template + any assistant-turn priming). No
+        template is applied here and add_special_tokens=False, since a rendered
+        chat string already carries its own BOS/special tokens. Unlike
+        get_choice_probs_batch it applies no choice/token-selection policy: it
+        returns raw logits and the caller picks token ids (useful when the answer
+        token is not the first sub-token of a choice label — e.g. SentencePiece
+        encodes "1" as [▁, 1], so the digit is the *last* sub-token). Left-padding
+        + mask-derived position ids make column -1 the true final token of every
+        row. Returns (batch, vocab), or None for empty input.
+        """
+        if not texts:
+            return None
+        prev_side = self.tokenizer.padding_side
+        self.tokenizer.padding_side = "left"
+        try:
+            enc = self.tokenizer(texts, return_tensors="pt", padding=True, add_special_tokens=False)
+        finally:
+            self.tokenizer.padding_side = prev_side
+        input_ids = enc["input_ids"].to(self.input_device)
+        attention_mask = enc["attention_mask"].to(self.input_device)
+        position_ids = self._position_ids_from_mask(attention_mask)
+        with torch.no_grad():
+            outputs = self.model(input_ids, attention_mask=attention_mask, position_ids=position_ids)
+        return outputs.logits[:, -1, :]
+
     def get_choice_probs_and_logprobs_batch(
         self, messages_list: list[list[dict[str, str]]], choices: list[str]
     ) -> list[tuple[dict[str, float], dict[str, float]]]:

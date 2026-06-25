@@ -144,16 +144,47 @@ def discover_configs() -> dict[str, tuple[str, dict]]:
     return configs
 
 
+def _load_experiment_personas_file(exp_dir: Path) -> dict:
+    """Load a dedicated persona-roster file (`personas.yaml` or a prefixed
+    `<prefix>_personas.yaml`) from an experiment dir, if present. Returns the
+    `personas:` mapping (or {} when there is no such file). Keeping the roster in
+    its own file lets it be curated separately from the run configs; it is merged
+    into the registry by load_personas_for (taking precedence on name clashes)."""
+    candidate = exp_dir / "personas.yaml"
+    if not candidate.exists():
+        matches = sorted(p for p in exp_dir.glob("*_personas.yaml") if p.is_file())
+        if len(matches) > 1:
+            raise ValueError(
+                f"{exp_dir.name}: multiple *_personas.yaml files found, expected one: {matches}"
+            )
+        candidate = matches[0] if matches else None
+    if candidate is None:
+        return {}
+    with open(candidate) as f:
+        data = yaml.safe_load(f) or {}
+    return data.get("personas") or {}
+
+
 def load_personas_for(experiment_folder: str) -> dict[str, PersonaConfig]:
-    """Load this experiment's persona registry from its own config.yaml."""
-    data = _load_experiment_yaml(EXPERIMENTS_DIR / experiment_folder)
+    """Load this experiment's persona registry.
+
+    Personas may be defined inline in the experiment's config.yaml (`personas:`)
+    and/or in a dedicated `*_personas.yaml` roster file in the same folder. The
+    two are merged; the dedicated file takes precedence on a name collision (so
+    it is the place to curate the roster without disturbing older inline entries).
+    """
+    exp_dir = EXPERIMENTS_DIR / experiment_folder
+    data = _load_experiment_yaml(exp_dir)
+    merged = dict(data.get("personas") or {})
+    merged.update(_load_experiment_personas_file(exp_dir))
     return {
         name: PersonaConfig(
             name=name,
             system_prompt=(cfg or {}).get("system_prompt", ""),
             description=(cfg or {}).get("description", ""),
+            category=(cfg or {}).get("category", ""),
         )
-        for name, cfg in (data.get("personas") or {}).items()
+        for name, cfg in merged.items()
     }
 
 
@@ -185,12 +216,35 @@ def apply_overrides(config: dict, overrides: list[str]) -> dict:
     return config
 
 
+def _detect_personas(generations_filepath: str | None) -> list[str]:
+    """Return sorted persona names from subdirectories of generations_filepath."""
+    if not generations_filepath:
+        raise ValueError("personas: ALL requires generations_filepath to be set")
+    root = Path(generations_filepath)
+    personas = sorted(p.name for p in root.iterdir() if p.is_dir())
+    if not personas:
+        raise FileNotFoundError(
+            f"personas: ALL found no subdirectories under {root}. "
+            "Check generations_filepath or generate first."
+        )
+    return personas
+
+
 def build_run_config(experiment_name: str, exp_config: dict) -> RunConfig:
     """Convert a raw config dict to a RunConfig. experiment_name comes from the folder."""
+    raw_personas = exp_config.get("personas", [])
+    if raw_personas == "ALL" or raw_personas == ["ALL"]:
+        gen_path = exp_config.get("generations_filepath") or exp_config.get("generations_dir")
+        if gen_path:
+            # Eval mode: detect personas from the on-disk generation folders.
+            raw_personas = _detect_personas(gen_path)
+        else:
+            # Generation mode: use every persona in the experiment's registry.
+            raw_personas = sorted(load_personas_for(experiment_name).keys())
     return RunConfig(
         experiment_name=experiment_name,
         model_name=exp_config["model_name"],
-        personas=exp_config.get("personas", []),
+        personas=raw_personas,
         task_sets=exp_config.get("task_sets", []),
         sample_size=exp_config.get("sample_size"),
         seed=exp_config.get("seed", 42),
@@ -209,6 +263,20 @@ def build_run_config(experiment_name: str, exp_config: dict) -> RunConfig:
         openrouter_api_key=exp_config.get("openrouter_api_key"),
         adapter=exp_config.get("adapter"),
         num_gpus=exp_config.get("num_gpus"),
+        task=exp_config.get("task", "articles"),
+        # `generations_filepath` is the explicit generations source for the eval;
+        # `generations_dir` is accepted as a legacy alias.
+        generations_filepath=exp_config.get("generations_filepath")
+        or exp_config.get("generations_dir"),
+        conceal_persona=exp_config.get("conceal_persona", False),
+        strip_self_refs=exp_config.get("strip_self_refs", True),
+        run_name=exp_config.get("run_name"),
+        output_subdir=exp_config.get("output_subdir"),
+        collect_activations=exp_config.get("collect_activations", False),
+        activations_dir=exp_config.get("activations_dir"),
+        activation_layers=exp_config.get("activation_layers"),
+        activation_shard_size=exp_config.get("activation_shard_size", 1000),
+        delete_local_activations=exp_config.get("delete_local_activations", False),
     )
 
 
@@ -246,14 +314,17 @@ def build_experiment(experiment_name: str, run_config: RunConfig, exp_config: di
         return module.ActivationProbing(run_config, used_personas)
     if experiment_name == "patchscope":
         return module.PatchscopeExperiment(run_config, personas)  # patchscope uses full registry
-    if experiment_name == "persona_self_recognition":
-        return module.PersonaSelfRecognition(run_config, used_personas, config_name=config_name, shard=shard)
+    if experiment_name == "self_recognition":
+        return module.SelfRecognition(run_config, used_personas, config_name=config_name, shard=shard)
+    if experiment_name == "paper_replication":
+        # Faithful replication has no personas; pass the (empty) registry through.
+        return module.PaperReplication(run_config, used_personas, config_name=config_name)
     raise ValueError(f"Unknown experiment folder: {experiment_name}")
 
 
 # Experiments that support data-parallel multi-GPU sharding (two-stage:
 # generation, then recognition). Others always run single-process.
-_SHARDABLE_EXPERIMENTS = {"persona_self_recognition"}
+_SHARDABLE_EXPERIMENTS = {"self_recognition"}
 
 
 def resolve_num_gpus(run_config: RunConfig) -> int:
@@ -279,6 +350,20 @@ def run_one(config_name: str, overrides: list[str] | None = None) -> None:
         available = "\n  ".join(sorted(configs))
         raise ValueError(f"Config '{config_name}' not found. Available:\n  {available}")
     experiment_name, exp_config = configs[config_name]
+
+    # Standalone text-generation configs (mode: generate_text; the legacy alias
+    # generate_summaries is still accepted) don't run an experiment — they
+    # dispatch to the generator, which does its own config discovery, override
+    # application, and multi-GPU sharding.
+    if exp_config.get("mode") in ("generate_text", "generate_summaries"):
+        from experiments.self_recognition.generate_text import run as run_generation
+        run_generation(config_name, overrides)
+        return
+    if exp_config.get("mode") == "evaluate_self_recognition":
+        from experiments.self_recognition.evaluate_self_recognition import run as run_eval
+        run_eval(config_name, overrides)
+        return
+
     if overrides:
         exp_config = apply_overrides(exp_config, overrides)
 
@@ -388,7 +473,7 @@ def run_worker(config_name: str, overrides: list[str] | None, stage: str,
                shard_index: int, num_shards: int, run_dir: str, run_id: str,
                generations_path: str | None) -> None:
     """Single-shard worker entry point (invoked as a subprocess by _spawn_stage)."""
-    from experiments.persona_self_recognition.self_recognition_experiment import ShardSpec
+    from experiments.self_recognition.self_recognition_experiment import ShardSpec
 
     configs = discover_configs()
     experiment_name, exp_config = configs[config_name]

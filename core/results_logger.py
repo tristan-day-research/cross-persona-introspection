@@ -9,12 +9,18 @@ from typing import Optional
 
 import pandas as pd
 
-from core.schemas import TrialRecord, ConfidenceEntropyRecord, SelfRecognitionRecord
+from core.schemas import (
+    TrialRecord, ConfidenceEntropyRecord, SelfRecognitionRecord, PaperReplicationRecord,
+    PersonaRecognitionEvalRecord, PersonaDescriptionEvalRecord, PersonaBinaryEvalRecord,
+)
 
 logger = logging.getLogger(__name__)
 
 # Any dataclass with a timestamp field can be logged.
-_LoggableRecord = TrialRecord | ConfidenceEntropyRecord | SelfRecognitionRecord
+_LoggableRecord = (
+    TrialRecord | ConfidenceEntropyRecord | SelfRecognitionRecord | PaperReplicationRecord
+    | PersonaRecognitionEvalRecord | PersonaDescriptionEvalRecord | PersonaBinaryEvalRecord
+)
 
 
 class ResultsLogger:

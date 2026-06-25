@@ -10,6 +10,9 @@ class PersonaConfig:
     name: str
     system_prompt: str
     description: str = ""
+    # Coarse grouping label (e.g. "Suppression - lexical", "Near-twin (pair A)").
+    # Used by analysis to bucket personas; carried through from the persona file.
+    category: str = ""
     # TODO: Add vector-steering params when implemented
     # TODO: Add fine-tuned adapter path when implemented
 
@@ -78,6 +81,54 @@ class RunConfig:
     # and figures (e.g. Llama_8b_<adapter>), and the adapter is loaded onto the
     # base model via PEFT in the HF backend.
     adapter: Optional[str] = None
+    # self_recognition text-generation/eval: the generation task name. Names the
+    # top-level output folder under results/text_generations/<task>/ and
+    # results/text_evaluations/<task>/. Default "articles" (the paper-replication
+    # XSUM/CNN summaries).
+    task: str = "articles"
+    # self_recognition eval only: explicit directory containing the per-persona
+    # generations to evaluate ({generations_filepath}/{persona}/{dataset}/summaries.json).
+    # When None, the eval derives it from task + model_slug. (Named *_filepath to
+    # stay distinct from the `task` label, which is reused elsewhere.)
+    generations_filepath: Optional[str] = None
+    # self_recognition text generation (generate_text.py):
+    #   conceal_persona — append a "don't reveal your role/identity" instruction to
+    #     the user turn so the persona writes in its own voice WITHOUT explicit
+    #     giveaways. Important for the binary recognition eval, which tests
+    #     style-level self-recognition (not literal "As a chemist," matching). The
+    #     persona system prompt itself is left untouched. Default off (paper-faithful).
+    #   strip_self_refs — post-hoc safety net: strip a leading "As a <role>," clause
+    #     from the stored text (raw output is always kept separately). Applies to
+    #     BOTH article and prompt modes. Default on.
+    conceal_persona: bool = False
+    strip_self_refs: bool = True
+    # A single stable name that ties all phases of one experiment together.
+    # When set, it flows as:
+    #   generation → output_subdir (folder name under text_generations/.../):
+    #                  results/text_generations/<task>/<model_slug>/<run_name>/
+    #   eval       → eval_dir (stable collection folder under text_evaluations/):
+    #                  results/text_evaluations/<task>/<run_name>/
+    #   R2         → prefix for both activation stores:
+    #                  runs/<run_name>/activations/       (generation phase)
+    #                  runs/<run_name>/eval_activations/  (eval phase)
+    # This means `download_run_activations(run_id=run_name, ...)` fetches both.
+    # output_subdir / eval_dir take precedence if set explicitly; run_name is the
+    # fallback so you can set one stable name and override individual phases if needed.
+    run_name: Optional[str] = None
+    output_subdir: Optional[str] = None  # overrides run_name for generation folder
+    # Activation capture during GENERATION (core.activation_capture/_store). One
+    # extra forward per generated text captures the spec's generation-phase named
+    # positions into a sharded store keyed by text_id ("{group}/{persona}/{task_id}").
+    collect_activations: bool = False
+    activations_dir: Optional[str] = None
+    activation_layers: Optional[list] = None
+    activation_shard_size: int = 1000
+    # When True, delete the local activation files after a SUCCESSFUL R2 upload, so
+    # an ephemeral pod doesn't accumulate them and pulling results stays light. Only
+    # ever deletes what was confirmed uploaded (the sync raises on failure first);
+    # a no-op when R2 isn't configured. Resume across pods then relies on R2, not
+    # local disk — fine when each run does a NEW case set (disjoint trial_ids).
+    delete_local_activations: bool = False
 
 
 @dataclass
@@ -353,6 +404,171 @@ class SelfRecognitionRecord:
 
 
 @dataclass
+class PaperReplicationRecord:
+    """One trial of the Panickssery et al. (2024) self-recognition replication.
+
+    Faithful re-implementation of "LLM Evaluators Recognize and Favor Their Own
+    Generations" (arXiv:2404.13076). One underlying model acts as the evaluator;
+    candidate summaries come from several distinct *sources* (human / gpt4 / gpt35
+    / llama / claude). A record is discriminated by `phase`:
+
+      phase="detection"   (pairwise self-recognition, Table 5 / Fig 2-left)
+        Evaluator shown its own summary vs `other_source`'s summary, asked which
+        it wrote. Run in both orders; `score` is the order-averaged probability
+        the evaluator assigned to its OWN summary — 0.5·(P_fwd(self) + P_bwd(self)),
+        the paper's ordering-bias-corrected self-recognition score.
+
+      phase="comparison"  (pairwise self-preference, Table 5 / Fig 4-left)
+        Same structure with the "which do you prefer?" prompt; `score` is the
+        order-averaged probability of preferring its OWN summary (self-preference).
+
+      phase="recognition" (individual yes/no self-recognition, Table 10 / Fig 2-right)
+        Evaluator shown a single summary from `target_source`, asked yes/no
+        "did you write this?". `score` = renormalized P("Yes"); `ground_truth`
+        = int(target_source == evaluator self).
+
+      phase="scoring"     (individual Likert self-preference, Table 10 / Fig 4-right)
+        Evaluator rates a single `target_source` summary 1-5; `score` is the
+        probability-weighted mean rating (∑ i·P(i)). `ground_truth` as above.
+
+    Pairwise rows populate `other_source` + `probs_forward`/`probs_backward`;
+    individual rows populate `target_source` + `probs`. `score` is the headline
+    scalar for the row's phase. Per the paper, summaries are sampled at temp 0
+    and the evaluator's confidence comes from constrained first-token probs.
+    """
+    experiment: str
+    phase: str  # "detection" | "comparison" | "recognition" | "scoring"
+    model: str          # evaluator model_name (e.g. meta-llama/Llama-2-7b-chat-hf)
+    dataset: str        # "xsum" | "cnn"
+    run_id: str
+    key: str            # article id (shared across all sources)
+    evaluator: str      # the evaluator's own source label (its "self"), e.g. "llama"
+    # Pairwise (detection / comparison): the alternative source compared against.
+    other_source: Optional[str] = None
+    probs_forward: Optional[dict[str, float]] = None   # {"1":p,"2":p}; self is option 1
+    probs_backward: Optional[dict[str, float]] = None  # {"1":p,"2":p}; self is option 2
+    # Individual (recognition / scoring): the single source whose text was shown.
+    target_source: Optional[str] = None
+    probs: Optional[dict[str, float]] = None  # {"Yes","No"} or {"1".."5"}
+    # Headline scalar for the row's phase (see class docstring).
+    score: Optional[float] = None
+    # Individual phases: 1 iff target_source is the evaluator's own text.
+    ground_truth: Optional[int] = None
+    raw_response: Optional[str] = None
+    timestamp: Optional[str] = None
+    error: Optional[str] = None
+
+
+@dataclass
+class PersonaRecognitionEvalRecord:
+    """One trial of the paper-faithful persona self-recognition evaluation
+    (experiments/self_recognition/evaluate_self_recognition.py).
+
+    Same four measurements as PaperReplicationRecord (Panickssery et al. 2024),
+    but in the PERSONA vocabulary used across the self_recognition experiment:
+    `evaluator_persona` is the inducing/evaluator persona ("self"); `source_persona`
+    is the non-evaluator persona in question — the alternative author for the
+    pairwise phases, or the author of the single shown summary for the individual
+    phases. One vocabulary so this and the existing persona analyses share names.
+
+      phase="pairwise_detection"   pairwise self-recognition  (probs_forward/backward, 1/2)
+      phase="pairwise_comparison"  pairwise self-preference   (probs_forward/backward, 1/2)
+      phase="recognition"          individual yes/no          (probs, score=P(Yes))
+      phase="scoring"              individual Likert 1-5       (probs, score=prob-weighted mean)
+
+    Pairwise score is the ordering-bias-corrected 0.5*(P_fwd(self)+P_bwd(self)).
+    `ground_truth` (individual) = int(source_persona == evaluator_persona).
+    """
+    experiment: str
+    phase: str  # "pairwise_detection" | "pairwise_comparison" | "recognition" | "scoring"
+    model: str
+    dataset: str        # "xsum" | "cnn"
+    run_id: str
+    key: str            # article id (shared across all sources)
+    evaluator_persona: str            # the inducing/evaluator persona ("self")
+    source_persona: Optional[str] = None  # the other persona (pairwise alt / individual author)
+    probs_forward: Optional[dict[str, float]] = None
+    probs_backward: Optional[dict[str, float]] = None
+    probs: Optional[dict[str, float]] = None
+    score: Optional[float] = None
+    ground_truth: Optional[int] = None
+    timestamp: Optional[str] = None
+    error: Optional[str] = None
+
+
+@dataclass
+class PersonaDescriptionEvalRecord:
+    """One trial of the multi-class persona-source classification eval
+    (the `all_persona_descriptions` measurement in
+    experiments/self_recognition/evaluate_self_recognition.py).
+
+    Tests whether an *active* evaluator persona classifies its own generations
+    better than other evaluator personas classify that same source persona's
+    generations. The evaluator is shown one generated text plus a shuffled set
+    of candidate personas labelled A/B/C/D… and asked to assign probabilities
+    (summing to 100) over which candidate produced it.
+
+    Two conditions, discriminated by `condition`:
+      "active_persona"     — the evaluator persona's system prompt is active.
+                             `evaluator_persona` is set; `is_self` =
+                             (evaluator_persona == source_persona).
+      "description_only"   — no evaluator persona is active (neutral baseline).
+                             `evaluator_persona` is None; `is_self` is None.
+
+    Candidate display (`candidate_display_mode`):
+      "full_prompt_anonymous_labels" — A/B/C/D labels, each shown with the full
+                             candidate persona system prompt (the main condition).
+      "short_label_names"  — A/B/C/D labels, each shown with the candidate's
+                             short persona name (semantic-hint ablation).
+
+    `candidate_mapping` is the hidden {label: persona_name} assignment for this
+    trial (order randomized per trial); `correct_label` is the label mapped to
+    `source_persona`. `probabilities` is the normalized distribution over labels
+    (sums to 1.0); `raw_probabilities` is what the model emitted before
+    normalization. `parse_status` ∈ {"ok", "normalized", "failed"}.
+    """
+    experiment: str
+    phase: str          # always "all_persona_descriptions"
+    model: str
+    dataset: str        # the "group": "xsum"/"cnn" (article mode) or the task-set
+                        # name (prompt mode). `task_set` mirrors it under a clearer
+                        # name; both are kept so older readers still find `dataset`.
+    run_id: str
+    key: str            # article id / task_id (the text's source task)
+    condition: str      # "active_persona" | "description_only"
+    source_persona: str  # who actually generated the text
+    candidate_display_mode: str
+    candidate_mapping: dict          # {label: persona_name}
+    correct_label: str               # label mapped to source_persona
+    # The generation group the text came from — the task-set name (prompt mode)
+    # or the dataset (article mode). Same value as `dataset`, under a clearer name
+    # so analysis can break results down by task set. Defaults to `dataset` when
+    # not passed explicitly (see __post_init__).
+    task_set: Optional[str] = None
+    evaluator_persona: Optional[str] = None  # None for description_only
+    # Parsed model output
+    probabilities: Optional[dict] = None       # normalized {label: prob}, sums to 1
+    raw_probabilities: Optional[dict] = None    # {label: value} as emitted
+    predicted_label: Optional[str] = None       # argmax of probabilities
+    correct_probability: Optional[float] = None  # normalized prob on correct_label
+    confidence: Optional[float] = None           # model's stated confidence (0-100)
+    brief_reason: Optional[str] = None
+    is_correct: Optional[bool] = None            # predicted_label == correct_label
+    is_self: Optional[bool] = None               # evaluator_persona == source_persona
+    parse_status: str = "failed"                 # "ok" | "normalized" | "failed"
+    raw_response: Optional[str] = None
+    text: Optional[str] = None                   # the generated text shown
+    timestamp: Optional[str] = None
+    error: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        # `task_set` mirrors the group; default it from `dataset` so every row
+        # carries the clearer name even when the caller only set `dataset`.
+        if self.task_set is None:
+            self.task_set = self.dataset
+
+
+@dataclass
 class PatchscopeRecord:
     """One trial of the patchscope activation interpretation experiment.
 
@@ -419,3 +635,90 @@ class PatchscopeRecord:
     # Meta
     error: Optional[str] = None
     timestamp: Optional[str] = None
+
+
+@dataclass
+class PersonaBinaryEvalRecord:
+    """One binary (A/B) self-recognition trial — the 12-case design defined in
+    experiments/self_recognition/evaluation_cases.py (the single source of truth
+    for case structure AND wording).
+
+    Every trial has exactly two answer options (A and B), so the chance baseline
+    is always 50%. A persona of interest E is shown one or two texts (generated
+    earlier by generate_text.py under various persona prompts) and must pick A or
+    B according to the case's question. Each case is self-contained: it fixes its
+    own evaluator-system-prompt state(s) (active E vs neutral), how the other
+    persona(s) are described (none / full secret / redacted), and the exact
+    wording. The 12 cases span single-text self-recognition (1–2), paired
+    self-recognition with/without the other's secret (3, 4, 7, 11), the
+    deactivated-self probe (6), neutral two-persona classification ceilings/floors
+    (5, 8, 9, 10), and a calibration ceiling over obvious-style personas (12). See
+    the CASE_REGISTRY in evaluation_cases.py for each case's full spec.
+
+    Naming follows the repo: `run_id` is the EVAL run id (the spec's eval_run_id);
+    `generation_run_id` identifies the source generation run; `group` is the
+    dataset / task-set the texts came from; `task_id` is the per-group item key
+    (Text1/Text2 in two-text cases share it).
+
+    Signal: `prob_A`/`prob_B` are the 2-way softmax over {A, B} at the answer
+    position; `logprob_A`/`logprob_B` are the full-vocab log-softmax there (None
+    when logprobs are unavailable). `predicted_answer` is argmax over {A, B} (or
+    the parsed letter in free-generation mode). `parse_status` ∈ {"ok",
+    "constrained", "parsed", "failed"}.
+
+    `base_trial_id` identifies the logical trial independent of the prompt-condition
+    variant (eval_system_prompt_enabled, other_description_style); `trial_id` is
+    unique per concrete instance. `sampled_from_full_case` records whether the
+    case was sampled down to `max_trials_per_case`.
+    """
+    experiment: str
+    phase: str                       # always "binary_recognition"
+    case_id: str                     # "case1" … "case12"
+    case_type: str                   # "test" | "control" | "baseline" | "calibration"
+    model: str
+    run_id: str                      # the eval run id (spec: eval_run_id)
+    trial_id: str
+    base_trial_id: str
+    group: str                       # dataset ("xsum"/"cnn") or task-set name
+    task_id: str                     # per-group item key (article id / task id)
+    evaluator_persona: str           # the persona of interest E (induced only when SP on)
+    eval_system_prompt_enabled: bool
+    other_description_style: str     # "system_prompt_style" | "third_person_description" | "redacted" | "not_applicable"
+    correct_answer: str              # "A" | "B"
+    generation_run_id: Optional[str] = None
+    # Persona roles (which are set depends on the case)
+    source_persona: Optional[str] = None     # single-text cases (1–2): author of the text
+    other_persona: Optional[str] = None       # self_other cases: the non-E persona O
+    other_persona_1: Optional[str] = None      # two-described-persona cases (5/8/9): persona_1
+    other_persona_2: Optional[str] = None      # two-described-persona cases (5/8/9): persona_2
+    # Texts shown (single_text for the single-text cases; text1/text2 for paired cases)
+    single_text: Optional[str] = None
+    text1: Optional[str] = None
+    text2: Optional[str] = None
+    text1_source_persona: Optional[str] = None
+    text2_source_persona: Optional[str] = None
+    text1_generation_id: Optional[str] = None  # stable id: "{group}/{src}/{task_id}"
+    text2_generation_id: Optional[str] = None
+    # Answer framing (hidden from the model, recorded for analysis)
+    candidate_mapping: Optional[dict] = None   # role → persona name (e.g. {"current": E, "other": O})
+    answer_mapping: Optional[dict] = None       # {"A": <meaning>, "B": <meaning>}
+    text_order: Optional[str] = None            # e.g. "E_first" / "O_first" / "P1_first" / "P2_first"
+    answer_order: Optional[str] = None          # e.g. "A=current" / "A=text1"
+    # Model output
+    predicted_answer: Optional[str] = None      # "A" | "B" | None
+    is_correct: Optional[bool] = None
+    prob_A: Optional[float] = None              # 2-way softmax over {A, B}
+    prob_B: Optional[float] = None
+    prob_correct: Optional[float] = None
+    logprob_A: Optional[float] = None           # full-vocab log-softmax (None if unavailable)
+    logprob_B: Optional[float] = None
+    # Exact prompt strings
+    prompt_text: Optional[str] = None           # the user-turn prompt
+    system_prompt_text: Optional[str] = None    # the evaluator system prompt (None when disabled)
+    raw_response: Optional[str] = None
+    parse_status: str = "failed"                # "ok" | "constrained" | "parsed" | "failed"
+    # Sampling provenance
+    sampled_from_full_case: Optional[bool] = None
+    sampling_seed: Optional[int] = None
+    timestamp: Optional[str] = None
+    error: Optional[str] = None
