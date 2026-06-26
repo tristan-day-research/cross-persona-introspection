@@ -35,6 +35,27 @@ order is respected: **exp01 and exp04 first**, **exp14 last** (skipped unless
 `cfg.enable_steering`). Cross-experiment dependencies are materialised on demand
 via `dep()`.
 
+### Download size (laptop disk / time)
+
+`load_dataset` downloads the activations from R2 the first time (then re-runs are
+incremental — cached files are skipped). The eval activations dominate; for an
+8B model with 9 banded layers each stored tensor is ~72 KB, so the eval store is
+typically single-digit-to-low-tens of GB, generation ~150 MB. To stay in control
+on a laptop:
+
+```python
+H.estimate_size(cfg)                 # fetches only the tiny index/metadata, prints exact GB
+cfg.download_cases = ("case1", "case12")   # then fetch ONLY these eval cases' tensors (+ full gen)
+ds = H.load_dataset(cfg)
+cfg.metadata_only = True             # inspection only: index/metadata, no tensors
+```
+
+`download_cases` works because the capture writes shards roughly case-contiguous,
+so restricting to the cases you're analysing genuinely cuts the transfer. Just
+make sure the cases you list cover what the experiments you run actually read
+(e.g. exp02/06/07/09 use the self-recognition case from `pick_self_case`; exp11
+compares across the cases present).
+
 ### Storage / naming notes
 - The capture pipeline shards into **safetensors (fp16) + `metadata.parquet`**
   (the brief's "Zarr" — this repo never adopted Zarr). Each capture is

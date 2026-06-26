@@ -165,6 +165,14 @@ class AnalysisConfig:
     comparison_case: str = "case3"             # active, other described (for comparison)
     # Neutral task family allowlist for persona-behavior vectors (None = all tasks).
     neutral_task_categories: Optional[tuple[str, ...]] = None
+    # Download controls (the store can be large; eval activations dominate).
+    #   metadata_only — fetch only the tiny index/metadata (no tensors); pair with
+    #                   estimate_size() to see exact GB before committing disk.
+    #   download_cases — restrict the EVAL tensor download to these case ids (the
+    #                   capture writes shards roughly case-contiguous, so this saves
+    #                   real space/time). Generation acts are small and always full.
+    metadata_only: bool = False
+    download_cases: Optional[tuple] = None
     # Dry-run controls
     dry_run: bool = False
     dry_run_personas: tuple[str, ...] = (
@@ -192,24 +200,178 @@ class AnalysisConfig:
 # Fetch + read the activation store
 # ═══════════════════════════════════════════════════════════════════════════
 
-def download(cfg: AnalysisConfig) -> Path:
-    """Mirror this run's activations from R2 into cfg.local_path (both phases).
+# Local sub-dir each phase's R2 prefix maps into (matching download_run_activations).
+_PHASE_LOCALSUB = {GEN_PHASE: "activations", EVAL_PHASE: "eval_activations"}
 
-    No-op-friendly: if the local dir already holds a store and force_download is
-    off, we skip the fetch (so the notebook works offline once cached). Returns
-    the local dir. Raises only if nothing is local AND the fetch fails."""
+
+def _phase_prefixes(cfg: AnalysisConfig) -> dict:
+    return {GEN_PHASE: f"runs/{cfg.gen_run}/activations",
+            EVAL_PHASE: f"runs/{cfg.run_name}/eval_activations"}
+
+
+def _targeted_sync(cfg: AnalysisConfig, gen_filter, eval_filter, *,
+                   desc: str = "downloading activations") -> int:
+    """Download R2 objects matching a per-phase filter(rel_path, size)->bool into
+    cfg.local_path, preserving sub-paths (same mapping as download_run_activations).
+
+    - Shows a tqdm byte-level progress bar (intra-file too, via boto3 Callback).
+    - rsync-like: files already present locally are skipped (reported up front).
+    - Atomic: each file streams to a `.part` then renames on success, so an
+      interrupted download resumes cleanly (no truncated file mistaken for done).
+    Returns the count downloaded."""
+    import os
+    from core.activation_store import _r2_client
+    bucket = cfg.bucket or os.environ.get("R2_BUCKET")
+    if not bucket:
+        raise ValueError("set cfg.bucket or the R2_BUCKET env var")
+    client = _r2_client()
+    local = cfg.local_path
+    filt = {GEN_PHASE: gen_filter, EVAL_PHASE: eval_filter}
+    pag = client.get_paginator("list_objects_v2")
+
+    print(f"→ destination: {local}")
+    print("  listing R2 objects …", flush=True)
+    todo, skipped, skipped_bytes = [], 0, 0
+    for phase, prefix in _phase_prefixes(cfg).items():
+        base = local / _PHASE_LOCALSUB[phase]
+        pref = prefix.rstrip("/") + "/"
+        for page in pag.paginate(Bucket=bucket, Prefix=pref):
+            for obj in page.get("Contents", []):
+                rel = obj["Key"][len(pref):]
+                size = obj.get("Size", 0)
+                if not rel or not filt[phase](rel, size):
+                    continue
+                dest = base / rel
+                if dest.exists() and not cfg.force_download:
+                    skipped += 1; skipped_bytes += size; continue
+                todo.append((obj["Key"], dest, size))
+    total = sum(s for _, _, s in todo)
+    print(f"  {len(todo)} file(s) to fetch ({total / 1e9:.2f} GB); "
+          f"{skipped} already present ({skipped_bytes / 1e9:.2f} GB) — skipped.", flush=True)
+    if not todo:
+        return 0
+
+    bar = None
+    try:
+        from tqdm.auto import tqdm
+        bar = tqdm(total=total, unit="B", unit_scale=True, unit_divisor=1024,
+                   desc=desc, dynamic_ncols=True)
+    except Exception:
+        pass
+    n = 0
+    for i, (key, dest, size) in enumerate(todo, 1):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_name(dest.name + ".part")
+        if bar is not None:
+            bar.set_postfix_str(f"{i}/{len(todo)} {dest.name[:28]}", refresh=False)
+            client.download_file(bucket, key, str(tmp), Callback=lambda nb: bar.update(nb))
+        else:
+            print(f"  [{i}/{len(todo)}] {dest.name} ({size / 1e6:.1f} MB)", flush=True)
+            client.download_file(bucket, key, str(tmp))
+        tmp.replace(dest)  # atomic: only a complete file lands at dest
+        n += 1
+    if bar is not None:
+        bar.close()
+    return n
+
+
+def _not_tensor(rel, size):
+    return not rel.endswith(".safetensors")
+
+
+def _wanted_eval_shards(cfg: AnalysisConfig) -> set:
+    """Shard filenames (acts_NNNNN.safetensors) holding eval ids for the selected
+    cases, from the already-downloaded eval index.jsonl + metadata.parquet."""
+    cases = set(cfg.download_cases or [])
+    want = set()
+    base = cfg.local_path / _PHASE_LOCALSUB[EVAL_PHASE]
+    for evd in base.rglob(EVAL_PHASE):
+        meta, idx = evd / "metadata.parquet", evd / "index.jsonl"
+        if not (meta.exists() and idx.exists()):
+            continue
+        m = pd.read_parquet(meta)
+        keep = set(m[m["case"].isin(cases)]["id"]) if cases else set(m["id"])
+        for line in idx.read_text().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            e = json.loads(line)
+            if e.get("id") in keep:
+                want.add(f"acts_{e['shard']}.safetensors")
+    return want
+
+
+def estimate_size(cfg: AnalysisConfig) -> dict:
+    """Fetch ONLY the index/metadata (tiny) and report the EXACT on-disk size of
+    the full tensor download per phase, without downloading any tensors. Use this
+    before committing disk on a laptop."""
+    _targeted_sync(cfg, _not_tensor, _not_tensor)
+    out = {}
+    for phase in (GEN_PHASE, EVAL_PHASE):
+        base = cfg.local_path / _PHASE_LOCALSUB[phase]
+        n_ids, n_tensors, nlayers, hidden = 0, 0, None, None
+        for d in base.rglob(phase):
+            mf = d / "manifest.json"
+            if mf.exists():
+                man = json.loads(mf.read_text())
+                nlayers = len(man.get("layers") or []); hidden = man.get("hidden_dim")
+            idx = d / "index.jsonl"
+            if idx.exists():
+                for line in idx.read_text().splitlines():
+                    line = line.strip()
+                    if line:
+                        n_ids += 1; n_tensors += len(json.loads(line).get("captures", []))
+        gb = (n_tensors * (nlayers or 0) * (hidden or 0) * 2) / 1e9
+        out[phase] = {"ids": n_ids, "tensors": n_tensors, "layers": nlayers,
+                      "hidden": hidden, "GB": round(gb, 2)}
+    out["total_GB"] = round(sum(v["GB"] for v in out.values() if isinstance(v, dict)), 2)
+    print("FULL download size estimate (tensors only; metadata already fetched):")
+    for phase in (GEN_PHASE, EVAL_PHASE):
+        v = out[phase]
+        print(f"  {phase:11s}: {v['ids']} ids, {v['tensors']} tensors, "
+              f"{v['layers']}L x {v['hidden']}h -> {v['GB']} GB")
+    print(f"  TOTAL: {out['total_GB']} GB  "
+          f"(restrict with cfg.download_cases=(...) to fetch only some eval cases)")
+    return out
+
+
+def download(cfg: AnalysisConfig) -> Path:
+    """Mirror this run's activations from R2 into cfg.local_path.
+
+    Modes (set on cfg):
+      default          full download of both phases (download_run_activations).
+      metadata_only    only index/metadata, no tensors (inspection; pair with
+                       estimate_size). The reader will find no vectors.
+      download_cases   full generation tensors (small) + ONLY the eval shards
+                       holding those cases' trials (saves disk/time on a laptop).
+
+    No-op-friendly: if the requested data is already cached and force_download is
+    off, the fetch is skipped. Returns the local dir."""
     local = cfg.local_path
     local.mkdir(parents=True, exist_ok=True)
-    already = bool(list(local.rglob("metadata.parquet")) or list(local.rglob("meta_*.parquet")))
-    if already and not cfg.force_download:
-        logger.info(f"using cached activations under {local}")
+
+    if cfg.metadata_only or cfg.download_cases:
+        # 1) always pull the small index/metadata for both phases first.
+        _targeted_sync(cfg, _not_tensor, _not_tensor)
+        if cfg.metadata_only and not cfg.download_cases:
+            logger.warning("metadata_only: no activation tensors downloaded "
+                           "(inspection mode; use estimate_size).")
+            return local
+        # 2) full generation tensors (small) + only the wanted eval shards.
+        shards = _wanted_eval_shards(cfg)
+        logger.info(f"download_cases={cfg.download_cases}: fetching {len(shards)} eval shard(s)")
+        n = _targeted_sync(
+            cfg,
+            gen_filter=lambda rel, sz: True,                                   # all generation
+            eval_filter=lambda rel, sz: _not_tensor(rel, sz) or Path(rel).name in shards,
+        )
+        logger.info(f"downloaded {n} file(s) into {local}")
         return local
-    from core.activation_store import download_run_activations
-    counts = download_run_activations(
-        run_id=cfg.run_name, generation_run_id=cfg.gen_run, local_dir=local,
-        bucket=cfg.bucket, skip_existing=not cfg.force_download,
-    )
-    logger.info(f"downloaded {counts} into {local}")
+
+    # Full download of both phases — via _targeted_sync so it shows a progress bar
+    # and resumes cleanly (lists every object, re-fetches only what's missing or
+    # incomplete; atomic .part writes). Listing is cheap; the skip count is shown.
+    _targeted_sync(cfg, gen_filter=lambda rel, sz: True, eval_filter=lambda rel, sz: True)
     return local
 
 
@@ -536,6 +698,29 @@ def project_out_vec(w: np.ndarray, v: np.ndarray) -> np.ndarray:
     return w - (w @ vh) * vh
 
 
+def top_principal_components(M: np.ndarray, k: int) -> np.ndarray:
+    """Top-k right singular vectors (principal directions) of mean-centered M
+    [n, H] -> [min(k, rank), H]. Used to build a multi-dimensional style/identity
+    subspace (a single PC1 is far too weak — persona identity is many-dimensional)."""
+    Mc = M - M.mean(0, keepdims=True)
+    _, _, vt = np.linalg.svd(Mc, full_matrices=False)
+    return vt[:k]
+
+
+def project_out_subspace(X: np.ndarray, B: np.ndarray) -> np.ndarray:
+    """Remove the component of X [n, H] in the span of basis B [k, H] (B is
+    orthonormalised internally). Returns X with the whole subspace projected out —
+    the right tool for removing a k-dimensional style/identity subspace, as
+    opposed to project_out which removes a single direction."""
+    if B is None or len(B) == 0:
+        return X
+    u, s, vt = np.linalg.svd(np.asarray(B, np.float64), full_matrices=False)
+    basis = vt[s > 1e-6]                       # orthonormal rows spanning B
+    if len(basis) == 0:
+        return X
+    return (X - (X @ basis.T) @ basis).astype(X.dtype)
+
+
 def dprime(pos: np.ndarray, neg: np.ndarray) -> float:
     """Sensitivity index between two 1-D score samples."""
     pos = np.asarray(pos, float); neg = np.asarray(neg, float)
@@ -826,20 +1011,60 @@ def register(key: str, title: str):
     return deco
 
 
-def run_suite(ds: Dataset, cfg: AnalysisConfig, keys=None, store=None) -> dict:
-    """Run experiments in canonical order. `store` (a dict) caches each result so
-    later experiments can consume earlier ones (e.g. exp02 needs exp04). Returns
-    the store. exp14 is skipped unless cfg.enable_steering."""
+def _result_cache_path(cfg: AnalysisConfig, key: str) -> Path:
+    return art_dir(cfg, key) / "_result.pkl"
+
+
+def cached_run(ds: Dataset, cfg: AnalysisConfig, key: str, store: dict,
+               *, recompute: bool = False) -> dict:
+    """Return experiment `key`'s result, reusing it (a) from the in-memory store,
+    (b) from a pickled `_result.pkl` on disk, else computing it and caching both.
+
+    This is what makes re-running cheap: once an experiment has run, its full
+    result object (vectors, arrays, tables) is on disk and loads in milliseconds,
+    so dependents (e.g. exp12 -> exp01) never recompute. Pass recompute=True to
+    force a fresh run (and overwrite the cache)."""
+    if not recompute and isinstance(store.get(key), dict) and not store[key].get("error"):
+        return store[key]
+    p = _result_cache_path(cfg, key)
+    if not recompute and p.exists():
+        import pickle
+        try:
+            store[key] = pickle.load(open(p, "rb"))
+            print(f"[{key}] loaded cached result from {p}")
+            return store[key]
+        except Exception as e:
+            print(f"[{key}] cache load failed ({e}); recomputing")
+    res = EXPERIMENTS[key]["run"](ds, cfg, store)
+    store[key] = res
+    try:
+        import pickle
+        pickle.dump(res, open(p, "wb"))
+    except Exception as e:
+        print(f"[{key}] could not pickle result ({e}); artifacts still saved")
+    return res
+
+
+def run_suite(ds: Dataset, cfg: AnalysisConfig, keys=None, store=None,
+              recompute=False) -> dict:
+    """Run experiments in canonical order, reusing cached results on disk so
+    re-runs are cheap (see cached_run). `store` caches in memory so later
+    experiments consume earlier ones (e.g. exp02 needs exp04). exp14 is skipped
+    unless cfg.enable_steering.
+
+    recompute: False reuses any cached result; True forces a fresh run of every
+    requested key; or pass a set/list of keys to force just those."""
     store = {} if store is None else store
     keys = keys or [k for k in ORDER if k in EXPERIMENTS]
     keys = [k for k in ORDER if k in keys and k in EXPERIMENTS]
+    force = set(keys) if recompute is True else set(recompute or ())
     for k in keys:
         if k == "exp14" and not cfg.enable_steering:
             print(f"\n=== skip {k} (causal; set cfg.enable_steering=True with a GPU) ===")
             continue
         print(f"\n=== {k}: {EXPERIMENTS[k]['title']}  [{EXPERIMENTS[k]['role']}] ===")
         try:
-            store[k] = EXPERIMENTS[k]["run"](ds, cfg, store)
+            cached_run(ds, cfg, k, store, recompute=k in force)
         except Exception as e:  # keep the suite going; report the failure
             logger.exception(f"{k} failed")
             print(f"  !! {k} failed: {e}")

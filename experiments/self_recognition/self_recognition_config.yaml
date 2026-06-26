@@ -396,7 +396,7 @@ configs:
     #   case8   neutral   2 texts      both full    "which persona wrote which?"     (decoding ceiling)
     #   case9   neutral   2 texts      both redacted "which persona wrote which?"    (style-only floor)
     #   case12  act+neu   (mirrors base case)        calibration ceiling over obvious-style personas
-    cases_to_run: [case8, case9, case5, case1]
+    cases_to_run: [case7]
     calibration_base_case: case7          # case12 mirrors this case's structure
     calibration_personas: [child_five, archaic_speaker]
     # Per-case sample cap (upper bound). If a case has FEWER unique combinations
