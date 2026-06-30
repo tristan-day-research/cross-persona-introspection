@@ -4,16 +4,16 @@ This is the behavioral companion to `analyze_activations_helpers.py`: that modul
 reads the residual-stream activations and asks *how* recognition is represented;
 this one reads the per-trial A/B decisions in the eval `*.jsonl` files and asks
 *whether* — and under which conditions — a persona recognizes its own text, and
-whether any recognition reflects privileged access rather than style-decoding.
+whether any recognition reflects privileged access rather than style-based content inference.
 
 The 12 cases are NOT meant to be read in order; they form a designed argument
 (see the case table). The analysis is organized around that argument:
 
-  baselines    case8 (decoding ceiling: neutral model handed both secrets),
+  baselines    case8 (content-inference ceiling: neutral model handed both secrets),
                case9 (style-only floor: neutral, secrets redacted),
                case10 (minimal: neutral, no persona info).
   headline     case7 (active self, NO secret) vs case8 vs case9. The claim
-               "case7 > case8" rules out decoding; "case7 - case9" is the
+               "case7 > case8" rules out content inference; "case7 - case9" is the
                active-state surplus over pure style.
   gradient     case7 (no desc) -> case11 (surface desc) -> case3 (full secret):
                how much the hidden secret adds for the ACTIVE persona.
@@ -29,7 +29,7 @@ The 12 cases are NOT meant to be read in order; they form a designed argument
 
 Crucially, every accuracy is also cut by persona `coarse_category` (suppression /
 near_twin / calibration / confound), because the access claim lives there:
-style-decoding cannot recover a SUPPRESSED latent (it is absent from the surface
+style-based content inference cannot recover a SUPPRESSED latent (it is absent from the surface
 text) or separate NEAR-TWINS (same surface style), so above-floor recognition on
 those rows is the strongest evidence of privileged access.
 
@@ -72,7 +72,7 @@ CASE_LABELS = {
     "case5": "5 · third-party O1-vs-O2 classify",
     "case6": "6 · deactivated self (neutral, label)",
     "case7": "7 · paired, NO secret (cleanest)",
-    "case8": "8 · decoding ceiling (neutral, full)",
+    "case8": "8 · content-inference ceiling (neutral, full)",
     "case9": "9 · style floor (neutral, redacted)",
     "case10": "10 · minimal baseline (labels only)",
     "case11": "11 · active, redacted O (surface)",
@@ -350,11 +350,11 @@ def contrast(df: pd.DataFrame, conditions: dict[str, tuple[str, str | None]],
 
 def access_ladder(df: pd.DataFrame, by=None) -> pd.DataFrame:
     """The headline comparison: active-self with no secret vs the no-access
-    baselines. case7 > case8 rules out decoding; case7 - case9 is the active
+    baselines. case7 > case8 rules out content inference; case7 - case9 is the active
     surplus over style. case10 anchors the floor."""
     return contrast(df, {
         "active self\n(7: no secret)": ("case7", "active"),
-        "decode ceiling\n(8: neutral, full)": ("case8", "neutral"),
+        "content-inference ceiling\n(8: neutral, full)": ("case8", "neutral"),
         "style floor\n(9: neutral, redacted)": ("case9", "neutral"),
         "minimal\n(10: labels only)": ("case10", "neutral"),
     }, by=by)
@@ -407,19 +407,19 @@ def classification_contamination(df: pd.DataFrame, by=None) -> pd.DataFrame:
 # Question framing is a LARGE accuracy driver: "pick_one" cases (which ONE text is
 # the target — 3,6,7,10,11) run ~0.57-0.60, while "attribute_both" cases (which
 # wrote which — 4,5,8,9) run ~0.50-0.53. So case8's low score is mostly the harder
-# framing, NOT decoding failing — comparing case7 (pick_one) to case8
+# framing, NOT content inference failing — comparing case7 (pick_one) to case8
 # (attribute_both) is not apples-to-apples. The clean active-state test holds
 # framing constant: case7 (active, no desc) vs case10 (neutral, no desc).
 
 def framing_matched_ladder(df: pd.DataFrame, by=None) -> pd.DataFrame:
     """The clean headline, all within the `pick_one` framing: active self with no
-    description (7) vs a neutral model handed E's full secret (6 — pure decoding)
+    description (7) vs a neutral model handed E's full secret (6 — pure content inference)
     vs a neutral model with no info at all (10 — the matched floor). If 7 ≈ 6,
-    being the active persona is no better than being handed the secret (decoding
+    being the active persona is no better than being handed the secret (content inference
     is NOT ruled out); 7 ≫ 10 is the active-state contribution over no-info."""
     return contrast(df, {
         "active self\n(7: no desc)": ("case7", "active"),
-        "neutral + secret\n(6: decoding)": ("case6", "neutral"),
+        "neutral + secret\n(6: content inference)": ("case6", "neutral"),
         "neutral, no info\n(10: floor)": ("case10", "neutral"),
     }, by=by)
 
@@ -432,7 +432,7 @@ def active_state_effect(df: pd.DataFrame, *, active_case: str = "case7",
     The two cases must share the SAME framing and description so the only thing
     that differs is whether the persona is active. Default case7 vs case10 are both
     `pick_one` with NO description — so a positive effect can't be style (the floor
-    sits at chance) or decoding (nothing is described). The category cut is the
+    sits at chance) or content inference (nothing is described). The category cut is the
     point: a genuine introspective signal should appear in suppression / near_twin
     (where style can't help), not only in calibration / confound."""
     by = [by] if isinstance(by, str) else list(by)
