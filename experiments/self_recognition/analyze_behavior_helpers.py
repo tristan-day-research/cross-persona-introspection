@@ -203,15 +203,54 @@ def _z_rate(rate: float, n: int) -> float:
     return _N.inv_cdf(min(max(rate, lo), hi))
 
 
+def mean_ci(vals, conf: float = 0.95) -> tuple[float, float, float]:
+    """Normal-approx CI for the mean of a continuous score — used for the GRADED
+    logprob signal `mean_prob_correct` (the softmax mass the model put on the correct
+    option, recorded per trial as `prob_correct`). The argmax `accuracy` throws this
+    magnitude away; the mean of `prob_correct` keeps it, giving a lower-variance read
+    of the same effect. Returns (mean, lo, hi); (mean, nan, nan) if n < 2."""
+    vals = np.asarray(vals, dtype=float)
+    vals = vals[~np.isnan(vals)]
+    n = len(vals)
+    if n == 0:
+        return (float("nan"), float("nan"), float("nan"))
+    m = float(vals.mean())
+    if n < 2:
+        return (m, float("nan"), float("nan"))
+    se = float(vals.std(ddof=1) / np.sqrt(n))
+    z = _N.inv_cdf(1 - (1 - conf) / 2)
+    return (m, m - z * se, m + z * se)
+
+
+def mean_p_vs(vals, p0: float = 0.5) -> float:
+    """Two-sided p that the mean of a continuous score differs from p0 (one-sample
+    z on the mean, normal approx). For 'does the graded logprob mass beat chance=0.5?'
+    — strictly more powerful than the argmax binomial test, since it uses how far
+    each trial leaned, not just which side of 0.5 it fell on."""
+    vals = np.asarray(vals, dtype=float)
+    vals = vals[~np.isnan(vals)]
+    n = len(vals)
+    if n < 2:
+        return float("nan")
+    sd = vals.std(ddof=1)
+    if sd == 0:
+        return 0.0 if vals.mean() != p0 else 1.0
+    z = (vals.mean() - p0) / (sd / np.sqrt(n))
+    return float(2 * (1 - _N.cdf(abs(z))))
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Accuracy summaries
 # ═══════════════════════════════════════════════════════════════════════════
 
 def accuracy_table(df: pd.DataFrame, by=("case_id", "condition"),
                    conf: float = 0.95) -> pd.DataFrame:
-    """Recognition accuracy per group, with a Wilson CI, a vs-chance p-value, and
-    the mean probability mass on the correct option (a softer, lower-variance
-    signal than argmax accuracy). Every binary case has chance = 0.5.
+    """Recognition accuracy per group, with a Wilson CI and a vs-chance p-value
+    (argmax), AND the graded logprob signal: `mean_prob_correct` (mean softmax mass
+    on the correct option) with its own normal CI (`prob_ci_lo`/`prob_ci_hi`) and a
+    graded vs-chance p (`p_prob_vs_chance`). The graded columns use the per-trial
+    magnitude the argmax discards, so they are lower-variance and more powerful for
+    the near-threshold cells. Every binary case has chance = 0.5.
 
     `by` is any column or list of columns present on the frame (e.g.
     ("case_id", "condition"), or add "evaluator_coarse" for the category cut)."""
@@ -223,12 +262,18 @@ def accuracy_table(df: pd.DataFrame, by=("case_id", "condition"),
         n = len(g)
         k = int(g["is_correct"].sum())
         lo, hi = wilson_ci(k, n, conf)
+        if "prob_correct" in g:
+            pvals = g["prob_correct"].to_numpy()
+            pm, plo, phi = mean_ci(pvals, conf)
+            pp = mean_p_vs(pvals, 0.5)
+        else:
+            pm = plo = phi = pp = float("nan")
         rec = dict(zip(by, keys))
         rec.update({
             "n": n, "accuracy": k / n if n else float("nan"),
             "ci_lo": lo, "ci_hi": hi, "p_vs_chance": binom_p(k, n, 0.5),
-            "mean_prob_correct": float(g["prob_correct"].mean())
-            if "prob_correct" in g else float("nan"),
+            "mean_prob_correct": pm, "prob_ci_lo": plo, "prob_ci_hi": phi,
+            "p_prob_vs_chance": pp,
         })
         rows.append(rec)
     out = pd.DataFrame(rows)
@@ -248,6 +293,39 @@ def case_overview(df: pd.DataFrame) -> pd.DataFrame:
     cols = ["case_id", "case_label", "case_type", "condition", "n",
             "accuracy", "ci_lo", "ci_hi", "p_vs_chance", "mean_prob_correct"]
     return out.sort_values(["_o", "condition"]).reset_index(drop=True)[cols]
+
+
+# Persona categories ordered for the access claim: style CAN'T help on the left
+# (suppression / near_twin), obvious style on the right (confound / calibration).
+_CAT_ORDER = ["suppression", "near_twin", "confound", "calibration"]
+
+
+def case_category_matrix(df: pd.DataFrame, value: str = "accuracy") -> pd.DataFrame:
+    """The master table: every (case, condition) as a row × every persona category as
+    a column, plus an `all` overall column. `value` picks the cell metric —
+    "accuracy" (argmax) or "mean_prob_correct" (graded logprob mass). chance = 0.5.
+
+    This is the at-a-glance map the access argument reads off: scan the
+    suppression / near_twin columns (where style can't help) for any case sitting
+    above 0.5. Pair with `case_category_matrix(df, "mean_prob_correct")` to see the
+    graded version of the same grid."""
+    cells = accuracy_table(df, by=("case_id", "condition", "evaluator_coarse"))
+    if cells.empty:
+        return cells
+    overall = accuracy_table(df, by=("case_id", "condition")).assign(evaluator_coarse="all")
+    t = pd.concat([cells, overall], ignore_index=True)
+    t["case"] = t["case_id"].map(CASE_LABELS).fillna(t["case_id"])
+    order = {c: i for i, c in enumerate(CASE_LABELS)}
+    t["_o"] = t["case_id"].map(order).fillna(len(order)).astype(int)
+    t["row"] = t["case"] + "  [" + t["condition"] + "]"
+    row_order = t.sort_values(["_o", "condition"])["row"].drop_duplicates().tolist()
+    present = set(t["evaluator_coarse"])
+    col_order = [c for c in _CAT_ORDER if c in present] \
+        + [c for c in present if c not in _CAT_ORDER and c != "all"] + ["all"]
+    piv = (t.pivot_table(index="row", columns="evaluator_coarse", values=value, observed=True)
+             .reindex(index=row_order, columns=col_order))
+    piv.columns.name = f"{value} (chance=0.5)"
+    return piv.round(3)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -449,14 +527,54 @@ def active_state_effect(df: pd.DataFrame, *, active_case: str = "case7",
     return m
 
 
+def graded_active_state_effect(df: pd.DataFrame, *, active_case: str = "case7",
+                               neutral_case: str = "case10", by="evaluator_coarse") -> pd.DataFrame:
+    """The GRADED twin of `active_state_effect`: difference in mean `prob_correct`
+    (the logprob mass on the correct option) between the active case and the neutral
+    floor, per `by` group, with a Welch two-sample z on the means. Same contrast as
+    the argmax version, but using the per-trial magnitude the argmax discards — so a
+    near-threshold cell like near_twin gets a more powerful test. A positive graded
+    effect concentrated in suppression / near_twin would be the introspection signal;
+    one concentrated in calibration / confound is access to expressed style."""
+    by = [by] if isinstance(by, str) else list(by)
+
+    def _stats(sub):
+        rows = []
+        for keys, g in sub.groupby(by, dropna=False):
+            keys = keys if isinstance(keys, tuple) else (keys,)
+            v = g["prob_correct"].to_numpy()
+            v = v[~np.isnan(v)]
+            rec = dict(zip(by, keys))
+            rec.update({"mean": float(v.mean()) if len(v) else float("nan"),
+                        "var": float(v.var(ddof=1)) if len(v) > 1 else float("nan"),
+                        "n": len(v)})
+            rows.append(rec)
+        return pd.DataFrame(rows)
+
+    a = _stats(_select(df, active_case, "active")).rename(
+        columns={"mean": "prob_active", "var": "var_a", "n": "n_active"})
+    nf = _stats(_select(df, neutral_case, "neutral")).rename(
+        columns={"mean": "prob_neutral", "var": "var_n", "n": "n_neutral"})
+    m = a.merge(nf, on=by)
+    m["effect"] = m["prob_active"] - m["prob_neutral"]
+    m["se"] = np.sqrt(m["var_a"] / m["n_active"] + m["var_n"] / m["n_neutral"])
+    m["z"] = m["effect"] / m["se"].replace(0, np.nan)
+    m["p_value"] = m["z"].map(lambda z: float(2 * (1 - _N.cdf(abs(z)))) if pd.notna(z) else float("nan"))
+    return m[by + ["prob_active", "n_active", "prob_neutral", "n_neutral",
+                   "effect", "se", "z", "p_value"]]
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Plots (matplotlib; Agg-safe — each takes/returns an Axes like the paper module)
 # ═══════════════════════════════════════════════════════════════════════════
 
 def plot_accuracy(table: pd.DataFrame, *, x="label", title="", ax=None,
-                  chance=0.5, annotate_n=True):
-    """Bar chart of accuracy with Wilson error bars and a chance line. `table` is
-    any frame from accuracy_table/contrast (one bar per row of column `x`)."""
+                  chance=0.5, annotate_n=True, value="accuracy", lo_col="ci_lo",
+                  hi_col="ci_hi", ylabel="recognition accuracy", color="#4C72B0"):
+    """Bar chart with error bars and a chance line. `table` is any frame from
+    accuracy_table/contrast (one bar per row of column `x`). Defaults plot argmax
+    `accuracy`; pass value="mean_prob_correct", lo_col="prob_ci_lo",
+    hi_col="prob_ci_hi", ylabel="mean P(correct)" for the GRADED logprob view."""
     import matplotlib.pyplot as plt
     if ax is None:
         _, ax = plt.subplots(figsize=(max(5, 1.1 * len(table) + 1.5), 4))
@@ -464,14 +582,14 @@ def plot_accuracy(table: pd.DataFrame, *, x="label", title="", ax=None,
         ax.set_title((title + " (no data)").strip())
         return ax
     labels = table[x].astype(str).tolist()
-    acc = table["accuracy"].to_numpy()
-    lo = acc - table["ci_lo"].to_numpy()
-    hi = table["ci_hi"].to_numpy() - acc
-    bars = ax.bar(labels, acc, yerr=[lo, hi], capsize=3, color="#4C72B0",
+    acc = table[value].to_numpy()
+    lo = acc - table[lo_col].to_numpy()
+    hi = table[hi_col].to_numpy() - acc
+    bars = ax.bar(labels, acc, yerr=[lo, hi], capsize=3, color=color,
                   edgecolor="black", linewidth=0.5)
     ax.axhline(chance, ls="--", c="gray", lw=1)
     ax.set_ylim(0, 1)
-    ax.set_ylabel("recognition accuracy")
+    ax.set_ylabel(ylabel)
     ax.set_title(title, fontsize=10)
     ax.tick_params(axis="x", labelsize=8)
     plt.setp(ax.get_xticklabels(), rotation=30, ha="right")
@@ -484,22 +602,24 @@ def plot_accuracy(table: pd.DataFrame, *, x="label", title="", ax=None,
 
 
 def plot_contrast_by_category(table: pd.DataFrame, *, group="evaluator_coarse",
-                              title="", ax=None, chance=0.5):
+                              title="", ax=None, chance=0.5, value="accuracy",
+                              ylabel="recognition accuracy"):
     """Grouped bars: each named condition (label) split by persona category. This
     is the figure that carries the access argument — look for active-self bars
-    above the style-floor bars specifically within suppression / near_twin."""
+    above the style-floor bars specifically within suppression / near_twin. Pass
+    value="mean_prob_correct", ylabel="mean P(correct)" for the GRADED view."""
     import matplotlib.pyplot as plt
     if ax is None:
         _, ax = plt.subplots(figsize=(11, 4.5))
     if table.empty:
         ax.set_title((title + " (no data)").strip())
         return ax
-    pivot = table.pivot_table(index="label", columns=group, values="accuracy",
+    pivot = table.pivot_table(index="label", columns=group, values=value,
                               observed=True)
     pivot.plot(kind="bar", ax=ax, edgecolor="black", linewidth=0.4)
     ax.axhline(chance, ls="--", c="gray", lw=1)
     ax.set_ylim(0, 1)
-    ax.set_ylabel("recognition accuracy")
+    ax.set_ylabel(ylabel)
     ax.set_title(title, fontsize=10)
     ax.legend(title=group, fontsize=8, ncol=2)
     plt.setp(ax.get_xticklabels(), rotation=0, fontsize=8)
