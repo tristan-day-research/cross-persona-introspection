@@ -380,7 +380,7 @@ configs:
   self_recognition_binary_personacat:
     mode: evaluate_self_recognition
     task: persona_category
-    run_name: personacat_v1               # same run_name → finds generations + writes eval to same folder
+    run_name: personacat_v2               # same run_name → finds generations + writes eval to same folder
     model_name: "meta-llama/Llama-3.1-8B-Instruct"
     batch_size: 16
     num_gpus: null
@@ -404,3 +404,4 @@ configs:
     delete_local_activations: true        # remove local copy after R2 upload (ephemeral pod)
     dry_run: false                         # flip to false to actually evaluate
     personas: ALL
+    prompt_wording_version: v2
