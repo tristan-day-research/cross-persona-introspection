@@ -48,6 +48,10 @@ from typing import Optional
 
 from core.schemas import PersonaConfig
 
+from experiments.self_recognition.prompt_wordings import (
+    DEFAULT_PROMPT_VERSION, PROMPT_VERSIONS, WORDING_OVERRIDES,
+)
+
 # Description styles the eval can render an OTHER/SELF persona in (see
 # describe_other). "redacted" is the secret-removed variant cases 9 & 11 need;
 # it is normally hand-curated in persona_descriptions.json, with a best-effort
@@ -255,23 +259,47 @@ CALIBRATION_BASE_CASES = tuple(CASE_REGISTRY)
 DEFAULT_CALIBRATION_BASE_CASE = "case7"
 
 
-def resolve_spec(case_id: str, *, calibration_base_case: str = DEFAULT_CALIBRATION_BASE_CASE) -> CaseSpec:
-    """The CaseSpec for `case_id`. case12 is synthesized by mirroring
-    `calibration_base_case`'s structure/wording, retagged case_id="case12",
-    case_type="calibration", and run in both eval-SP states (the table's
-    "Active E (+ neutral)")."""
+def _apply_wording(spec: CaseSpec, wording_case_id: str, wording_version: str) -> CaseSpec:
+    """Overlay `wording_version`'s wording onto `spec`. The CASE_REGISTRY holds the
+    "v1" wording, so v1 (and any case a version doesn't redefine) returns `spec`
+    unchanged. `wording_case_id` is the id whose override to look up — for case12
+    that is the mirrored base case, not "case12"."""
+    if wording_version not in PROMPT_VERSIONS:
+        raise ValueError(f"wording_version {wording_version!r} unknown; "
+                         f"valid: {list(PROMPT_VERSIONS)}")
+    override = WORDING_OVERRIDES.get(wording_version, {}).get(wording_case_id)
+    if not override:
+        return spec
+    return replace(
+        spec,
+        intro=override.get("intro", spec.intro),
+        option_sentences=override.get("option_sentences", spec.option_sentences),
+    )
+
+
+def resolve_spec(case_id: str, *, calibration_base_case: str = DEFAULT_CALIBRATION_BASE_CASE,
+                 wording_version: str = DEFAULT_PROMPT_VERSION) -> CaseSpec:
+    """The CaseSpec for `case_id`, with `wording_version`'s wording applied. case12
+    is synthesized by mirroring `calibration_base_case`'s structure/wording, retagged
+    case_id="case12", case_type="calibration", and run in both eval-SP states (the
+    table's "Active E (+ neutral)"). The structure is identical across wording
+    versions; only `intro`/`option_sentences` differ (see prompt_wordings.py)."""
     if case_id != "case12":
-        return CASE_REGISTRY[case_id]
+        return _apply_wording(CASE_REGISTRY[case_id], case_id, wording_version)
     if calibration_base_case not in CASE_REGISTRY:
         raise ValueError(f"calibration_base_case {calibration_base_case!r} unknown; "
                          f"valid: {list(CALIBRATION_BASE_CASES)}")
-    base = CASE_REGISTRY[calibration_base_case]
+    base = _apply_wording(CASE_REGISTRY[calibration_base_case], calibration_base_case,
+                          wording_version)
     return replace(base, case_id="case12", case_type="calibration", eval_sp=(True, False))
 
 
-def resolve_specs(cases, *, calibration_base_case: str = DEFAULT_CALIBRATION_BASE_CASE) -> dict[str, CaseSpec]:
-    """{case_id: CaseSpec} for the requested cases (case12 synthesized)."""
-    return {c: resolve_spec(c, calibration_base_case=calibration_base_case) for c in cases}
+def resolve_specs(cases, *, calibration_base_case: str = DEFAULT_CALIBRATION_BASE_CASE,
+                  wording_version: str = DEFAULT_PROMPT_VERSION) -> dict[str, CaseSpec]:
+    """{case_id: CaseSpec} for the requested cases (case12 synthesized), with
+    `wording_version`'s wording applied to each."""
+    return {c: resolve_spec(c, calibration_base_case=calibration_base_case,
+                            wording_version=wording_version) for c in cases}
 
 
 # ═══════════════════════════════════════════════════════════════════════════

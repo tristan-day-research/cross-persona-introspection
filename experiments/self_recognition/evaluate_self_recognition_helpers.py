@@ -39,6 +39,9 @@ from experiments.self_recognition.evaluation_cases import (
     build_binary_prompt, build_case_trials, describe_other, expand_conditions,
     resolve_spec, resolve_specs,
 )
+from experiments.self_recognition.prompt_wordings import (
+    DEFAULT_PROMPT_VERSION, PROMPT_VERSIONS,
+)
 from experiments.self_recognition.generate_text import DATA_DIR, task_root
 
 logger = logging.getLogger(__name__)
@@ -311,6 +314,10 @@ class EvalOptions:
     # state(s) and description treatment are intrinsic to the CaseSpec (see
     # evaluation_cases.py).
     cases_to_run: tuple[str, ...] = ()
+    # Which prompt-wording version to render the cases in (see prompt_wordings.py).
+    # "v1" = original "...under your current persona prompt" framing (reference for
+    # prior runs); "v2" = natural first-person "did you write this?" framing.
+    prompt_wording_version: str = DEFAULT_PROMPT_VERSION
     # Optional override of every describing case's description style (else each
     # case's own style; "not_applicable" for cases that describe nobody).
     description_style: str | None = None
@@ -457,12 +464,18 @@ def _build_binary_eval_options(exp_config: dict, run_config: RunConfig,
         cal_personas = [cal_personas]
     cal_personas = tuple(str(p) for p in cal_personas) if cal_personas else None
 
+    wording_version = str(exp_config.get("prompt_wording_version", DEFAULT_PROMPT_VERSION))
+    if wording_version not in PROMPT_VERSIONS:
+        raise ValueError(f"prompt_wording_version {wording_version!r} unknown; "
+                         f"valid: {list(PROMPT_VERSIONS)}")
+
     return EvalOptions(
         measurements=(),
         groups=groups,
         seed=int(run_config.seed),
         n_manifest_examples=int(exp_config.get("n_manifest_examples", 3)),
         cases_to_run=cases,
+        prompt_wording_version=wording_version,
         description_style=description_style,
         calibration_base_case=calibration_base_case,
         calibration_personas=cal_personas,
@@ -870,7 +883,8 @@ def enumerate_binary_trials(run_config: RunConfig, opts: EvalOptions,
     and case, enumerate+sample base trials then expand across the case's
     evaluator-SP state(s). base_trial_id embeds the group, so ids are unique
     across groups. case12 (calibration) is restricted to calibration_personas."""
-    specs = resolve_specs(opts.cases_to_run, calibration_base_case=opts.calibration_base_case)
+    specs = resolve_specs(opts.cases_to_run, calibration_base_case=opts.calibration_base_case,
+                          wording_version=opts.prompt_wording_version)
     cal_subset = set(opts.calibration_personas) if opts.calibration_personas else None
     trials: list[BinaryTrial] = []
     for group in opts.groups:
@@ -1141,6 +1155,7 @@ def write_binary_manifest(manifest_path: Path, run_config: RunConfig, opts: Eval
         "results_file": (str(deliverable) if deliverable else None),
         "config": {
             "cases_to_run": list(opts.cases_to_run),
+            "prompt_wording_version": opts.prompt_wording_version,
             "description_style": opts.description_style,
             "calibration_base_case": opts.calibration_base_case,
             "calibration_personas": (list(opts.calibration_personas)

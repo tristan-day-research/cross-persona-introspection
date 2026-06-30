@@ -397,7 +397,8 @@ def _run_binary_trials(backend, trials, personas: dict[str, PersonaConfig],
         return 0
     bs = max(1, int(run_config.batch_size or 1))
     capturing = collector is not None
-    specs = resolve_specs(opts.cases_to_run, calibration_base_case=opts.calibration_base_case)
+    specs = resolve_specs(opts.cases_to_run, calibration_base_case=opts.calibration_base_case,
+                          wording_version=opts.prompt_wording_version)
 
     # Process one CASE at a time so each gets its own progress bar(s): the batched
     # A/B read shows a bar per case, and (when collecting activations) the unbatched
@@ -706,7 +707,8 @@ def _run_binary(config_name: str, run_config: RunConfig, personas: dict[str, Per
                 f"→ {where}")
 
     if opts.dry_run:
-        specs = resolve_specs(opts.cases_to_run, calibration_base_case=opts.calibration_base_case)
+        specs = resolve_specs(opts.cases_to_run, calibration_base_case=opts.calibration_base_case,
+                          wording_version=opts.prompt_wording_version)
         preview_binary_trials(trials, text_map, personas, specs)
         problems = validate_binary_trials(trials)
         print("VALIDATION:", "OK — no problems found" if not problems
