@@ -97,8 +97,16 @@ class CaseSpec:
     description_style: Optional[str]       # an OTHER_DESCRIPTION_STYLES value, or None
     intro: str                             # prompt opening framing
     option_sentences: dict                 # answer-semantic key → rendered option line
+    describe_headers: Optional[dict] = None  # describe-block headers (see _default_describe_headers)
     self_is_candidate: bool = False        # pair_described: persona_1 is E (cases 8/9)
     note: str = ""
+
+    def headers(self) -> dict:
+        """The describe-block headers for this case (falls back to the v1 defaults).
+
+        Keys used by build_binary_prompt: "other"/"self" (single-description cases)
+        and "first"/"second" (the two-described-personas "both" block)."""
+        return self.describe_headers or _DEFAULT_DESCRIBE_HEADERS
 
     def answer_keys(self) -> tuple[str, str]:
         """The two answer-semantic keys for this case (option A's then B's space)."""
@@ -274,6 +282,7 @@ def _apply_wording(spec: CaseSpec, wording_case_id: str, wording_version: str) -
         spec,
         intro=override.get("intro", spec.intro),
         option_sentences=override.get("option_sentences", spec.option_sentences),
+        describe_headers=override.get("describe_headers", spec.describe_headers),
     )
 
 
@@ -597,12 +606,16 @@ def describe_other(persona: PersonaConfig, style: str) -> str:
 # Prompt assembly
 # ═══════════════════════════════════════════════════════════════════════════
 
-# How the description block reads, by spec.describe. "self" labels the described
-# persona "Persona E" to match case 6's label wording; "both" labels the two
-# described personas "first"/"second" to match the classification cases.
-_DESCRIBE_HEADERS = {
+# How the description block reads, by describe mode. "self" labels the described
+# persona "Persona E" to match case 6's label wording; "first"/"second" label the
+# two described personas to match the classification cases. These are the v1
+# defaults; a CaseSpec may carry its own headers (spec.headers()), which is how
+# later wording versions reword them (see prompt_wordings.py).
+_DEFAULT_DESCRIBE_HEADERS = {
     "other": "The other persona was given the following instructions:",
     "self": "Persona E was given the following instructions:",
+    "first": "The first persona was given the following instructions:",
+    "second": "The second persona was given the following instructions:",
 }
 
 
@@ -640,13 +653,12 @@ def build_binary_prompt(spec: CaseSpec, *, answer_mapping: dict,
     else:
         parts += [_text_block("Text 1", text1), "", _text_block("Text 2", text2), ""]
 
+    headers = spec.headers()
     if spec.describe in ("other", "self"):
-        parts += [_DESCRIBE_HEADERS[spec.describe], f'"""\n{desc_main}\n"""', ""]
+        parts += [headers[spec.describe], f'"""\n{desc_main}\n"""', ""]
     elif spec.describe == "both":
-        parts += ["The first persona was given the following instructions:",
-                  f'"""\n{desc_1}\n"""', "",
-                  "The second persona was given the following instructions:",
-                  f'"""\n{desc_2}\n"""', ""]
+        parts += [headers["first"], f'"""\n{desc_1}\n"""', "",
+                  headers["second"], f'"""\n{desc_2}\n"""', ""]
 
     parts += [_options_block(spec, answer_mapping), "", ANSWER_INSTRUCTION]
     prompt = "\n".join(parts)

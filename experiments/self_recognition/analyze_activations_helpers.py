@@ -99,14 +99,16 @@ GEN_PROMPT_FINAL = "generation_prompt_final"
 
 def coarse_category(category: str | None) -> str:
     """Bucket a fine persona category into the access-claim grouping used
-    everywhere: suppression / near_twin / calibration / confound / other.
-    Suppression and near-twin are the access-relevant rows; calibration anchors
-    and confounds are controls."""
+    everywhere: suppression / near_twin / neutral / calibration / confound / other.
+    Suppression and near-twin are the access-relevant rows; neutral domain experts,
+    calibration anchors, and confounds are controls."""
     c = (category or "").strip().lower()
     if c.startswith("suppression"):
         return "suppression"
     if c.startswith("near-twin") or c.startswith("near twin"):
         return "near_twin"
+    if c.startswith("neutral"):
+        return "neutral"
     if c.startswith("calibration") or c.startswith("baseline"):
         return "calibration"
     if c.startswith("confound"):
@@ -578,7 +580,12 @@ def load_trial_table(cfg: AnalysisConfig) -> pd.DataFrame:
     activation metadata.parquet (which travels in R2), these carry the exact
     `prompt_text` / `system_prompt_text` exp14 needs to re-run forward passes.
     Empty DataFrame if the eval output is not on this machine."""
-    rd = TEXT_EVALUATIONS_DIR / cfg.task / cfg.run_name
+    from core.run_utils import model_slug
+    # Evals now write under <task>/<model_slug>/<run_name>/ (mirrors generation);
+    # fall back to the legacy non-slugged path for pre-existing runs.
+    rd = TEXT_EVALUATIONS_DIR / cfg.task / model_slug(cfg.model_name) / cfg.run_name
+    if not rd.is_dir():
+        rd = TEXT_EVALUATIONS_DIR / cfg.task / cfg.run_name
     rows = []
     if rd.is_dir():
         for f in sorted(rd.glob("*.jsonl")):

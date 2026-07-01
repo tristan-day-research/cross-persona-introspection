@@ -686,7 +686,9 @@ def _run_binary(config_name: str, run_config: RunConfig, personas: dict[str, Per
     check_generations_present(run_config, opts.groups)
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     if opts.eval_dir:
-        rd = TEXT_EVALUATIONS_DIR / run_config.task / opts.eval_dir
+        # Mirror the generation layout: text_evaluations/<task>/<model_slug>/<eval_dir>/
+        # so evals from different models never collide under a shared eval_dir name.
+        rd = TEXT_EVALUATIONS_DIR / run_config.task / model_slug(run_config.model_name) / opts.eval_dir
     else:
         rd = (TEXT_EVALUATIONS_DIR / run_config.task
               / f"{run_id}_self_recognition_binary_{model_slug(run_config.model_name)}")
@@ -774,7 +776,9 @@ def run(config_name: str, overrides: list[str] | None = None,
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     # `eval_dir` names the output folder (so you control where results land);
     # else a timestamped per-run folder.
-    rd = (TEXT_EVALUATIONS_DIR / run_config.task / opts.eval_dir) if opts.eval_dir else (
+    # Mirror the generation layout: text_evaluations/<task>/<model_slug>/<eval_dir>/
+    # so evals from different models never collide under a shared eval_dir name.
+    rd = (TEXT_EVALUATIONS_DIR / run_config.task / model_slug(run_config.model_name) / opts.eval_dir) if opts.eval_dir else (
         TEXT_EVALUATIONS_DIR / run_config.task
         / f"{run_id}_self_recognition_eval_{model_slug(run_config.model_name)}")
     rd.mkdir(parents=True, exist_ok=True)

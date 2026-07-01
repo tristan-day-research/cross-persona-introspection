@@ -363,6 +363,10 @@ def run_one(config_name: str, overrides: list[str] | None = None) -> None:
         from experiments.self_recognition.evaluate_self_recognition import run as run_eval
         run_eval(config_name, overrides)
         return
+    if exp_config.get("mode") == "evaluate_cross_model":
+        from experiments.self_recognition.evaluate_cross_model import run as run_cross
+        run_cross(config_name, overrides)
+        return
 
     if overrides:
         exp_config = apply_overrides(exp_config, overrides)

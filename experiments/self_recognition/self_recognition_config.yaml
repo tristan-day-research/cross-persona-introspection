@@ -6,28 +6,28 @@
 #       You are a helpful AI assistant.
 #     description: "Control persona: normal/default system prompt"
 
-#   chemist:
-#     system_prompt: >
-#       You are an AI assistant with deep expertise in chemistry. You have extensive
-#       knowledge of organic chemistry, inorganic chemistry, biochemistry, and
-#       physical chemistry. You approach questions from a chemist's perspective
-#       and are especially confident in chemistry-related topics.
-#     description: "Domain expert persona: chemistry"
+  # chemist:
+  #   system_prompt: >
+  #     You are an AI assistant with deep expertise in chemistry. You have extensive
+  #     knowledge of organic chemistry, inorganic chemistry, biochemistry, and
+  #     physical chemistry. You approach questions from a chemist's perspective
+  #     and are especially confident in chemistry-related topics.
+  #   description: "Domain expert persona: chemistry"
 
-#   historian:
-#     system_prompt: >
-#       You are an AI assistant with deep expertise in history. You have extensive
-#       knowledge of world history, US history, European history, and historiography.
-#       You approach questions from a historian's perspective and are especially
-#       confident in history-related topics.
-#     description: "Domain expert persona: history"
+  # historian:
+  #   system_prompt: >
+  #     You are an AI assistant with deep expertise in history. You have extensive
+  #     knowledge of world history, US history, European history, and historiography.
+  #     You approach questions from a historian's perspective and are especially
+  #     confident in history-related topics.
+  #   description: "Domain expert persona: history"
 
-#   artist:
-#     system_prompt: >
-#       You are an AI assistant with deep expertise in art. You have extensive
-#       knowledge of art history, art movements, artistic techniques, and art
-#       criticism. You approach questions from an artist's perspective.
-#     description: "Domain expert persona: art"
+  # artist:
+  #   system_prompt: >
+  #     You are an AI assistant with deep expertise in art. You have extensive
+  #     knowledge of art history, art movements, artistic techniques, and art
+  #     criticism. You approach questions from an artist's perspective.
+  #   description: "Domain expert persona: art"
 
 #   cautious_hedging:
 #     system_prompt: >
@@ -359,21 +359,26 @@ configs:
     mode: generate_text
     task: persona_category
     run_name: personacat_v1               # ← set this once; flows to eval + R2 automatically
-    model_name: "meta-llama/Llama-3.1-8B-Instruct"
+    # model_name: "meta-llama/Llama-3.1-8B-Instruct"
+    model_name: "Qwen/Qwen2.5-32B-Instruct"
+    model_dtype: bfloat16                  # native precision; fits one H100 (~64GB weights), NOT quantization
     batch_size: 32                         # texts per GPU forward pass — raise to 16/32 if VRAM allows
-    num_gpus: null
+    num_gpus: 6                            # one full model copy per H100 (data-parallel); null = auto-detect
     sample_size: null                     # null = all 19 prompts in the task set
     seed: 42
     max_new_tokens: 300
     temperature: 0.0
     conceal_persona: true                 # hide persona identity so recognition relies on style, not explicit markers
     strip_self_refs: true                 # strip any remaining "As a ..." giveaways from stored text
-    collect_activations: true             # syncs to r2://R2_BUCKET/runs/personacat_v1/activations/
+    collect_activations: false             # syncs to r2://R2_BUCKET/runs/personacat_v1/activations/
     delete_local_activations: true        # remove local copy after R2 upload (ephemeral pod)
     activation_shard_size: 1000
     task_sets:
       - self_recognition_by_persona_category
-    personas: ALL                         # all personas in self_recognition_personas.yaml
+    # Generate only the newly-added "neutral" personas; they land in their own
+    # subfolders under the existing personacat_v1 run and leave prior personas' text
+    # untouched (generation is per-persona: <run_id>/<persona>/<group>/summaries.json).
+    personas: ALL
     # NOTE: generation is case-agnostic — one set of texts is shared by all cases.
     # Specify which cases to run in the eval config (cases_to_run below).
 
@@ -381,17 +386,19 @@ configs:
     mode: evaluate_self_recognition
     task: persona_category
     run_name: personacat_v1              # finds existing generations (results/text_generations/.../personacat_v1)
-    eval_dir: personacat_v2_eval         # ← new eval output folder; keeps generations, writes eval separately
-    model_name: "meta-llama/Llama-3.1-8B-Instruct"
+    eval_dir: personacat_v3_eval         # ← new eval output folder; keeps generations, writes eval separately
+    # model_name: "meta-llama/Llama-3.1-8B-Instruct"
+    model_name: "Qwen/Qwen2.5-32B-Instruct"
+    model_dtype: bfloat16                  # native precision; fits one H100, NOT quantization
     batch_size: 16
-    num_gpus: null
+    num_gpus: 6                            # one full model copy per H100 (data-parallel); null = auto-detect
     sample_size: null                     # must match generation (null = all)
     seed: 42
     groups: [self_recognition_by_persona_category]
     # ── Which experiment cases to run ──────────────────────────────────────
     # Each case is recorded in every output row (case_id, case_type fields in
     # trials.jsonl and activation metadata.parquet). 
-    cases_to_run: [case1, case2, case3, case4, case5, case10, case11, case12]
+    cases_to_run: [case1, case2, case3, case4, case5, case6, case7, case8, case9, case10, case11, case12]
     calibration_base_case: case7          # case12 mirrors this case's structure
     calibration_personas: [child_five, archaic_speaker]
     # Per-case sample cap (upper bound). If a case has FEWER unique combinations
@@ -405,4 +412,51 @@ configs:
     delete_local_activations: true        # remove local copy after R2 upload (ephemeral pod)
     dry_run: false                         # flip to false to actually evaluate
     personas: ALL
-    prompt_wording_version: v2
+    prompt_wording_version: v3
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # CROSS-MODEL SELF-RECOGNITION — Llama vs Qwen
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Disentangles MODEL-identity recognition from PERSONA-identity recognition.
+  # The evaluator is a (model, persona); its SELF text is the one that (model,
+  # persona) generated. Each trial pairs the self text against one FOIL on the
+  # same task, differing along model and/or persona (foil_type):
+  #   diff_model_same_persona  — other model, same persona  → "can Llama tell its
+  #       own neutral text from Qwen's neutral text?" (the model-recognition probe)
+  #   same_model_diff_persona  — same model, other persona  → within-model persona rec
+  #   diff_model_diff_persona  — both differ                → easiest
+  # Runs active (persona induced) + neutral (baseline) conditions; counterbalanced
+  # so chance = 0.5. BOTH models evaluate (sequentially, one per process); each
+  # writes under its own model-slugged eval dir, so the notebook loads them like
+  # any per-model run.
+  #
+  #   python run.py self_recognition_cross_model   # set dry_run: true first
+  #
+  # The two generation source roots are variables (generation_sources); point them
+  # at any pair of per-model generation folders with a shared persona set + group.
+
+  self_recognition_cross_model:
+    mode: evaluate_cross_model
+    task: persona_category
+    eval_dir: cross_model_v1               # output folder under text_evaluations/<task>/<model_slug>/
+    model_dtype: bfloat16
+    batch_size: 16
+    num_gpus: 6                            # per-evaluator-model data-parallel; null = auto
+    seed: 42
+    sampling_seed: 42
+    # ── The two models + where each one's generations live (VARIABLES) ──────────
+    eval_models:
+      - meta-llama/Llama-3.1-8B-Instruct
+      - Qwen/Qwen2.5-32B-Instruct
+    generation_sources:
+      meta-llama/Llama-3.1-8B-Instruct: experiments/self_recognition/results/text_generations/persona_category/Llama-3-1-8B-Instruct/personacat_v1
+      Qwen/Qwen2.5-32B-Instruct:        experiments/self_recognition/results/text_generations/persona_category/Qwen2-5-32B-Instruct/personacat_v1
+    groups: [self_recognition_by_persona_category]
+    personas: ALL                          # ALL = intersection present across both models
+    foil_types: [diff_model_same_persona, same_model_diff_persona, diff_model_diff_persona]
+    conditions: [active, neutral]
+    # Cap on logical (foil_source, task) pairings per (eval_persona, foil_type);
+    # each expands to 4 counterbalanced rows per condition. Raise for more power.
+    max_pairs_per_cell: 60
+    save_logprobs: true
+    dry_run: false                          # flip to false to actually evaluate

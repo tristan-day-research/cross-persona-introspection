@@ -118,6 +118,32 @@ class HFBackend:
             return next(self.model.parameters()).device
         return self.device
 
+    def _last_position_logits(self, input_ids, attention_mask=None, position_ids=None):
+        """Next-token logits at the FINAL position only, shape (batch, vocab).
+
+        Requests `logits_to_keep=1` so the lm_head runs on just the last position
+        instead of the whole sequence. Materializing full (batch, seq_len, vocab)
+        logits is a major memory sink on large-vocab models — Qwen2.5's vocab is
+        ~152k, so a batched forward over a long prompt can allocate multiple GiB
+        of logits and OOM the GPU — yet every caller here uses only the last
+        position. Falls back to a full forward (older transformers name the kwarg
+        `num_logits_to_keep`, oldest accept neither) and slices [-1].
+        """
+        kwargs = {}
+        if attention_mask is not None:
+            kwargs["attention_mask"] = attention_mask
+        if position_ids is not None:
+            kwargs["position_ids"] = position_ids
+        with torch.no_grad():
+            for keep_kw in ("logits_to_keep", "num_logits_to_keep"):
+                try:
+                    out = self.model(input_ids, **{keep_kw: 1}, **kwargs)
+                    return out.logits[:, -1, :]
+                except TypeError:
+                    continue
+            out = self.model(input_ids, **kwargs)
+        return out.logits[:, -1, :]
+
     def generate(
         self,
         messages: list[dict[str, str]],
@@ -153,9 +179,7 @@ class HFBackend:
         )
         input_ids = self.tokenizer.encode(input_text, return_tensors="pt").to(self.input_device)
 
-        with torch.no_grad():
-            outputs = self.model(input_ids)
-        return outputs.logits[0, -1, :]  # (vocab_size,)
+        return self._last_position_logits(input_ids)[0]  # (vocab_size,)
 
     def get_choice_probs(
         self, messages: list[dict[str, str]], choices: list[str]
@@ -376,9 +400,8 @@ class HFBackend:
             return []
         input_ids, attention_mask = self._encode_chat_batch(messages_list)
         position_ids = self._position_ids_from_mask(attention_mask)
-        with torch.no_grad():
-            outputs = self.model(input_ids, attention_mask=attention_mask, position_ids=position_ids)
-        last_logits = outputs.logits[:, -1, :]  # (batch, vocab) — left-padded, so -1 is the real last token
+        # (batch, vocab) — left-padded, so the last position is the real last token
+        last_logits = self._last_position_logits(input_ids, attention_mask, position_ids)
         return [self._choice_probs_from_logits(last_logits[i], choices) for i in range(len(messages_list))]
 
     def last_token_logits_for_texts(self, texts: list[str]) -> "torch.Tensor | None":
@@ -406,9 +429,7 @@ class HFBackend:
         input_ids = enc["input_ids"].to(self.input_device)
         attention_mask = enc["attention_mask"].to(self.input_device)
         position_ids = self._position_ids_from_mask(attention_mask)
-        with torch.no_grad():
-            outputs = self.model(input_ids, attention_mask=attention_mask, position_ids=position_ids)
-        return outputs.logits[:, -1, :]
+        return self._last_position_logits(input_ids, attention_mask, position_ids)
 
     def get_choice_probs_and_logprobs_batch(
         self, messages_list: list[list[dict[str, str]]], choices: list[str]
@@ -418,9 +439,7 @@ class HFBackend:
             return []
         input_ids, attention_mask = self._encode_chat_batch(messages_list)
         position_ids = self._position_ids_from_mask(attention_mask)
-        with torch.no_grad():
-            outputs = self.model(input_ids, attention_mask=attention_mask, position_ids=position_ids)
-        last_logits = outputs.logits[:, -1, :]
+        last_logits = self._last_position_logits(input_ids, attention_mask, position_ids)
         results = []
         for i in range(len(messages_list)):
             logits = last_logits[i]
@@ -486,9 +505,7 @@ class HFBackend:
         """
         input_ids = self.tokenizer.encode(prompt, return_tensors="pt").to(self.input_device)
 
-        with torch.no_grad():
-            outputs = self.model(input_ids)
-        return outputs.logits[0, -1, :]  # (vocab_size,) — next-token after full prompt
+        return self._last_position_logits(input_ids)[0]  # (vocab_size,) — next-token after full prompt
 
     def get_choice_probs_and_logits_from_text(
         self, prompt: str, choices: list[str]

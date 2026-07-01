@@ -50,6 +50,7 @@ import numpy as np
 import pandas as pd
 
 from core.results_logger import load_results
+from core.run_utils import model_slug
 from experiments.self_recognition.analyze_activations_helpers import (
     TEXT_EVALUATIONS_DIR, coarse_category, load_persona_categories, load_task_categories,
 )
@@ -84,12 +85,26 @@ CASE_LABELS = {
 # Load + clean the eval trial tables
 # ═══════════════════════════════════════════════════════════════════════════
 
-def eval_dir_for(run_name: str, task: str = "persona_category") -> Path:
-    """The collection directory evaluate_self_recognition.py wrote for this run."""
-    return TEXT_EVALUATIONS_DIR / task / run_name
+def eval_dir_for(run_name: str, task: str = "persona_category",
+                 model: str | None = None) -> Path:
+    """The collection directory evaluate_self_recognition.py wrote for this run.
+
+    Evals are written under text_evaluations/<task>/<model_slug>/<run_name>/,
+    mirroring the generation layout. Pass `model` (the eval model_name) to build
+    that slugged path. Falls back to the legacy non-slugged
+    text_evaluations/<task>/<run_name>/ when only the old layout exists on disk,
+    so pre-existing runs still load; `model=None` also uses the legacy path.
+    """
+    legacy = TEXT_EVALUATIONS_DIR / task / run_name
+    if model:
+        slugged = TEXT_EVALUATIONS_DIR / task / model_slug(model) / run_name
+        if slugged.is_dir() or not legacy.is_dir():
+            return slugged
+    return legacy
 
 
 def load_eval_trials(run_name: str, *, task: str = "persona_category",
+                     model: str | None = None,
                      drop_text: bool = True, personas_yaml: Path | None = None) -> pd.DataFrame:
     """Load every eval `*.jsonl` slice for `run_name` into one tidy frame.
 
@@ -105,7 +120,7 @@ def load_eval_trials(run_name: str, *, task: str = "persona_category",
     `drop_text` removes the bulky text columns (keeps memory small); set False if
     you want to inspect prompts.
     """
-    d = eval_dir_for(run_name, task)
+    d = eval_dir_for(run_name, task, model)
     files = sorted(glob.glob(str(d / "*.jsonl")))
     if not files:
         raise FileNotFoundError(f"no eval *.jsonl under {d}")
@@ -150,10 +165,11 @@ def case_framing(case_id: str) -> str:
     return "pick_one" if spec.answer_form == "single" else "attribute_both"
 
 
-def dedup_report(run_name: str, *, task: str = "persona_category") -> pd.DataFrame:
+def dedup_report(run_name: str, *, task: str = "persona_category",
+                 model: str | None = None) -> pd.DataFrame:
     """Per-slice-file row counts + per-case overlap across files, for a hygiene
     cell. Shows which cases are duplicated across slices (and thus deduped)."""
-    d = eval_dir_for(run_name, task)
+    d = eval_dir_for(run_name, task, model)
     rows = []
     for f in sorted(glob.glob(str(d / "*.jsonl"))):
         sub = load_results(f)
@@ -297,7 +313,7 @@ def case_overview(df: pd.DataFrame) -> pd.DataFrame:
 
 # Persona categories ordered for the access claim: style CAN'T help on the left
 # (suppression / near_twin), obvious style on the right (confound / calibration).
-_CAT_ORDER = ["suppression", "near_twin", "confound", "calibration"]
+_CAT_ORDER = ["suppression", "near_twin", "confound", "calibration", "neutral"]
 
 
 def case_category_matrix(df: pd.DataFrame, value: str = "accuracy") -> pd.DataFrame:
@@ -583,8 +599,14 @@ def plot_accuracy(table: pd.DataFrame, *, x="label", title="", ax=None,
         return ax
     labels = table[x].astype(str).tolist()
     acc = table[value].to_numpy()
-    lo = acc - table[lo_col].to_numpy()
-    hi = table[hi_col].to_numpy() - acc
+    # Error-bar offsets, clipped at 0: a CI bound that crosses the point estimate
+    # (small-n / degenerate cells, or a NaN in one column — common in partial runs)
+    # would otherwise be negative, which matplotlib rejects. Render those as a
+    # zero-length whisker rather than crashing.
+    lo = np.nan_to_num(acc - table[lo_col].to_numpy(), nan=0.0)
+    hi = np.nan_to_num(table[hi_col].to_numpy() - acc, nan=0.0)
+    lo = np.clip(lo, 0, None)
+    hi = np.clip(hi, 0, None)
     bars = ax.bar(labels, acc, yerr=[lo, hi], capsize=3, color=color,
                   edgecolor="black", linewidth=0.5)
     ax.axhline(chance, ls="--", c="gray", lw=1)
@@ -603,11 +625,14 @@ def plot_accuracy(table: pd.DataFrame, *, x="label", title="", ax=None,
 
 def plot_contrast_by_category(table: pd.DataFrame, *, group="evaluator_coarse",
                               title="", ax=None, chance=0.5, value="accuracy",
+                              lo_col="ci_lo", hi_col="ci_hi",
                               ylabel="recognition accuracy"):
-    """Grouped bars: each named condition (label) split by persona category. This
-    is the figure that carries the access argument — look for active-self bars
-    above the style-floor bars specifically within suppression / near_twin. Pass
-    value="mean_prob_correct", ylabel="mean P(correct)" for the GRADED view."""
+    """Grouped bars (with error bars) : each named condition (label) split by
+    persona category. This is the figure that carries the access argument — look
+    for active-self bars above the style-floor bars specifically within
+    suppression / near_twin. Pass value="mean_prob_correct",
+    lo_col="prob_ci_lo", hi_col="prob_ci_hi", ylabel="mean P(correct)" for the
+    GRADED view (the CI columns must match the value)."""
     import matplotlib.pyplot as plt
     if ax is None:
         _, ax = plt.subplots(figsize=(11, 4.5))
@@ -617,6 +642,38 @@ def plot_contrast_by_category(table: pd.DataFrame, *, group="evaluator_coarse",
     pivot = table.pivot_table(index="label", columns=group, values=value,
                               observed=True)
     pivot.plot(kind="bar", ax=ax, edgecolor="black", linewidth=0.4)
+
+    # Overlay per-bar CI whiskers. Pivot the CI bounds on the SAME index/columns
+    # so each bar's error offsets line up; read back the drawn patch geometry to
+    # place the whisker at each bar's true center. Offsets are clipped at 0 and
+    # NaN-safe (degenerate/small-n cells → zero-length whisker, never negative).
+    have_ci = lo_col in table.columns and hi_col in table.columns
+    if have_ci:
+        lo_piv = table.pivot_table(index="label", columns=group, values=lo_col,
+                                   observed=True).reindex(index=pivot.index,
+                                                          columns=pivot.columns)
+        hi_piv = table.pivot_table(index="label", columns=group, values=hi_col,
+                                   observed=True).reindex(index=pivot.index,
+                                                          columns=pivot.columns)
+        n_series = pivot.shape[1]                 # bars per category group
+        for col_i in range(n_series):
+            patches = ax.patches[col_i * pivot.shape[0]:(col_i + 1) * pivot.shape[0]]
+            cat = pivot.columns[col_i]
+            xs, ys, los, his = [], [], [], []
+            for row_i, patch in enumerate(patches):
+                v = pivot.iloc[row_i, col_i]
+                if v != v:                        # NaN bar (missing cell) — skip
+                    continue
+                xs.append(patch.get_x() + patch.get_width() / 2)
+                ys.append(v)
+                los.append(v - lo_piv.iloc[row_i, col_i])
+                his.append(hi_piv.iloc[row_i, col_i] - v)
+            if xs:
+                los = np.clip(np.nan_to_num(los, nan=0.0), 0, None)
+                his = np.clip(np.nan_to_num(his, nan=0.0), 0, None)
+                ax.errorbar(xs, ys, yerr=[los, his], fmt="none",
+                            ecolor="black", elinewidth=0.7, capsize=2)
+
     ax.axhline(chance, ls="--", c="gray", lw=1)
     ax.set_ylim(0, 1)
     ax.set_ylabel(ylabel)

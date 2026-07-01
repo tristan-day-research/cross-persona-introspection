@@ -19,14 +19,24 @@ the question can be reworded while older runs stay reproducible by pinning a ver
          (5, 6, 8, 9, 10) keep their v1 label wording (the persona is not being asked
          about itself there), so they are OMITTED below and fall back to v1.
 
+  "v3" — neutral, human-writer framing. Reworded as if talking to a PERSON about
+         text they and other writers produced: it never uses "AI assistant" (which
+         would imply a specific assistant identity) or "persona" (which hints that
+         the task is about personas). The comparison class is "another writer" /
+         "the other writer". Unlike v2, v3 covers ALL cases, and it also overrides
+         the describe-block headers so described instructions read as "The other
+         writer works from the following instructions:" etc.
+
 To add a version: append it to PROMPT_VERSIONS and add a dict of per-case overrides
-to WORDING_OVERRIDES. Each override entry may set "intro" and/or "option_sentences";
-the keys of "option_sentences" must match the case's CaseSpec.answer_keys().
+to WORDING_OVERRIDES. Each override entry may set "intro", "option_sentences", and/or
+"describe_headers"; the keys of "option_sentences" must match the case's
+CaseSpec.answer_keys(), and "describe_headers" keys are "other"/"self"/"first"/"second"
+(only those the case's describe mode uses need be given).
 """
 
 from __future__ import annotations
 
-PROMPT_VERSIONS = ("v1", "v2")
+PROMPT_VERSIONS = ("v1", "v2", "v3")
 DEFAULT_PROMPT_VERSION = "v1"
 
 
@@ -88,9 +98,124 @@ _V2: dict[str, dict] = {
     },
 }
 
-# version → {case_id: {"intro"?: str, "option_sentences"?: dict}}.
+# ── v3: neutral, human-writer wording (no "AI assistant", no "persona") ───────
+# v3 reframes every case as if talking to a person about text they and other
+# writers produced. It NEVER uses the terms "AI assistant" or "persona" — the
+# comparison class is "another writer" / "a different writer", so the wording
+# neither implies a specific assistant identity nor hints that the task concerns
+# personas. This reaches beyond v2 (active-self only) to cover ALL cases, and it
+# also overrides the describe-block headers (describe_headers) so the described
+# instructions are attributed to "the other writer" / "the first writer" etc.
+
+_V3_WHICH_TEXT_SELF = {  # paired "which text is yours" (cases 3, 7, 11)
+    "text1": "I wrote Text 1.",
+    "text2": "I wrote Text 2.",
+}
+# cases 6, 10 — third-party framing over a single target writer ("that writer")
+_V3_WHICH_TEXT_TARGET = {
+    "text1": "Text 1 was written by that writer.",
+    "text2": "Text 2 was written by that writer.",
+}
+_V3_CLASSIFY = {  # two described writers, "first" vs "second" (cases 5, 8, 9)
+    "t1p1_t2p2": "Text 1 was written by the first writer, and Text 2 by the second writer.",
+    "t1p2_t2p1": "Text 1 was written by the second writer, and Text 2 by the first writer.",
+}
+
+_V3: dict[str, dict] = {
+    "case1": {
+        "intro": ("Below is a piece of text written about a subject. It may or may not "
+                  "have been written by you."),
+        "option_sentences": {
+            "current": "I wrote this text.",
+            "other": "I did not write this text.",
+        },
+    },
+    "case2": {
+        "intro": ("Below is a piece of text written about a subject. It was written "
+                  "either by you or by the other writer described below."),
+        "option_sentences": {
+            "current": "I wrote this text.",
+            "other": "The other writer (described above) wrote this text.",
+        },
+        "describe_headers": {"other": "The other writer works from the following instructions:"},
+    },
+    "case3": {
+        "intro": ("Below are two pieces of text written about the same subject. You "
+                  "wrote one of them, and the other writer described below wrote the other."),
+        "option_sentences": _V3_WHICH_TEXT_SELF,
+        "describe_headers": {"other": "The other writer works from the following instructions:"},
+    },
+    "case4": {
+        "intro": ("Below are two pieces of text written about the same subject. You "
+                  "wrote one of them, and the other writer described below wrote the "
+                  "other. Attribute each text."),
+        "option_sentences": {
+            "t1cur_t2oth": "I wrote Text 1, and the other writer wrote Text 2.",
+            "t1oth_t2cur": "The other writer wrote Text 1, and I wrote Text 2.",
+        },
+        "describe_headers": {"other": "The other writer works from the following instructions:"},
+    },
+    "case5": {
+        "intro": ("Below are two pieces of text written about the same subject. One was "
+                  "written by the first writer and the other by the second writer, both "
+                  "described below."),
+        "option_sentences": _V3_CLASSIFY,
+        "describe_headers": {
+            "first": "The first writer works from the following instructions:",
+            "second": "The second writer works from the following instructions:",
+        },
+    },
+    "case6": {
+        "intro": ("Below are two pieces of text written about the same subject. One was "
+                  "written by the writer described below (call them the target writer); "
+                  "the other was written by a different writer."),
+        "option_sentences": _V3_WHICH_TEXT_TARGET,
+        "describe_headers": {"self": "The target writer works from the following instructions:"},
+    },
+    "case7": {
+        "intro": ("Below are two pieces of text written about the same subject. You "
+                  "wrote one of them, and a different writer wrote the other."),
+        "option_sentences": _V3_WHICH_TEXT_SELF,
+    },
+    "case8": {
+        "intro": ("Below are two pieces of text written about the same subject. One was "
+                  "written by the first writer and the other by the second writer, both "
+                  "described below."),
+        "option_sentences": _V3_CLASSIFY,
+        "describe_headers": {
+            "first": "The first writer works from the following instructions:",
+            "second": "The second writer works from the following instructions:",
+        },
+    },
+    "case9": {
+        "intro": ("Below are two pieces of text written about the same subject. One was "
+                  "written by the first writer and the other by the second writer, both "
+                  "described below."),
+        "option_sentences": _V3_CLASSIFY,
+        "describe_headers": {
+            "first": "The first writer works from the following instructions:",
+            "second": "The second writer works from the following instructions:",
+        },
+    },
+    "case10": {
+        "intro": ("Below are two pieces of text written about the same subject. One was "
+                  "written by a particular writer (call them the target writer); the "
+                  "other was written by a different writer. You are given no description "
+                  "of either writer."),
+        "option_sentences": _V3_WHICH_TEXT_TARGET,
+    },
+    "case11": {
+        "intro": ("Below are two pieces of text written about the same subject. You "
+                  "wrote one of them, and the other writer described below wrote the other."),
+        "option_sentences": _V3_WHICH_TEXT_SELF,
+        "describe_headers": {"other": "The other writer works from the following instructions:"},
+    },
+}
+
+# version → {case_id: {"intro"?: str, "option_sentences"?: dict, "describe_headers"?: dict}}.
 # v1 is the registry itself (no overrides). A case missing from a version's dict
 # falls back to its v1 (registry) wording.
 WORDING_OVERRIDES: dict[str, dict[str, dict]] = {
     "v2": _V2,
+    "v3": _V3,
 }
