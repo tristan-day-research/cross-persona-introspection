@@ -296,3 +296,246 @@ def plot_surplus(table: pd.DataFrame, *, x="label", value="acc_surplus",
     plt.setp(ax.get_xticklabels(), rotation=30, ha="right")
     ax.figure.tight_layout()
     return ax
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Privileged-access verdict (numeric): case7(active) vs case6(neutral)
+# ═══════════════════════════════════════════════════════════════════════════
+# Implements the AI-1 §7e request: per (evaluator × persona category), a ladder,
+# an introspective-surplus test (two-proportion z + Holm across categories), a
+# precondition check (is content inference at floor?), a graded (Welch) companion,
+# a clustered bootstrap CI (AI-2 #4), and a printed verdict. case8 is reported as a
+# ceiling only and never used in the verdict.
+
+_CAT_ORDER = ["suppression", "near_twin", "confound", "calibration", "neutral"]
+
+
+def _p_two_sided(z: float) -> float:
+    from experiments.self_recognition.analyze_behavior_helpers import _N
+    return 2.0 * (1.0 - _N.cdf(abs(z))) if z == z else float("nan")
+
+
+def _two_prop(k1, n1, k2, n2):
+    """Difference of proportions p1−p2: (delta, z [pooled test], p, wald_lo, wald_hi)."""
+    import numpy as np
+    if n1 == 0 or n2 == 0:
+        return (float("nan"),) * 5
+    p1, p2 = k1 / n1, k2 / n2
+    d = p1 - p2
+    pp = (k1 + k2) / (n1 + n2)
+    se_pool = (pp * (1 - pp) * (1 / n1 + 1 / n2)) ** 0.5
+    z = d / se_pool if se_pool > 0 else float("nan")
+    se_un = (p1 * (1 - p1) / n1 + p2 * (1 - p2) / n2) ** 0.5
+    from experiments.self_recognition.analyze_behavior_helpers import _N
+    zc = _N.inv_cdf(0.975)
+    return d, z, _p_two_sided(z), d - zc * se_un, d + zc * se_un
+
+
+def _one_prop_vs(k, n, p0=0.5):
+    """One-sample proportion vs p0: (phat, z, p, wilson_lo, wilson_hi, includes_p0)."""
+    from experiments.self_recognition.analyze_behavior_helpers import _N, wilson_ci
+    if n == 0:
+        return (float("nan"),) * 5 + (False,)
+    phat = k / n
+    se = (p0 * (1 - p0) / n) ** 0.5
+    z = (phat - p0) / se if se > 0 else float("nan")
+    lo, hi = wilson_ci(k, n)
+    return phat, z, _p_two_sided(z), lo, hi, (lo <= p0 <= hi)
+
+
+def _welch(a, b):
+    """Welch two-sample on arrays a,b (graded): (delta, t, p) via normal approx."""
+    import numpy as np
+    a, b = np.asarray(a, float), np.asarray(b, float)
+    if len(a) < 2 or len(b) < 2:
+        return float("nan"), float("nan"), float("nan")
+    d = a.mean() - b.mean()
+    se = (a.var(ddof=1) / len(a) + b.var(ddof=1) / len(b)) ** 0.5
+    t = d / se if se > 0 else float("nan")
+    return d, t, _p_two_sided(t)
+
+
+def _holm(pvals):
+    """Holm–Bonferroni adjusted p-values (same order as input)."""
+    import numpy as np
+    p = np.asarray(pvals, float)
+    ok = ~np.isnan(p)
+    order = np.argsort(np.where(ok, p, np.inf))
+    m = ok.sum()
+    adj = np.full_like(p, np.nan)
+    run = 0.0
+    for rank, idx in enumerate(order[:m]):
+        val = min(1.0, (m - rank) * p[idx])
+        run = max(run, val)
+        adj[idx] = run
+    return adj
+
+
+def _clustered_boot_diff(sub, cluster_cols, n_boot=1000, seed=0):
+    """Clustered bootstrap 95% CI for acc(case7) − acc(case6). Resamples CLUSTERS
+    (default persona×foil×task) with replacement to respect within-cluster
+    correlation (trials share tasks/personas/texts). Vectorized over per-cluster
+    (sum,n) counts. Returns (lo, hi, method_str)."""
+    import numpy as np
+    g = sub.assign(_is7=sub.base_case.eq("case7"), _is6=sub.base_case.eq("case6"))
+    per = g.groupby(cluster_cols, observed=True).apply(
+        lambda x: pd.Series({
+            "s7": x.loc[x._is7, "is_correct"].sum(), "n7": int(x._is7.sum()),
+            "s6": x.loc[x._is6, "is_correct"].sum(), "n6": int(x._is6.sum())}),
+        include_groups=False) if hasattr(pd.DataFrame, "groupby") else None
+    arr = per[["s7", "n7", "s6", "n6"]].to_numpy(float)
+    C = len(arr)
+    if C < 2:
+        return float("nan"), float("nan"), "clustered_bootstrap(insufficient clusters)"
+    rng = np.random.default_rng(seed)
+    deltas = []
+    for _ in range(n_boot):
+        sel = arr[rng.integers(0, C, C)].sum(0)
+        s7, n7, s6, n6 = sel
+        if n7 > 0 and n6 > 0:
+            deltas.append(s7 / n7 - s6 / n6)
+    lo, hi = np.percentile(deltas, [2.5, 97.5])
+    return float(lo), float(hi), f"clustered_bootstrap(clusters={C}, key={'×'.join(cluster_cols)})"
+
+
+def access_verdict(df: pd.DataFrame, foil_type: str = "same_model_diff_persona",
+                   chance: float = 0.5, n_boot: int = 1000,
+                   cluster_cols=("evaluator_persona", "foil_persona", "task_id")):
+    """Numeric privileged-access verdict for one foil_type. Returns a dict of
+    DataFrames (ladder / surplus / precondition / verdict), one row per
+    (evaluator_slug, evaluator_coarse), suppression & near_twin first.
+
+    - ladder: case7/6/8 accuracy + graded mean + n.
+    - surplus: case7−case6 with two-proportion z, two-sided p, Holm-adjusted p
+      (across categories, per evaluator), Wald 95% CI, clustered-bootstrap 95% CI,
+      and a graded Welch companion.
+    - precondition: case6 vs chance (one-sample z, Wilson CI, `clean` = CI covers
+      chance ⇒ content inference is at floor here).
+    - verdict: PRIVILEGED ACCESS / no access (7≈6) / content-inference / ambiguous.
+    case8 (attribute-both) is a ceiling; never used for the verdict.
+
+    Requires case6 and case7 to be pick-one (2 options); raises if not matched.
+    """
+    if "base_case" not in df.columns:
+        return {}
+    ft = df[df.foil_type == foil_type]
+    c7, c6, c8 = _native(ft, "case7"), _native(ft, "case6"), _native(ft, "case8")
+    if c7.empty or c6.empty:
+        return {}
+    # Framing guard: both must be pick-one (exactly 2 answer options A/B). Our binary
+    # eval is always A/B, but assert the answer_mapping has 2 keys for both.
+    def _n_opts(g):
+        am = g["answer_mapping"].iloc[0]
+        if isinstance(am, str):
+            import json as _j; am = _j.loads(am)
+        return len(am)
+    if _n_opts(c7) != 2 or _n_opts(c6) != 2:
+        raise AssertionError("case6/case7 are not both 2-option pick-one — framing not matched")
+
+    def cat_rows(g):
+        return g.groupby(["evaluator_slug", "evaluator_coarse"], observed=True)
+
+    lad, sur, pre, ver = [], [], [], []
+    # Precompute per (evaluator, category) counts.
+    keys = sorted(set(c7[["evaluator_slug", "evaluator_coarse"]].apply(tuple, axis=1))
+                  | set(c6[["evaluator_slug", "evaluator_coarse"]].apply(tuple, axis=1)),
+                  key=lambda t: (t[0], _CAT_ORDER.index(t[1]) if t[1] in _CAT_ORDER else 99))
+    for ev, cat in keys:
+        g7 = c7[(c7.evaluator_slug == ev) & (c7.evaluator_coarse == cat)]
+        g6 = c6[(c6.evaluator_slug == ev) & (c6.evaluator_coarse == cat)]
+        g8 = c8[(c8.evaluator_slug == ev) & (c8.evaluator_coarse == cat)]
+        n7, k7 = len(g7), int(g7.is_correct.sum())
+        n6, k6 = len(g6), int(g6.is_correct.sum())
+        if n7 == 0 or n6 == 0:
+            continue
+        acc7, acc6 = k7 / n7, k6 / n6
+        lad.append({"evaluator_slug": ev, "evaluator_coarse": cat,
+                    "acc7": acc7, "acc6": acc6,
+                    "acc8": (g8.is_correct.mean() if len(g8) else float("nan")),
+                    "graded7": g7.prob_correct.mean(), "graded6": g6.prob_correct.mean(),
+                    "graded8": (g8.prob_correct.mean() if len(g8) else float("nan")),
+                    "n7": n7, "n6": n6, "n8": len(g8)})
+        d, z, p, lo, hi = _two_prop(k7, n7, k6, n6)
+        blo, bhi, method = _clustered_boot_diff(
+            pd.concat([g7, g6]), list(cluster_cols), n_boot=n_boot)
+        gd, gt, gp = _welch(g7.prob_correct.to_numpy(), g6.prob_correct.to_numpy())
+        sur.append({"evaluator_slug": ev, "evaluator_coarse": cat, "surplus": d,
+                    "z": z, "p": p, "ci_lo": lo, "ci_hi": hi,
+                    "boot_lo": blo, "boot_hi": bhi, "boot_method": method,
+                    "graded_surplus": gd, "graded_t": gt, "graded_p": gp})
+        ph, zc, pc, wlo, whi, clean = _one_prop_vs(k6, n6, chance)
+        pre.append({"evaluator_slug": ev, "evaluator_coarse": cat, "acc6": ph,
+                    "ci_lo": wlo, "ci_hi": whi, "z_vs_chance": zc, "p_vs_chance": pc,
+                    "clean": clean})
+    lad = pd.DataFrame(lad); sur = pd.DataFrame(sur); pre = pd.DataFrame(pre)
+    if sur.empty:
+        return {"ladder": lad, "surplus": sur, "precondition": pre, "verdict": pd.DataFrame()}
+    # Holm across categories WITHIN each evaluator.
+    sur["p_holm"] = sur.groupby("evaluator_slug")["p"].transform(lambda s: _holm(s.to_numpy()))
+    # Verdict.
+    pre_idx = pre.set_index(["evaluator_slug", "evaluator_coarse"])["clean"].to_dict()
+    prep_idx = pre.set_index(["evaluator_slug", "evaluator_coarse"])["p_vs_chance"].to_dict()
+    rows = []
+    for _, r in sur.iterrows():
+        key = (r.evaluator_slug, r.evaluator_coarse)
+        c6_clean = pre_idx.get(key, False)
+        c6_above = (prep_idx.get(key, 1.0) < 0.05) and not c6_clean
+        sig_pos = (r.ci_lo > 0) and (r.p_holm < 0.05)
+        ci_incl_0 = (r.ci_lo <= 0 <= r.ci_hi)
+        if sig_pos and c6_clean:
+            v = "PRIVILEGED ACCESS"
+        elif ci_incl_0:
+            v = "no access (7≈6)"
+        elif c6_above and not sig_pos:
+            v = "content-inference"
+        else:
+            v = "ambiguous"
+        rows.append({**{k: r[k] for k in ["evaluator_slug", "evaluator_coarse", "surplus",
+                        "ci_lo", "ci_hi", "boot_lo", "boot_hi", "p", "p_holm"]},
+                     "case6_clean": c6_clean, "verdict": v})
+    ver = pd.DataFrame(rows)
+    return {"ladder": lad, "surplus": sur, "precondition": pre, "verdict": ver}
+
+
+def model_vs_persona(df: pd.DataFrame, condition: str = "active") -> pd.DataFrame:
+    """AI-2 #5 diagnostic: per evaluator, model-recognition (diff_model_same_persona),
+    persona-recognition (same_model_diff_persona), and persona-anchor
+    (persona_vs_model) accuracy, with an interpretation flag."""
+    def acc(ft):
+        s = df[(df.foil_type == ft) & (df.condition == condition) & (df.base_case == "case7")]
+        return (s.is_correct.mean(), len(s)) if len(s) else (float("nan"), 0)
+    rows = []
+    for ev in sorted(df.evaluator_slug.unique()):
+        d = df[df.evaluator_slug == ev]
+        mr, nmr = (lambda s: (s.is_correct.mean(), len(s)))(
+            d[(d.foil_type == "diff_model_same_persona") & (d.condition == "active") & (d.base_case == "case7")])
+        pr, npr = (lambda s: (s.is_correct.mean(), len(s)))(
+            d[(d.foil_type == "same_model_diff_persona") & (d.condition == "active") & (d.base_case == "case7")])
+        pa_s = d[(d.foil_type == "persona_vs_model") & (d.condition == "active")]
+        pa, npa = (pa_s.is_correct.mean(), len(pa_s)) if len(pa_s) else (float("nan"), 0)
+        interp = "persona-dominant" if (pr == pr and mr == mr and pr - 0.5 > 2 * (mr - 0.5)) else "mixed/model-informative"
+        rows.append({"evaluator_slug": ev, "model_recognition": mr, "persona_recognition": pr,
+                     "persona_anchor": pa, "n_model": nmr, "n_persona": npr, "n_anchor": npa,
+                     "interpretation": interp})
+    return pd.DataFrame(rows)
+
+
+def validation_report(df: pd.DataFrame) -> dict:
+    """AI-2 #6: counts by base_case×foil_type×evaluator, A/B + text-order balance,
+    unique tasks/personas/pairs, and any missing (base_case, foil_type) cells."""
+    import pandas as pd
+    counts = df.groupby(["base_case", "foil_type", "evaluator_slug"], observed=True).size().rename("n")
+    bal = (df.assign(cA=df.correct_answer.eq("A"),
+                     t1=df.text_order.astype(str).str.contains("self_first|pm_first"))
+             .groupby(["base_case", "foil_type"], observed=True)
+             .agg(frac_correct_A=("cA", "mean"), frac_targetlike_first=("t1", "mean"), n=("cA", "size")))
+    uniq = pd.Series({
+        "unique_tasks": df.task_id.nunique(),
+        "unique_evaluator_personas": df.evaluator_persona.nunique(),
+        "unique_persona_pairs": df[["evaluator_persona", "foil_persona"]].drop_duplicates().shape[0],
+        "n_rows": len(df)})
+    have = set(map(tuple, df[["base_case", "foil_type"]].drop_duplicates().to_numpy()))
+    all_cases = sorted(df.base_case.unique()); all_foils = sorted(df.foil_type.unique())
+    missing = [(bc, ft) for bc in all_cases for ft in all_foils if (bc, ft) not in have]
+    return {"counts": counts.to_frame(), "balance": bal.round(3), "uniques": uniq.to_frame("value"),
+            "missing_cells": missing}
