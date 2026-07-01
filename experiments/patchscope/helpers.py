@@ -409,6 +409,14 @@ def _resolve_choice_token_ids(
 
     Tries the bare string first, then space-prefixed (e.g. " A" vs "A"),
     since models often predict a leading space after a prompt.
+
+    When a choice is multi-token, selects the **last** sub-token, not the first.
+    On SentencePiece (Llama) tokenizers ``encode("1") == [▁, "1"]`` where ``▁`` is
+    the leading-space metaspace token shared by *every* digit/word; taking the
+    first sub-token reads that shared token for all choices and collapses the
+    constrained read to uniform probabilities. The last sub-token is the content
+    token (the digit/letter itself). Mirrors the reference convention used in
+    ``core/self_recognition.choice_probs_batch`` (``encode(choice)[-1]``).
     Returns {choice_label: token_id}.
     """
     token_ids = {}
@@ -419,12 +427,13 @@ def _resolve_choice_token_ids(
                 token_ids[choice] = ids[0]
                 break
         if choice not in token_ids:
-            # Multi-token — use first token and warn
+            # Multi-token — use the last (content) sub-token and warn.
             ids = tokenizer.encode(choice, add_special_tokens=False)
             if ids:
-                token_ids[choice] = ids[0]
+                token_ids[choice] = ids[-1]
                 logger.warning(
-                    f"Choice '{choice}' is multi-token ({ids}); using first token {ids[0]}"
+                    f"Choice '{choice}' is multi-token ({ids}); using last "
+                    f"(content) sub-token {ids[-1]}"
                 )
     return token_ids
 

@@ -455,8 +455,92 @@ configs:
     personas: ALL                          # ALL = intersection present across both models
     foil_types: [diff_model_same_persona, same_model_diff_persona, diff_model_diff_persona]
     conditions: [active, neutral]
+    # Question wording — reuses the 12-case questions verbatim via build_binary_prompt.
+    #   base_case: case7 (no description, "which did you write?") | case3 (foil's
+    #     system prompt shown) | case11 (foil shown, redacted).
+    #   prompt_wording_version: v1 | v2 | v3 (same versions as the single-model cases).
+    base_case: case7
+    prompt_wording_version: v3
     # Cap on logical (foil_source, task) pairings per (eval_persona, foil_type);
     # each expands to 4 counterbalanced rows per condition. Raise for more power.
-    max_pairs_per_cell: 60
+    max_pairs_per_cell: 120
     save_logprobs: true
     dry_run: false                          # flip to false to actually evaluate
+    # NOTE: this eval does NOT capture activations (only the 12-case binary eval
+    # does, via BinaryActivationCollector). Ask if you want activation capture added
+    # here — it's a separate feature (residual-stream at the answer position per trial).
+
+  # ── Persona-vs-model attribution probe (run standalone, APPENDS to cross_model_v1)
+  # NEITHER text is the evaluator's own: one is the SAME persona in the OTHER model,
+  # one is a DIFFERENT persona in the SAME model. Forced choice "which did you write?"
+  # measures which the active persona claims — accuracy = PERSONA-ANCHOR rate
+  # (>0.5 anchors on persona, <0.5 on model, 0.5 = no lean). Same eval_dir as the
+  # main run + a distinct trial-id namespace ("PvM"), so it appends to the existing
+  # cross_model.jsonl without re-running the self-recognition foils.
+  #
+  #   python run.py self_recognition_cross_model_persona_vs_model   # dry_run: true first
+  
+  self_recognition_cross_model_persona_vs_model:
+    mode: evaluate_cross_model
+    task: persona_category
+    eval_dir: cross_model_v1               # SAME dir as the main run → appends
+    model_dtype: bfloat16
+    batch_size: 16
+    num_gpus: 6
+    seed: 42
+    sampling_seed: 42
+    eval_models:
+      - meta-llama/Llama-3.1-8B-Instruct
+      - Qwen/Qwen2.5-32B-Instruct
+    generation_sources:
+      meta-llama/Llama-3.1-8B-Instruct: experiments/self_recognition/results/text_generations/persona_category/Llama-3-1-8B-Instruct/personacat_v1
+      Qwen/Qwen2.5-32B-Instruct:        experiments/self_recognition/results/text_generations/persona_category/Qwen2-5-32B-Instruct/personacat_v1
+    groups: [self_recognition_by_persona_category]
+    personas: ALL
+    foil_types: [persona_vs_model]         # ← only the probe; leaves the other foils untouched
+    conditions: [active, neutral]
+    base_case: case7                       # forced to case7 wording (two foils → no description)
+    prompt_wording_version: v3
+    max_pairs_per_cell: 120
+    save_logprobs: true
+    dry_run: false
+
+  # ── Cross-model cases 6 & 8: ADD content-inference baselines to cross_model_v1 ─
+  # cross_model_v1 already contains case7 (active, no description = INTROSPECTION)
+  # across all foils, so this run only ADDS the two content-inference questions and
+  # APPENDS them to the SAME eval_dir — one data source, minimal re-run:
+  #   case6 · NEUTRAL, target persona described → match text to a description without
+  #           being it (CONTENT INFERENCE)
+  #   case8 · NEUTRAL, BOTH personas described (attribute-both) → content-inference
+  #           CEILING
+  # Analysis: case7(active) − case6(neutral) = the introspective surplus over content
+  # inference (the introspection signal lives in suppression/near_twin). Cases 6 & 8
+  # describe a persona to disambiguate, so they run only where the persona differs
+  # (same_model_diff_persona, diff_model_diff_persona). Every new row records base_case;
+  # the pre-existing case7/persona_vs_model rows have no base_case (treated as case7
+  # on load). Distinct trial-ids (base_case in the id) → clean append, no collisions.
+  #
+  #   python run.py self_recognition_cross_model_cases --override dry_run=true   # preview
+  self_recognition_cross_model_cases:
+    mode: evaluate_cross_model
+    task: persona_category
+    eval_dir: cross_model_v1               # SAME dir → appends case6/case8 to the existing run
+    model_dtype: bfloat16
+    batch_size: 16
+    num_gpus: 6
+    seed: 42
+    sampling_seed: 42
+    eval_models:
+      - meta-llama/Llama-3.1-8B-Instruct
+      - Qwen/Qwen2.5-32B-Instruct
+    generation_sources:
+      meta-llama/Llama-3.1-8B-Instruct: experiments/self_recognition/results/text_generations/persona_category/Llama-3-1-8B-Instruct/personacat_v1
+      Qwen/Qwen2.5-32B-Instruct:        experiments/self_recognition/results/text_generations/persona_category/Qwen2-5-32B-Instruct/personacat_v1
+    groups: [self_recognition_by_persona_category]
+    personas: ALL
+    base_cases: [case6, case8]             # ← case7 already in cross_model_v1; add only 6 & 8
+    foil_types: [same_model_diff_persona, diff_model_diff_persona]  # where 6/8 are well-posed
+    prompt_wording_version: v3
+    max_pairs_per_cell: 120
+    save_logprobs: true
+    dry_run: false

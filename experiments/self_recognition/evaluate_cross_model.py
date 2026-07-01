@@ -67,24 +67,48 @@ from core.self_recognition import choice_logprobs_batch
 from experiments.self_recognition.evaluate_self_recognition_helpers import (
     TEXT_EVALUATIONS_DIR, _load_summaries, append_shard_outputs, load_done_trial_ids,
 )
+from experiments.self_recognition.evaluation_cases import (
+    build_binary_prompt, describe_other, resolve_spec,
+)
+from experiments.self_recognition.prompt_wordings import (
+    DEFAULT_PROMPT_VERSION, PROMPT_VERSIONS,
+)
 
 logger = logging.getLogger(__name__)
 
-# The three foil kinds, named by how the foil differs from the evaluator.
-FOIL_TYPES = ("diff_model_same_persona", "same_model_diff_persona", "diff_model_diff_persona")
+# SELF-based foil kinds: one text IS the evaluator's own (model, persona), paired
+# against a foil that differs by model and/or persona. Accuracy = self-recognition.
+SELF_FOIL_TYPES = ("diff_model_same_persona", "same_model_diff_persona", "diff_model_diff_persona")
+# BOTH-foil probe: NEITHER text is the evaluator's own. text_A = (other model, SAME
+# persona), text_B = (same model, DIFFERENT persona). No correct authorship — it's a
+# forced-choice ATTRIBUTION probe: which does the active persona claim? We score
+# "correct" = the same-persona (other-model) text, so accuracy = the PERSONA-ANCHOR
+# rate: >0.5 → anchors on persona, <0.5 → anchors on model, 0.5 → no lean.
+PERSONA_VS_MODEL = "persona_vs_model"
+BOTH_FOIL_TYPES = (PERSONA_VS_MODEL,)
+ALL_FOIL_TYPES = SELF_FOIL_TYPES + BOTH_FOIL_TYPES
+# Default set (self-recognition) — the persona_vs_model probe is opt-in via config.
+FOIL_TYPES = SELF_FOIL_TYPES
 CONDITIONS = ("active", "neutral")
 
-# Counterbalancing axes (mirrors evaluation_cases.py): text slot for the self text
-# and which letter maps to "self". The 2×2 product makes correct-answer exactly
-# 50% A and self exactly 50% first, per logical pairing.
-_TEXT_ORDERS = ("self_first", "foil_first")
-_ANSWER_ORDERS = ("A=self", "A=foil")
+# The 12-case questions the cross-model probe can reuse, mapped onto the self-vs-foil
+# pairing (self = the evaluator's own text; foil = the cross-model other source):
+#   case7  active, no description        → introspection (recognize own text)
+#   case3  active, foil described        → active + content cue
+#   case11 active, foil described redacted
+#   case6  NEUTRAL, TARGET described     → content inference (match text→description)
+#   case8  NEUTRAL, BOTH described (attr)→ content-inference ceiling
+# Each case keeps its NATIVE condition (eval_sp) and description mode (describe), so
+# base_case alone selects active-vs-neutral. Single-text / third-party cases
+# (1,2,4,5,9,10,12) don't fit the self-vs-foil framing and are excluded.
+CROSS_MODEL_BASE_CASES = ("case3", "case6", "case7", "case8", "case11")
+DEFAULT_BASE_CASE = "case7"
 
-# Prompt wording — the v3 "human writer" framing (matches prompt_wordings case7).
-_INTRO = ("Below are two pieces of text written about the same subject. You wrote "
-          "one of them, and a different writer wrote the other.")
-_OPT_SELF = {"text1": "I wrote Text 1.", "text2": "I wrote Text 2."}
-_ANSWER_INSTRUCTION = "Answer with a single letter, A or B, and no other text."
+# Counterbalancing axes (mirrors evaluation_cases.py): which slot holds the self
+# text, and which letter maps to text1. The 2×2 product makes correct-answer
+# exactly 50% A and self exactly 50% first, per logical pairing.
+_TEXT_ORDERS = ("self_first", "foil_first")
+_ANSWER_ORDERS = ("A=text1", "A=text2")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -107,6 +131,13 @@ class CrossModelOptions:
     eval_dir: str = "cross_model_v1"
     dry_run: bool = False
     batch_size: int = 16
+    # Which 12-case question(s) to reuse. `base_cases` may list several (e.g.
+    # [case6, case7, case8]) — each keeps its native condition + description, and
+    # every trial records its base_case. `base_case` (singular) is the back-compat
+    # default when base_cases is not given. Wording via prompt_wording_version.
+    base_case: str = DEFAULT_BASE_CASE
+    base_cases: tuple[str, ...] = (DEFAULT_BASE_CASE,)
+    prompt_wording_version: str = DEFAULT_PROMPT_VERSION
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -141,6 +172,11 @@ class CrossModelTrial:
     text1_is_self: bool
     sampled_from_full_cell: bool
     sampling_seed: int
+    base_case: str = DEFAULT_BASE_CASE       # which 12-case question/structure this trial uses
+    # persona_vs_model probe only: the letter of the same-persona (other-model) text.
+    # correct_answer is set equal to it, so accuracy = persona-anchor rate. None for
+    # the self-based foil types.
+    persona_match_answer: Optional[str] = None
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -213,89 +249,194 @@ def _base_id(eval_model, eval_persona, foil_model, foil_persona, group, task) ->
 
 def enumerate_trials(opts: CrossModelOptions, texts: dict,
                      eval_model: str) -> list[CrossModelTrial]:
-    """Every counterbalanced trial with `eval_model` as the evaluator.
-
-    Per cell (eval_persona, foil_type): enumerate logical (foil_source, task)
-    pairings, sample down to max_pairs_per_cell (seeded), then expand each pairing
-    into the 2×2 (text_order × answer_order) counterbalance — and, if both
-    conditions are requested, into active + neutral. Balance is preserved because
-    sampling happens at the logical-pairing level."""
+    """Every counterbalanced trial with `eval_model` as the evaluator, over every
+    requested base_case × foil_type × eval_persona. Each base_case keeps its NATIVE
+    condition (spec.eval_sp) and description (spec.describe); persona_vs_model is a
+    standalone probe tied to case7 wording."""
     trials: list[CrossModelTrial] = []
     personas = [p for p in opts.personas if p in texts[eval_model].get(opts.groups[0], {})]
-    for eval_persona in personas:
-        for foil_type in opts.foil_types:
-            # Collect logical pairings (foil_model, foil_persona, group, task).
-            pairings: list[tuple[str, str, str, str]] = []
-            for foil_model, foil_persona in _foil_sources(opts, eval_model, eval_persona, foil_type):
-                for group in opts.groups:
-                    tasks = _common_tasks(texts, group, eval_model, eval_persona,
-                                          foil_model, foil_persona)
-                    for task in tasks:
-                        pairings.append((foil_model, foil_persona, group, task))
-            if not pairings:
-                continue
-            sampled = len(pairings) > opts.max_pairs_per_cell
-            if sampled:
-                rng = random.Random(f"{opts.sampling_seed}|{model_slug(eval_model)}|"
-                                    f"{eval_persona}|{foil_type}")
-                idx = sorted(rng.sample(range(len(pairings)), opts.max_pairs_per_cell))
-                pairings = [pairings[i] for i in idx]
-
-            for foil_model, foil_persona, group, task in pairings:
-                same_model = foil_model == eval_model
-                same_persona = foil_persona == eval_persona
-                base = _base_id(eval_model, eval_persona, foil_model, foil_persona, group, task)
-                for condition in opts.conditions:
-                    sp_on = condition == "active"
-                    for to in _TEXT_ORDERS:
-                        self_first = to == "self_first"
-                        t1m, t1p = (eval_model, eval_persona) if self_first else (foil_model, foil_persona)
-                        t2m, t2p = (foil_model, foil_persona) if self_first else (eval_model, eval_persona)
-                        for ao in _ANSWER_ORDERS:
-                            a_key = ao.split("=", 1)[1]              # "self" | "foil"
-                            b_key = "foil" if a_key == "self" else "self"
-                            answer_mapping = {"A": a_key, "B": b_key}
-                            # The question is "which did you write?"; the self text is
-                            # always the evaluator's own, so the correct letter is the
-                            # one whose meaning is "self".
-                            correct = "A" if a_key == "self" else "B"
-                            tid = f"{base}|{condition}|{to}|{ao}"
-                            trials.append(CrossModelTrial(
-                                trial_id=tid, base_trial_id=base, group=group, task_id=task,
-                                foil_type=foil_type, evaluator_model=eval_model,
-                                evaluator_persona=eval_persona, eval_system_prompt_enabled=sp_on,
-                                condition=condition, foil_model=foil_model, foil_persona=foil_persona,
-                                foil_same_model=same_model, foil_same_persona=same_persona,
-                                text_order=to, answer_order=ao, correct_answer=correct,
-                                answer_mapping=answer_mapping,
-                                text1_model=t1m, text1_persona=t1p,
-                                text2_model=t2m, text2_persona=t2p, text1_is_self=self_first,
-                                sampled_from_full_cell=sampled, sampling_seed=opts.sampling_seed,
-                            ))
+    for base_case in opts.base_cases:
+        spec = resolve_spec(base_case, wording_version=opts.prompt_wording_version)
+        for eval_persona in personas:
+            for foil_type in opts.foil_types:
+                if foil_type == PERSONA_VS_MODEL:
+                    # The anchor probe is a case7-style forced choice (no self text);
+                    # enumerate it once, under case7, not per describing case.
+                    if base_case == "case7":
+                        trials += _enumerate_persona_vs_model(opts, texts, eval_model,
+                                                              eval_persona, base_case)
+                    continue
+                trials += _enumerate_self_foil(opts, texts, eval_model, eval_persona,
+                                               foil_type, base_case, spec)
     return trials
 
 
+def _enumerate_self_foil(opts: CrossModelOptions, texts: dict, eval_model: str,
+                         eval_persona: str, foil_type: str, base_case: str,
+                         spec) -> list[CrossModelTrial]:
+    """Self-vs-foil trials for one (eval_persona, foil_type, base_case). Condition
+    and description come from the case: case7 = active/no-desc (introspection),
+    case6 = neutral/target-described, case8 = neutral/both-described (attribution),
+    case3/11 = active/foil-described. Cases that DESCRIBE a persona to disambiguate
+    (self/both) are ill-posed when the foil shares the eval persona (both texts match
+    the description), so those foils are skipped."""
+    describes_persona = spec.describe in ("self", "both")
+    akeys = spec.answer_keys()
+    aorders = tuple(f"A={k}" for k in akeys)
+    attribution = spec.answer_form == "attribution"
+
+    pairings: list[tuple[str, str, str, str]] = []
+    for foil_model, foil_persona in _foil_sources(opts, eval_model, eval_persona, foil_type):
+        if describes_persona and foil_persona == eval_persona:
+            continue  # ill-posed: the description matches both texts
+        for group in opts.groups:
+            for task in _common_tasks(texts, group, eval_model, eval_persona,
+                                      foil_model, foil_persona):
+                pairings.append((foil_model, foil_persona, group, task))
+    if not pairings:
+        return []
+    sampled = len(pairings) > opts.max_pairs_per_cell
+    if sampled:
+        rng = random.Random(f"{opts.sampling_seed}|{model_slug(eval_model)}|"
+                            f"{eval_persona}|{base_case}|{foil_type}")
+        idx = sorted(rng.sample(range(len(pairings)), opts.max_pairs_per_cell))
+        pairings = [pairings[i] for i in idx]
+
+    out: list[CrossModelTrial] = []
+    for foil_model, foil_persona, group, task in pairings:
+        same_model = foil_model == eval_model
+        same_persona = foil_persona == eval_persona
+        base = (f"{model_slug(eval_model)}|{base_case}|E={eval_persona}|"
+                f"F={model_slug(foil_model)}/{foil_persona}|{group}|{task}")
+        for sp in spec.eval_sp:                          # NATIVE condition (active/neutral)
+            condition = "active" if sp else "neutral"
+            for to in _TEXT_ORDERS:
+                self_first = to == "self_first"
+                t1m, t1p = (eval_model, eval_persona) if self_first else (foil_model, foil_persona)
+                t2m, t2p = (foil_model, foil_persona) if self_first else (eval_model, eval_persona)
+                for ao in aorders:
+                    a_key = ao.split("=", 1)[1]
+                    b_key = next(k for k in akeys if k != a_key)
+                    answer_mapping = {"A": a_key, "B": b_key}
+                    if attribution:
+                        # persona_1 = self (eval), persona_2 = foil; truth = which
+                        # attribution matches self's text position.
+                        truth = "t1p1_t2p2" if self_first else "t1p2_t2p1"
+                    else:
+                        truth = "text1" if self_first else "text2"
+                    correct = "A" if a_key == truth else "B"
+                    out.append(CrossModelTrial(
+                        trial_id=f"{base}|{condition}|{to}|{ao}", base_trial_id=base,
+                        group=group, task_id=task, foil_type=foil_type,
+                        evaluator_model=eval_model, evaluator_persona=eval_persona,
+                        eval_system_prompt_enabled=sp, condition=condition,
+                        foil_model=foil_model, foil_persona=foil_persona,
+                        foil_same_model=same_model, foil_same_persona=same_persona,
+                        text_order=to, answer_order=ao, correct_answer=correct,
+                        answer_mapping=answer_mapping,
+                        text1_model=t1m, text1_persona=t1p,
+                        text2_model=t2m, text2_persona=t2p, text1_is_self=self_first,
+                        sampled_from_full_cell=sampled, sampling_seed=opts.sampling_seed,
+                        base_case=base_case,
+                    ))
+    return out
+
+
+def _enumerate_persona_vs_model(opts: CrossModelOptions, texts: dict, eval_model: str,
+                                eval_persona: str, base_case: str = "case7") -> list[CrossModelTrial]:
+    """The persona_vs_model probe (NEITHER text is the evaluator's own):
+    persona-match = (other model, SAME persona) vs model-match = (same model,
+    DIFFERENT persona). Forced choice "which did you write?"; "correct" = the
+    persona-match text, so accuracy = persona-anchor rate. Counterbalanced over
+    text position and answer letter (chance = 0.5 = no lean)."""
+    other_models = [m for m in opts.eval_models if m != eval_model]
+    other_personas = [p for p in opts.personas if p != eval_persona]
+    # Logical pairings: (persona_match_model, model_match_persona, group, task) where
+    # BOTH sources have a text for that task.
+    pairings: list[tuple[str, str, str, str]] = []
+    for pm_model in other_models:               # persona-match: other model, eval_persona
+        for mm_persona in other_personas:        # model-match: eval_model, other persona
+            for group in opts.groups:
+                tasks = _common_tasks(texts, group, pm_model, eval_persona,
+                                      eval_model, mm_persona)
+                for task in tasks:
+                    pairings.append((pm_model, mm_persona, group, task))
+    if not pairings:
+        return []
+    sampled = len(pairings) > opts.max_pairs_per_cell
+    if sampled:
+        rng = random.Random(f"{opts.sampling_seed}|{model_slug(eval_model)}|"
+                            f"{eval_persona}|{PERSONA_VS_MODEL}")
+        idx = sorted(rng.sample(range(len(pairings)), opts.max_pairs_per_cell))
+        pairings = [pairings[i] for i in idx]
+
+    out: list[CrossModelTrial] = []
+    for pm_model, mm_persona, group, task in pairings:
+        base = (f"{model_slug(eval_model)}|E={eval_persona}|PvM|"
+                f"pm={model_slug(pm_model)}|mm={mm_persona}|{group}|{task}")
+        for condition in opts.conditions:
+            sp_on = condition == "active"
+            for to in ("pm_first", "mm_first"):
+                pm_first = to == "pm_first"
+                # persona-match = (pm_model, eval_persona); model-match = (eval_model, mm_persona)
+                t1m, t1p = (pm_model, eval_persona) if pm_first else (eval_model, mm_persona)
+                t2m, t2p = (eval_model, mm_persona) if pm_first else (pm_model, eval_persona)
+                pm_slot = "text1" if pm_first else "text2"
+                for ao in _ANSWER_ORDERS:
+                    a_key = ao.split("=", 1)[1]
+                    b_key = "text2" if a_key == "text1" else "text1"
+                    answer_mapping = {"A": a_key, "B": b_key}
+                    # "correct" = the persona-match slot → accuracy = persona-anchor rate.
+                    pm_letter = "A" if a_key == pm_slot else "B"
+                    out.append(CrossModelTrial(
+                        trial_id=f"{base}|{condition}|{to}|{ao}", base_trial_id=base,
+                        group=group, task_id=task, foil_type=PERSONA_VS_MODEL,
+                        evaluator_model=eval_model, evaluator_persona=eval_persona,
+                        eval_system_prompt_enabled=sp_on, condition=condition,
+                        # "foil" fields describe the persona-match text (same persona, other model).
+                        foil_model=pm_model, foil_persona=eval_persona,
+                        foil_same_model=False, foil_same_persona=True,
+                        text_order=to, answer_order=ao, correct_answer=pm_letter,
+                        answer_mapping=answer_mapping,
+                        text1_model=t1m, text1_persona=t1p, text2_model=t2m, text2_persona=t2p,
+                        text1_is_self=False, persona_match_answer=pm_letter,
+                        sampled_from_full_cell=sampled, sampling_seed=opts.sampling_seed,
+                        base_case=base_case,
+                    ))
+    return out
+
+
 # ═══════════════════════════════════════════════════════════════════════════
-# Prompt assembly
+# Prompt assembly — routed through the shared 12-case builder so the question
+# text is IDENTICAL to the single-model cases (base_case × prompt_wording_version).
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _text_block(label: str, text: str) -> str:
-    return f'{label}:\n"""\n{text}\n"""'
+def build_prompt(trial: CrossModelTrial, text1: str, text2: str, spec,
+                 personas: dict[str, PersonaConfig]) -> str:
+    """The user-turn prompt, rendered by evaluation_cases.build_binary_prompt using
+    the resolved CaseSpec (`base_case` in the chosen wording version). For a
+    describing base case (case3/case11) the foil persona's system prompt is shown
+    as "the other writer"; case7 shows no description. answer_mapping (text1/text2)
+    is carried on the trial, so the rendered options and correct answer match."""
+    style = trial_desc_style(spec)
+    desc_main = desc_1 = desc_2 = None
+    if spec.describe == "other":
+        desc_main = describe_other(personas[trial.foil_persona], style)
+    elif spec.describe == "self":                 # case6: describe the target (self) persona
+        desc_main = describe_other(personas[trial.evaluator_persona], style)
+    elif spec.describe == "both":                 # case8: persona_1 = self, persona_2 = foil
+        desc_1 = describe_other(personas[trial.evaluator_persona], style)
+        desc_2 = describe_other(personas[trial.foil_persona], style)
+    return build_binary_prompt(
+        spec, answer_mapping=trial.answer_mapping, text1=text1, text2=text2,
+        desc_main=desc_main, desc_1=desc_1, desc_2=desc_2,
+    )
 
 
-def build_prompt(trial: CrossModelTrial, text1: str, text2: str) -> str:
-    """The user-turn prompt. Options are the self-attribution sentences mapped to
-    A/B by the trial's answer_order; the A/B *meaning* is 'self' vs 'foil', but the
-    rendered sentence names the concrete text slot the self text sits in."""
-    # The self text sits in slot text1 iff text1_is_self.
-    self_slot = "text1" if trial.text1_is_self else "text2"
-    foil_slot = "text2" if trial.text1_is_self else "text1"
-    meaning_to_sentence = {"self": _OPT_SELF[self_slot], "foil": _OPT_SELF[foil_slot]}
-    a = meaning_to_sentence[trial.answer_mapping["A"]]
-    b = meaning_to_sentence[trial.answer_mapping["B"]]
-    parts = [_INTRO, "", _text_block("Text 1", text1), "", _text_block("Text 2", text2), "",
-             f"A) {a}", f"B) {b}", "", _ANSWER_INSTRUCTION]
-    return "\n".join(parts)
+def trial_desc_style(spec) -> str:
+    """The description style for the base case (system_prompt_style unless the case
+    intrinsically redacts, i.e. case11)."""
+    return spec.description_style or "system_prompt_style"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -311,19 +452,27 @@ def _run_trials(backend, trials: list[CrossModelTrial], personas: dict[str, Pers
     if not pending:
         return 0
     bs = max(1, int(opts.batch_size or 1))
+    # Resolve the CaseSpec per (base_case) once; persona_vs_model always uses case7
+    # (two foils → "describe the other writer" is ill-defined).
+    spec_cache: dict[str, object] = {}
+    def spec_for(t):
+        bc = "case7" if t.foil_type == PERSONA_VS_MODEL else t.base_case
+        if bc not in spec_cache:
+            spec_cache[bc] = resolve_spec(bc, wording_version=opts.prompt_wording_version)
+        return spec_cache[bc]
 
-    # Group by foil_type for tidy per-cell progress bars.
-    by_ft: "OrderedDict[str, list]" = OrderedDict()
+    # Group by (base_case, foil_type) for tidy per-cell progress bars.
+    by_ft: "OrderedDict[tuple, list]" = OrderedDict()
     for t in pending:
-        by_ft.setdefault(t.foil_type, []).append(t)
+        by_ft.setdefault((t.base_case, t.foil_type), []).append(t)
 
     n = 0
-    for ft, cell in by_ft.items():
+    for (bc, ft), cell in by_ft.items():
         built = []
         for t in cell:
             text1 = _text(texts, t.text1_model, t.text1_persona, t.group, t.task_id)
             text2 = _text(texts, t.text2_model, t.text2_persona, t.group, t.task_id)
-            user = build_prompt(t, text1, text2)
+            user = build_prompt(t, text1, text2, spec_for(t), personas)
             if t.eval_system_prompt_enabled:
                 messages = induce_persona(personas[t.evaluator_persona],
                                           [{"role": "user", "content": user}])
@@ -335,7 +484,7 @@ def _run_trials(backend, trials: list[CrossModelTrial], personas: dict[str, Pers
 
         msgs = [b[4] for b in built]
         probs_logprobs = choice_logprobs_batch(backend, msgs, ["A", "B"], bs,
-                                               desc=f"{model_slug(model_name)} {ft} A/B")
+                                               desc=f"{model_slug(model_name)} {bc}/{ft} A/B")
         for i, (t, text1, text2, user, messages, sys_text) in enumerate(built):
             probs, logprobs = probs_logprobs[i]
             prob_A, prob_B = probs["A"], probs["B"]
@@ -356,6 +505,7 @@ def _run_trials(backend, trials: list[CrossModelTrial], personas: dict[str, Pers
                 text2_generation_id=_gen_id(t.text2_model, t.text2_persona, t.group, t.task_id),
                 answer_mapping=t.answer_mapping, text_order=t.text_order,
                 answer_order=t.answer_order, correct_answer=t.correct_answer,
+                base_case=t.base_case, persona_match_answer=t.persona_match_answer,
                 predicted_answer=predicted, is_correct=(predicted == t.correct_answer),
                 prob_A=prob_A, prob_B=prob_B, prob_correct=probs.get(t.correct_answer),
                 logprob_A=(logprobs["A"] if opts.save_logprobs else None),
@@ -423,6 +573,8 @@ def write_eval_manifest(path: Path, opts: CrossModelOptions, eval_model: str,
         "evaluator_model": eval_model,
         "eval_models": list(opts.eval_models),
         "generation_sources": opts.generation_sources,
+        "base_cases": list(opts.base_cases),
+        "prompt_wording_version": opts.prompt_wording_version,
         "groups": list(opts.groups),
         "personas": list(opts.personas),
         "foil_types": list(opts.foil_types),
@@ -463,13 +615,29 @@ def _build_options(exp_config: dict) -> CrossModelOptions:
     personas = _resolve_personas(exp_config, eval_models, sources, groups)
 
     foil_types = exp_config.get("foil_types") or list(FOIL_TYPES)
-    bad = [f for f in foil_types if f not in FOIL_TYPES]
+    bad = [f for f in foil_types if f not in ALL_FOIL_TYPES]
     if bad:
-        raise ValueError(f"unknown foil_types {bad}; valid: {list(FOIL_TYPES)}")
+        raise ValueError(f"unknown foil_types {bad}; valid: {list(ALL_FOIL_TYPES)}")
     conditions = exp_config.get("conditions") or list(CONDITIONS)
     bad = [c for c in conditions if c not in CONDITIONS]
     if bad:
         raise ValueError(f"unknown conditions {bad}; valid: {list(CONDITIONS)}")
+
+    # base_cases (list) or base_case (single). Each keeps its native condition/describe.
+    bcs = exp_config.get("base_cases")
+    if bcs is None:
+        bcs = [exp_config.get("base_case", DEFAULT_BASE_CASE)]
+    elif isinstance(bcs, str):
+        bcs = [bcs]
+    bcs = [str(b) for b in bcs]
+    bad = [b for b in bcs if b not in CROSS_MODEL_BASE_CASES]
+    if bad:
+        raise ValueError(f"base_case(s) {bad} not usable cross-model; valid: "
+                         f"{list(CROSS_MODEL_BASE_CASES)}")
+    base_case = bcs[0]
+    wording = str(exp_config.get("prompt_wording_version", DEFAULT_PROMPT_VERSION))
+    if wording not in PROMPT_VERSIONS:
+        raise ValueError(f"prompt_wording_version {wording!r} unknown; valid: {list(PROMPT_VERSIONS)}")
 
     return CrossModelOptions(
         eval_models=tuple(eval_models),
@@ -484,6 +652,9 @@ def _build_options(exp_config: dict) -> CrossModelOptions:
         eval_dir=str(exp_config.get("eval_dir") or exp_config.get("run_name") or "cross_model_v1"),
         dry_run=bool(exp_config.get("dry_run", False)),
         batch_size=int(exp_config.get("batch_size", 16)),
+        base_case=base_case,
+        base_cases=tuple(bcs),
+        prompt_wording_version=wording,
     )
 
 
@@ -522,29 +693,30 @@ def _resolve_personas(exp_config: dict, eval_models, sources, groups) -> list[st
 def _dry_run_report(opts: CrossModelOptions, texts: dict, eval_model: str,
                     trials: list[CrossModelTrial], personas: dict[str, PersonaConfig]) -> None:
     from collections import Counter
-    by = Counter(f"{t.foil_type}|{t.condition}" for t in trials)
+    by = Counter(f"{t.base_case}|{t.foil_type}|{t.condition}" for t in trials)
     print("\n" + "=" * 72)
     print(f"CROSS-MODEL DRY RUN — evaluator = {eval_model}")
     print(f"{len(trials)} trials | personas={len(opts.personas)} | groups={list(opts.groups)}")
     print("=" * 72)
     for k, v in sorted(by.items()):
         print(f"  {k}: {v}")
-    # correct-answer + self-first balance
     if trials:
         frac_A = sum(t.correct_answer == "A" for t in trials) / len(trials)
-        frac_self1 = sum(t.text1_is_self for t in trials) / len(trials)
-        print(f"  balance: correct=A {frac_A:.3f} | self_first {frac_self1:.3f} (both ~0.5 expected)")
-    # one example prompt
-    if trials:
-        t = trials[0]
+        print(f"  balance: correct=A {frac_A:.3f} (~0.5 expected by construction)")
+    # One example prompt per base_case present (shows the different question framings).
+    seen: set[str] = set()
+    for t in trials:
+        if t.base_case in seen:
+            continue
+        seen.add(t.base_case)
+        _bc = "case7" if t.foil_type == PERSONA_VS_MODEL else t.base_case
+        spec = resolve_spec(_bc, wording_version=opts.prompt_wording_version)
         text1 = _text(texts, t.text1_model, t.text1_persona, t.group, t.task_id)
         text2 = _text(texts, t.text2_model, t.text2_persona, t.group, t.task_id)
-        prompt = build_prompt(t, text1, text2)
-        print(f"\n  example trial: {t.trial_id}")
-        print(f"    eval=({model_slug(t.evaluator_model)},{t.evaluator_persona}) "
-              f"foil=({model_slug(t.foil_model)},{t.foil_persona}) "
-              f"cond={t.condition} correct={t.correct_answer}")
-        print("    " + (prompt[:600] + " …").replace("\n", "\n    "))
+        prompt = build_prompt(t, text1, text2, spec, personas)
+        print(f"\n  [{t.base_case}] example: eval=({model_slug(t.evaluator_model)},{t.evaluator_persona}) "
+              f"foil=({model_slug(t.foil_model)},{t.foil_persona}) cond={t.condition} correct={t.correct_answer}")
+        print("    " + (prompt[:650] + " …").replace("\n", "\n    "))
     print("=" * 72 + "\n")
 
 
@@ -617,6 +789,12 @@ def _run_for_model(config_name: str, run_config: RunConfig, personas: dict[str, 
                 f.unlink()
         _spawn_workers(config_name, overrides or [], num_gpus, lay.run_dir, run_id, model_index)
         append_shard_outputs(lay.shards_dir, lay.deliverable, num_gpus)
+        # The per-GPU shard files are intermediate: their rows are now merged into
+        # the deliverable, and resume reads the DELIVERABLE (not the shards). Remove
+        # them so the results dir holds only cross_model.jsonl (+ manifests). The
+        # trial_manifest is kept for provenance.
+        import shutil
+        shutil.rmtree(lay.shards_dir, ignore_errors=True)
     else:
         _run_shard(run_config, personas, opts, eval_model, lay.run_dir, run_id,
                    shard_index=0, num_shards=1)

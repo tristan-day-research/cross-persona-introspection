@@ -787,6 +787,17 @@ class PersonaCrossModelEvalRecord:
     answer_order: str                 # "A=self" | "A=foil"
     correct_answer: str               # "A" | "B"
     generation_run_id: Optional[str] = None
+    # Which 12-case question/structure this trial used (case6/case7/case8/…). Drives
+    # the condition + description: case7 = active, no description (introspection);
+    # case6 = neutral, target persona described (content inference); case8 = neutral,
+    # both described (content-inference ceiling). Lets one deliverable hold several.
+    base_case: Optional[str] = None
+    # persona_vs_model probe only: neither text is the evaluator's own; the two
+    # foils are (other model, SAME persona) and (same model, DIFFERENT persona).
+    # `persona_match_answer` is the letter of the same-persona (other-model) text,
+    # and correct_answer is set equal to it — so is_correct/prob_correct read as the
+    # PERSONA-ANCHOR rate (>0.5 anchors on persona, <0.5 on model). None otherwise.
+    persona_match_answer: Optional[str] = None
     # Model output
     predicted_answer: Optional[str] = None
     is_correct: Optional[bool] = None
