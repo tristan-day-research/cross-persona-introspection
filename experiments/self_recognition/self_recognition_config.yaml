@@ -380,7 +380,8 @@ configs:
   self_recognition_binary_personacat:
     mode: evaluate_self_recognition
     task: persona_category
-    run_name: personacat_v2               # same run_name → finds generations + writes eval to same folder
+    run_name: personacat_v1              # finds existing generations (results/text_generations/.../personacat_v1)
+    eval_dir: personacat_v2_eval         # ← new eval output folder; keeps generations, writes eval separately
     model_name: "meta-llama/Llama-3.1-8B-Instruct"
     batch_size: 16
     num_gpus: null
@@ -390,7 +391,7 @@ configs:
     # ── Which experiment cases to run ──────────────────────────────────────
     # Each case is recorded in every output row (case_id, case_type fields in
     # trials.jsonl and activation metadata.parquet). 
-    cases_to_run: [case7]
+    cases_to_run: [case1, case2, case3, case4, case5, case10, case11, case12]
     calibration_base_case: case7          # case12 mirrors this case's structure
     calibration_personas: [child_five, archaic_speaker]
     # Per-case sample cap (upper bound). If a case has FEWER unique combinations
@@ -400,7 +401,7 @@ configs:
     max_trials_per_case: 3000
     sampling_seed: 42
     save_logprobs: true
-    collect_activations: true             # syncs to r2://R2_BUCKET/runs/personacat_v1/eval_activations/
+    collect_activations: false             # syncs to r2://R2_BUCKET/runs/personacat_v1/eval_activations/
     delete_local_activations: true        # remove local copy after R2 upload (ephemeral pod)
     dry_run: false                         # flip to false to actually evaluate
     personas: ALL
