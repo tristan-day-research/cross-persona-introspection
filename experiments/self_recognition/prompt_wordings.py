@@ -120,6 +120,10 @@ _V3_CLASSIFY = {  # two described writers, "first" vs "second" (cases 5, 8, 9)
     "t1p1_t2p2": "Text 1 was written by the first writer, and Text 2 by the second writer.",
     "t1p2_t2p1": "Text 1 was written by the second writer, and Text 2 by the first writer.",
 }
+_V3_WHICH_TEXT_P1 = {  # two described writers, pick which text is the first writer's (cases 13/14)
+    "text1": "Text 1 was written by the first writer.",
+    "text2": "Text 2 was written by the first writer.",
+}
 
 _V3: dict[str, dict] = {
     "case1": {
@@ -209,6 +213,26 @@ _V3: dict[str, dict] = {
                   "wrote one of them, and the other writer described below wrote the other."),
         "option_sentences": _V3_WHICH_TEXT_SELF,
         "describe_headers": {"other": "The other writer works from the following instructions:"},
+    },
+    "case13": {
+        "intro": ("Below are two pieces of text written about the same subject. One was "
+                  "written by the first writer and the other by the second writer, both "
+                  "described below. Which text did the first writer write?"),
+        "option_sentences": _V3_WHICH_TEXT_P1,
+        "describe_headers": {
+            "first": "The first writer works from the following instructions:",
+            "second": "The second writer works from the following instructions:",
+        },
+    },
+    "case14": {
+        "intro": ("Below are two pieces of text written about the same subject. One was "
+                  "written by the first writer and the other by the second writer, both "
+                  "described below. Which text did the first writer write?"),
+        "option_sentences": _V3_WHICH_TEXT_P1,
+        "describe_headers": {
+            "first": "The first writer works from the following instructions:",
+            "second": "The second writer works from the following instructions:",
+        },
     },
 }
 

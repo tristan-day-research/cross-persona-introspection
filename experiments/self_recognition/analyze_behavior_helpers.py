@@ -78,6 +78,8 @@ CASE_LABELS = {
     "case10": "10 · minimal baseline (labels only)",
     "case11": "11 · active, redacted O (surface)",
     "case12": "12 · calibration (obvious-style)",
+    "case13": "13 · both described, pick-one (content ceiling, framing-matched)",
+    "case14": "14 · both described redacted, pick-one (style floor, framing-matched)",
 }
 
 
@@ -680,5 +682,73 @@ def plot_contrast_by_category(table: pd.DataFrame, *, group="evaluator_coarse",
     ax.set_title(title, fontsize=10)
     ax.legend(title=group, fontsize=8, ncol=2)
     plt.setp(ax.get_xticklabels(), rotation=0, fontsize=8)
+    ax.figure.tight_layout()
+    return ax
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Active self minus the BEST neutral decoder (case7 − max(case6, case13, case14))
+# ═══════════════════════════════════════════════════════════════════════════
+
+def active_minus_best_neutral(df: pd.DataFrame, *, active_case: str = "case7",
+                              neutral_cases=("case6", "case13", "case14"),
+                              by: str = "evaluator_coarse", conf: float = 0.95) -> pd.DataFrame:
+    """`case7(active) − max over {case6, case13, case14}(neutral)` per group — the
+    active surplus over the BEST framing-matched neutral decoder (the strongest
+    single privileged-access statistic: active-self beating whichever neutral
+    content-inference/style baseline does best). Per group returns: acc_active,
+    the winning neutral case + its accuracy, surplus with a two-proportion 95% CI
+    (case7 vs the winning neutral), the graded companion, and each neutral's acc.
+    Neutral cases absent from `df` are skipped; returns empty if none present."""
+    present = [c for c in neutral_cases if c in set(df["case_id"])]
+    if active_case not in set(df["case_id"]) or not present:
+        return pd.DataFrame()
+    z = _N.inv_cdf(1 - (1 - conf) / 2)
+
+    def stats(sub):
+        g = sub[sub["is_correct"].notna()].groupby(by, dropna=False)
+        return g.agg(acc=("is_correct", "mean"), n=("is_correct", "size"),
+                     graded=("prob_correct", "mean"))
+    a = stats(df[(df.case_id == active_case) & (df.condition == "active")])
+    neu = {c: stats(df[(df.case_id == c) & (df.condition == "neutral")]) for c in present}
+    rows = []
+    for gkey, ar in a.iterrows():
+        cand = [(c, neu[c].loc[gkey]) for c in present if gkey in neu[c].index]
+        if not cand:
+            continue
+        best_c, best = max(cand, key=lambda t: t[1]["acc"])
+        p7, n7, pb, nb = ar.acc, int(ar.n), best.acc, int(best.n)
+        se = (p7 * (1 - p7) / n7 + pb * (1 - pb) / nb) ** 0.5
+        d = p7 - pb
+        rec = {by: gkey, "acc_active": p7, "n_active": n7,
+               "best_neutral_case": best_c, "acc_best_neutral": pb, "n_best": nb,
+               "surplus": d, "surplus_lo": d - z * se, "surplus_hi": d + z * se,
+               "graded_active": ar.graded, "graded_best_neutral": best.graded,
+               "graded_surplus": ar.graded - best.graded}
+        for c in present:
+            rec[f"acc_{c}"] = neu[c].loc[gkey]["acc"] if gkey in neu[c].index else float("nan")
+        rows.append(rec)
+    return pd.DataFrame(rows)
+
+
+def plot_surplus(table: pd.DataFrame, *, x="label", value="surplus",
+                 lo_col="surplus_lo", hi_col="surplus_hi", title="",
+                 ylabel="active − best neutral", ax=None, color="#C44E52"):
+    """Diverging bar chart for a signed surplus with 95% CI whiskers and a zero
+    line (NOT clamped to [0,1], so negative surpluses render). `table` has one row
+    per `x`."""
+    import matplotlib.pyplot as plt
+    if ax is None:
+        _, ax = plt.subplots(figsize=(max(5, 1.1 * len(table) + 1.5), 4))
+    if table.empty:
+        ax.set_title((title + " (no data)").strip()); return ax
+    labels = table[x].astype(str).tolist()
+    val = table[value].to_numpy()
+    lo = np.clip(np.nan_to_num(val - table[lo_col].to_numpy(), nan=0.0), 0, None)
+    hi = np.clip(np.nan_to_num(table[hi_col].to_numpy() - val, nan=0.0), 0, None)
+    ax.bar(labels, val, yerr=[lo, hi], capsize=3, color=color, edgecolor="black", linewidth=0.5)
+    ax.axhline(0, ls="--", c="gray", lw=1)
+    ax.set_ylabel(ylabel); ax.set_title(title, fontsize=10)
+    plt.setp(ax.get_xticklabels(), rotation=30, ha="right")
     ax.figure.tight_layout()
     return ax

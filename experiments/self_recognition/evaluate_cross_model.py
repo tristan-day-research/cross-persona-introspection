@@ -98,10 +98,12 @@ CONDITIONS = ("active", "neutral")
 #   case11 active, foil described redacted
 #   case6  NEUTRAL, TARGET described     → content inference (match text→description)
 #   case8  NEUTRAL, BOTH described (attr)→ content-inference ceiling
+#   case13 NEUTRAL, BOTH described, pick-one → framing-matched content-inference ceiling
+#   case14 NEUTRAL, BOTH described REDACTED, pick-one → framing-matched style-only floor
 # Each case keeps its NATIVE condition (eval_sp) and description mode (describe), so
 # base_case alone selects active-vs-neutral. Single-text / third-party cases
 # (1,2,4,5,9,10,12) don't fit the self-vs-foil framing and are excluded.
-CROSS_MODEL_BASE_CASES = ("case3", "case6", "case7", "case8", "case11")
+CROSS_MODEL_BASE_CASES = ("case3", "case6", "case7", "case8", "case11", "case13", "case14")
 DEFAULT_BASE_CASE = "case7"
 
 # Counterbalancing axes (mirrors evaluation_cases.py): which slot holds the self
@@ -121,6 +123,13 @@ class CrossModelOptions:
     generation_sources: dict[str, str]   # model_name → generations root path
     groups: tuple[str, ...]
     personas: tuple[str, ...]
+    # Optional per-model LoRA adapter (model_name → HF adapter id/path). A model
+    # with an adapter is loaded as that finetuned variant; models absent from the
+    # map load plain. NOTE: the eval output dir is keyed by model_slug(model_name),
+    # so a base model and its adapter'd variant can't share one run — give the
+    # adapter'd run a distinct eval_dir and point generation_sources at that model's
+    # own (adapter-generated) texts.
+    adapters: dict = None
     foil_types: tuple[str, ...] = FOIL_TYPES
     conditions: tuple[str, ...] = CONDITIONS
     max_pairs_per_cell: int = 60         # logical (foil_source, task) pairs per
@@ -655,6 +664,7 @@ def _build_options(exp_config: dict) -> CrossModelOptions:
         base_case=base_case,
         base_cases=tuple(bcs),
         prompt_wording_version=wording,
+        adapters=(dict(exp_config["adapters"]) if exp_config.get("adapters") else None),
     )
 
 
@@ -756,10 +766,12 @@ def _run_shard(run_config: RunConfig, personas: dict[str, PersonaConfig],
 
     texts = load_all_texts(opts)
     gen_run_id = Path(opts.generation_sources[eval_model]).name
-    logger.info(f"shard {shard_index}/{num_shards}: loading {eval_model} for "
+    adapter = (opts.adapters or {}).get(eval_model) or run_config.adapter
+    logger.info(f"shard {shard_index}/{num_shards}: loading {eval_model}"
+                f"{f' + adapter {adapter}' if adapter else ''} for "
                 f"{len(my)} trials ({len(done)} done)")
     backend = HFBackend(eval_model, torch_dtype=resolve_dtype(run_config.model_dtype),
-                        adapter=run_config.adapter)
+                        adapter=adapter)
     n = _run_trials(backend, my, personas, texts, run_id, gen_run_id, rl, opts, done, eval_model)
     logger.info(f"shard {shard_index}: wrote {n} rows")
 

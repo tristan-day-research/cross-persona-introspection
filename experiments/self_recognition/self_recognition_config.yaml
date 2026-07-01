@@ -387,8 +387,8 @@ configs:
     task: persona_category
     run_name: personacat_v1              # finds existing generations (results/text_generations/.../personacat_v1)
     eval_dir: personacat_v3_eval         # ← new eval output folder; keeps generations, writes eval separately
-    # model_name: "meta-llama/Llama-3.1-8B-Instruct"
-    model_name: "Qwen/Qwen2.5-32B-Instruct"
+    model_name: "meta-llama/Llama-3.1-8B-Instruct"
+    # model_name: "Qwen/Qwen2.5-32B-Instruct"
     model_dtype: bfloat16                  # native precision; fits one H100, NOT quantization
     batch_size: 16
     num_gpus: 6                            # one full model copy per H100 (data-parallel); null = auto-detect
@@ -398,7 +398,7 @@ configs:
     # ── Which experiment cases to run ──────────────────────────────────────
     # Each case is recorded in every output row (case_id, case_type fields in
     # trials.jsonl and activation metadata.parquet). 
-    cases_to_run: [case1, case2, case3, case4, case5, case6, case7, case8, case9, case10, case11, case12]
+    cases_to_run: [case13, case14]
     calibration_base_case: case7          # case12 mirrors this case's structure
     calibration_personas: [child_five, archaic_speaker]
     # Per-case sample cap (upper bound). If a case has FEWER unique combinations
@@ -538,8 +538,97 @@ configs:
       Qwen/Qwen2.5-32B-Instruct:        experiments/self_recognition/results/text_generations/persona_category/Qwen2-5-32B-Instruct/personacat_v1
     groups: [self_recognition_by_persona_category]
     personas: ALL
-    base_cases: [case6, case8]             # ← case7 already in cross_model_v1; add only 6 & 8
-    foil_types: [same_model_diff_persona, diff_model_diff_persona]  # where 6/8 are well-posed
+    base_cases: [case6, case8, case13, case14]   # case7 already in cross_model_v1; add the neutral controls
+    #   case6  · target described (content inference)   case8  · both described, attribute-both (ceiling)
+    #   case13 · both described, pick-one (framing-matched full-desc control)
+    #   case14 · both described REDACTED, pick-one (framing-matched style-only floor)
+    foil_types: [same_model_diff_persona, diff_model_diff_persona]  # where described-both cases are well-posed
+    prompt_wording_version: v3
+    max_pairs_per_cell: 120
+    save_logprobs: true
+    dry_run: false
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # FINETUNED LLAMA (LoRA) — generate + self-recognition eval
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Self-recognition needs the model to recognize ITS OWN text, so the finetuned
+  # model must GENERATE the texts (step 1) then EVALUATE them (step 2). The
+  # `adapter` field loads the LoRA onto base Llama-3.1-8B via PEFT (HFBackend). A
+  # distinct run_name/eval_dir keeps the finetuned outputs separate from base Llama
+  # (both slug to Llama-3-1-8B-Instruct on disk, so the run_name is what separates).
+
+  # 1) GENERATE with the finetuned model:
+  #      python run.py self_recognition_gen_personacat_lora
+  self_recognition_gen_personacat_lora:
+    mode: generate_text
+    task: persona_category
+    run_name: personacat_lora             # → text_generations/persona_category/Llama-3-1-8B-Instruct/personacat_lora/
+    model_name: "meta-llama/Llama-3.1-8B-Instruct"
+    adapter: "Tristan-Day/20260506-034609_delegate_at_mixed_17173_all_top_prob_tm0.7_tau0.05_2e_ckpt_step_300"
+    model_dtype: bfloat16
+    batch_size: 32
+    num_gpus: 6
+    sample_size: null
+    seed: 42
+    max_new_tokens: 300
+    temperature: 0.0
+    conceal_persona: true
+    strip_self_refs: true
+    collect_activations: false
+    task_sets: [self_recognition_by_persona_category]
+    personas: ALL
+
+  # 2) EVALUATE the finetuned model on its own generations (12 cases incl. 13/14):
+  #      python run.py self_recognition_binary_personacat_lora --override dry_run=true
+  self_recognition_binary_personacat_lora:
+    mode: evaluate_self_recognition
+    task: persona_category
+    run_name: personacat_lora             # reads the finetuned generations from step 1
+    eval_dir: personacat_lora_eval        # → text_evaluations/persona_category/Llama-3-1-8B-Instruct/personacat_lora_eval/
+    model_name: "meta-llama/Llama-3.1-8B-Instruct"
+    adapter: "Tristan-Day/20260506-034609_delegate_at_mixed_17173_all_top_prob_tm0.7_tau0.05_2e_ckpt_step_300"
+    model_dtype: bfloat16
+    batch_size: 16
+    num_gpus: 6
+    sample_size: null
+    seed: 42
+    groups: [self_recognition_by_persona_category]
+    cases_to_run: [case1, case2, case3, case4, case5, case6, case7, case8, case9, case10, case11, case12, case13, case14]
+    calibration_base_case: case7
+    calibration_personas: [child_five, archaic_speaker]
+    max_trials_per_case: 3000
+    sampling_seed: 42
+    save_logprobs: true
+    dry_run: false
+    personas: ALL
+    prompt_wording_version: v3
+
+  # OPTIONAL cross-model with the finetuned Llama as one evaluator (vs Qwen).
+  # Per-model `adapters` loads the LoRA only on the Llama slot; that slot reads the
+  # FINETUNED generations (personacat_lora). Distinct eval_dir avoids colliding with
+  # the base-Llama cross_model_v1 run.
+  #   python run.py self_recognition_cross_model_lora --override dry_run=true
+  self_recognition_cross_model_lora:
+    mode: evaluate_cross_model
+    task: persona_category
+    eval_dir: cross_model_lora_v1
+    model_dtype: bfloat16
+    batch_size: 16
+    num_gpus: 6
+    seed: 42
+    sampling_seed: 42
+    eval_models:
+      - meta-llama/Llama-3.1-8B-Instruct
+      - Qwen/Qwen2.5-32B-Instruct
+    adapters:                             # LoRA only on the Llama slot; Qwen loads plain
+      meta-llama/Llama-3.1-8B-Instruct: "Tristan-Day/20260506-034609_delegate_at_mixed_17173_all_top_prob_tm0.7_tau0.05_2e_ckpt_step_300"
+    generation_sources:                   # Llama slot reads the FINETUNED generations
+      meta-llama/Llama-3.1-8B-Instruct: experiments/self_recognition/results/text_generations/persona_category/Llama-3-1-8B-Instruct/personacat_lora
+      Qwen/Qwen2.5-32B-Instruct:        experiments/self_recognition/results/text_generations/persona_category/Qwen2-5-32B-Instruct/personacat_v1
+    groups: [self_recognition_by_persona_category]
+    personas: ALL
+    base_cases: [case6, case7, case8, case13, case14]
+    foil_types: [diff_model_same_persona, same_model_diff_persona, diff_model_diff_persona]
     prompt_wording_version: v3
     max_pairs_per_cell: 120
     save_logprobs: true
