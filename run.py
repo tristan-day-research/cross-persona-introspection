@@ -319,6 +319,18 @@ def build_experiment(experiment_name: str, run_config: RunConfig, exp_config: di
     if experiment_name == "paper_replication":
         # Faithful replication has no personas; pass the (empty) registry through.
         return module.PaperReplication(run_config, used_personas, config_name=config_name)
+    if experiment_name == "agent_vs_model":
+        # No personas (default Assistant). Experiment-specific keys (template
+        # families, n_families, dry_run, …) come from exp_config, so --override applies.
+        if exp_config.get("diagnostic") == "instrumental_probs":
+            # v2 probability-readout instrumental probe (validation or main stage).
+            from experiments.agent_vs_model.instrumental_probs import InstrumentalProbs
+            return InstrumentalProbs(run_config, exp_config, config_name=config_name)
+        if exp_config.get("diagnostic"):
+            # Post-pilot capability diagnostics (diag-v1), separate from the v1 grid.
+            from experiments.agent_vs_model.diagnostics import AgentVsModelDiagnostic
+            return AgentVsModelDiagnostic(run_config, exp_config, config_name=config_name)
+        return module.AgentVsModel(run_config, exp_config, config_name=config_name)
     raise ValueError(f"Unknown experiment folder: {experiment_name}")
 
 

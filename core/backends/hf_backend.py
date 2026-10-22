@@ -172,6 +172,50 @@ class HFBackend:
         new_tokens = output_ids[0, input_ids.shape[1]:]
         return self.tokenizer.decode(new_tokens, skip_special_tokens=True)
 
+    def generate_detailed(
+        self,
+        messages: list[dict[str, str]],
+        max_new_tokens: int = 256,
+        temperature: float = 0.0,
+        do_sample: bool = False,
+    ) -> dict:
+        """generate() with the chat template's special tokens applied exactly once,
+        returning the actual model inputs alongside the response.
+
+        generate() renders the template to text and then calls tokenizer.encode(),
+        which adds special tokens a second time — on Llama-3 that yields a doubled
+        <|begin_of_text|>. It is left unchanged so existing experiments stay
+        reproducible; this method tokenizes the rendered text with
+        add_special_tokens=False, matching _encode_chat_batch / generate_batch and
+        transformers' own apply_chat_template(tokenize=True). Special tokens are then
+        exactly those in the chat template: for templates that omit BOS (e.g.
+        TinyLlama-Chat) the input has no BOS, whereas generate() would add one.
+
+        Returns {text, rendered_text, input_ids, output_ids} (ids as python lists).
+        """
+        rendered = self.tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+        enc = self.tokenizer(rendered, return_tensors="pt", add_special_tokens=False)
+        input_ids = enc["input_ids"].to(self.input_device)
+        attention_mask = enc["attention_mask"].to(self.input_device)
+        with torch.no_grad():
+            output_ids = self.model.generate(
+                input_ids,
+                attention_mask=attention_mask,
+                max_new_tokens=max_new_tokens,
+                temperature=temperature if do_sample else None,
+                do_sample=do_sample,
+                pad_token_id=self.tokenizer.pad_token_id,
+            )
+        new_tokens = output_ids[0, input_ids.shape[1]:]
+        return {
+            "text": self.tokenizer.decode(new_tokens, skip_special_tokens=True),
+            "rendered_text": rendered,
+            "input_ids": input_ids[0].tolist(),
+            "output_ids": new_tokens.tolist(),
+        }
+
     def get_next_token_logits(self, messages: list[dict[str, str]]) -> torch.Tensor:
         """Return logits for the next token given chat messages."""
         input_text = self.tokenizer.apply_chat_template(

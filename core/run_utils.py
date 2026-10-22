@@ -29,6 +29,18 @@ def git_commit() -> str:
         return "(unknown)"
 
 
+def git_dirty() -> bool | None:
+    """True if the checkout has uncommitted changes (tracked or untracked), None outside a repo."""
+    try:
+        out = subprocess.check_output(
+            ["git", "status", "--porcelain"], cwd=Path(__file__).resolve().parent,
+            stderr=subprocess.DEVNULL,
+        ).decode()
+        return bool(out.strip())
+    except Exception:
+        return None
+
+
 def resolve_dtype(model_dtype: str | None):
     """Map a config dtype string to a torch dtype (None → backend default)."""
     import torch
