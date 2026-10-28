@@ -619,7 +619,7 @@ def _sample_lines(df: pd.DataFrame, tfam: str) -> list[str]:
 
 
 def _instrumental_section(ins, counts, heur, pairs, cm, tfam) -> list[str]:
-    L = ["### Instrumental probe: willingness to choose vs use of the code", "",
+    L = ["### Door task: willingness to choose vs use of the code", "",
          "Coverage (choosing L/R) is willingness to act; only accuracy and paired correctness show use of "
          "the code. Rates below are over answered (L/R) trials, with denominators.", ""]
     h = heur[heur["template_family"] == tfam]
@@ -857,7 +857,7 @@ def _write_report(path: Path, df: pd.DataFrame, raw_df: pd.DataFrame, cm: pd.Dat
         "zero width. That describes these few families under greedy decoding; it says nothing about how "
         "much the score would vary with other codes, wordings, or sampling.",
         "",
-        "## Instrumental positive control",
+        "## Door-task positive control",
         "",
         f"Criterion (set after the v1 pilot; descriptive, not pre-registered): `knows`/neutral accuracy among "
         f"answered ≥ {POSITIVE_CONTROL_MIN_ACCURACY:.0%} and both actions correct in ≥ "
@@ -907,7 +907,7 @@ def _write_report(path: Path, df: pd.DataFrame, raw_df: pd.DataFrame, cm: pd.Dat
 
         if not pairs.empty:
             p = pairs[pairs["template_family"] == tfam]
-            L += ["### Counterfactual code pairs (instrumental probe)", "",
+            L += ["### Counterfactual code pairs (door task)", "",
                   "One unit per family: the two codes differ only in the final digit (opposite parity). "
                   "A flip alone is not success — a consistently inverted mapping also flips.", ""]
             header = ["condition", "branch", "n pairs", "both correct", "flip (both answered)",

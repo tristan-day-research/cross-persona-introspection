@@ -319,6 +319,19 @@ def build_experiment(experiment_name: str, run_config: RunConfig, exp_config: di
     if experiment_name == "paper_replication":
         # Faithful replication has no personas; pass the (empty) registry through.
         return module.PaperReplication(run_config, used_personas, config_name=config_name)
+    if experiment_name == "agent_vs_model" and exp_config.get("diagnostic") == "mech":
+        from experiments.agent_vs_model.mech import MechExperiment
+        return MechExperiment(run_config, exp_config, config_name=config_name)
+    if experiment_name == "agent_vs_model" and exp_config.get("diagnostic") in ("availability", "history"):
+        from experiments.agent_vs_model.followups import Availability, ConstructedHistory
+        cls = Availability if exp_config["diagnostic"] == "availability" else ConstructedHistory
+        return cls(run_config, exp_config, config_name=config_name)
+    if experiment_name == "agent_vs_model" and exp_config.get("diagnostic") == "pressure":
+        from experiments.agent_vs_model.pressure import PressureLadder
+        return PressureLadder(run_config, exp_config, config_name=config_name)
+    if experiment_name == "agent_vs_model" and exp_config.get("diagnostic") == "joint_report":
+        from experiments.agent_vs_model.joint_report import JointReport
+        return JointReport(run_config, exp_config, config_name=config_name)
     if experiment_name == "agent_vs_model":
         # No personas (default Assistant). Experiment-specific keys (template
         # families, n_families, dry_run, …) come from exp_config, so --override applies.
@@ -356,12 +369,25 @@ def resolve_num_gpus(run_config: RunConfig) -> int:
         return 1
 
 
-def run_one(config_name: str, overrides: list[str] | None = None) -> None:
+def run_one(config_name: str, overrides: list[str] | None = None):
     configs = discover_configs()
     if config_name not in configs:
         available = "\n  ".join(sorted(configs))
         raise ValueError(f"Config '{config_name}' not found. Available:\n  {available}")
     experiment_name, exp_config = configs[config_name]
+
+    # A suite config (`suite: [config, ...]`) runs several configs back to back in this process.
+    # Experiments that load their model through a shared cache (agent_vs_model) then load it once.
+    # Overrides apply to every config in the suite.
+    if exp_config.get("suite"):
+        results = {}
+        for name in exp_config["suite"]:
+            logger.info(f"suite '{config_name}': running '{name}'")
+            results[name] = run_one(name, overrides)
+        gates = {k: (v.get("positive_control") or {}).get("passed")
+                 for k, v in results.items() if isinstance(v, dict) and v.get("positive_control")}
+        logger.info(f"suite '{config_name}' finished. Door-task gate results: {json.dumps(gates)}")
+        return results
 
     # Standalone text-generation configs (mode: generate_text; the legacy alias
     # generate_summaries is still accepted) don't run an experiment — they
@@ -401,6 +427,7 @@ def run_one(config_name: str, overrides: list[str] | None = None) -> None:
     output_path = experiment.save_results()
     logger.info(f"Results saved to: {output_path}")
     logger.info(f"Summary metrics: {json.dumps(metrics, indent=2, default=str)}")
+    return metrics
 
 
 # ── Multi-GPU data-parallel orchestration ─────────────────────────────────

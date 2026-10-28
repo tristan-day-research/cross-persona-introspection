@@ -37,8 +37,9 @@ warnings.filterwarnings("ignore", message=".*max_new_tokens.*max_length.*")
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 CONFIG_DIR = Path(__file__).resolve().parent  # patchscope-specific configs colocated
-RESULTS_DIR = ROOT / "results" / "raw"
-RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+# Created only when main() writes (never at import time: run.py imports every module on startup,
+# which used to leave an empty results/raw at the repo root). Same layout as the other experiments.
+RESULTS_DIR = CONFIG_DIR / "results"
 
 # Reuse the core hook functions from the patchscope experiment
 sys.path.insert(0, str(ROOT))
@@ -419,6 +420,7 @@ def main():
                 })
 
     # ── Save results ─────────────────────────────────────────────────
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     jsonl_path = RESULTS_DIR / f"ps_{model_short}_{timestamp}_test.jsonl"
     with open(jsonl_path, "w") as f:
         for r in results:

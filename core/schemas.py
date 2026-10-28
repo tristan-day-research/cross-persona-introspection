@@ -43,7 +43,10 @@ class RunConfig:
     seed: int = 42
     max_new_tokens: int = 256
     temperature: float = 0.0  # greedy by default for reproducibility
-    output_dir: str = "results/raw"
+    # None -> experiments/<experiment_name>/results (set in __post_init__), the same place run.py
+    # uses. The old default, "results/raw", created a stray empty directory at the repo root
+    # whenever an experiment was built without an explicit output_dir.
+    output_dir: Optional[str] = None
     # Source-reporter matrix specific
     pause_cue: str = "\n[PAUSE: Before answering, note your current inclination.]\n"
     # Base model few-shot mode: "fixed" (same examples every question) or
@@ -129,6 +132,10 @@ class RunConfig:
     # a no-op when R2 isn't configured. Resume across pods then relies on R2, not
     # local disk — fine when each run does a NEW case set (disjoint trial_ids).
     delete_local_activations: bool = False
+
+    def __post_init__(self) -> None:
+        if self.output_dir is None:
+            self.output_dir = f"experiments/{self.experiment_name}/results"
 
 
 @dataclass

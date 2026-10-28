@@ -207,7 +207,8 @@ def choice_token_ids(tokenizer, prefix_text: str, primer: str = PRIMER, choices=
             raise ValueError(f"primer tokenization is not boundary-consistent for choice {c!r}")
         tid = full[len(base)]
         piece = tokenizer.decode([tid])
-        if not piece or not c.startswith(piece):
+        # SentencePiece decodes "▁true" as "true", so compare without leading whitespace.
+        if not piece.strip() or not c.strip().startswith(piece.strip()):
             raise ValueError(f"first token {piece!r} for choice {c!r} is not a prefix of the choice")
         ids[c] = tid
     if len(set(ids.values())) != len(ids):
@@ -322,9 +323,8 @@ class InstrumentalProbs(BaseExperiment):
             except Exception as e:
                 logger.warning(f"dry run: tokenizer unavailable ({e})")
         else:
-            from core.backends.hf_backend import HFBackend
-            self.backend = HFBackend(self.config.model_name, torch_dtype=resolve_dtype(self.config.model_dtype),
-                                     adapter=self.config.adapter)
+            from experiments.agent_vs_model.agent_vs_model_experiment import load_backend
+            self.backend = load_backend(self.config)
             self.tokenizer = self.backend.tokenizer
         if self.tokenizer is not None:
             first = next(iter(self.requests.values()))
@@ -345,6 +345,9 @@ class InstrumentalProbs(BaseExperiment):
                     d.update(rendered_text=text, prompt_tokens=len(ids),
                              decoded_input=self.tokenizer.decode(ids, skip_special_tokens=False))
                 f.write(json.dumps(d) + "\n")
+        from experiments.agent_vs_model.previews import write_probe_preview
+        write_probe_preview(self.run_dir, [asdict(it) for it in self.items], version=self.version, primer=PRIMER,
+                            render=(lambda m: chat_input_ids(self.tokenizer, m)[0] + PRIMER) if self.tokenizer is not None else None)
         self._write_manifest()
 
     def _settings(self) -> dict:

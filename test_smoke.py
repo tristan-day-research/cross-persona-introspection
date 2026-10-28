@@ -36,6 +36,9 @@ def test_schemas():
 
     rc = RunConfig(experiment_name="test", model_name="test-model", personas=["a"], task_sets=["factual"])
     assert rc.seed == 42
+    # default output dir is the experiment's own results folder, never a stray results/raw
+    assert rc.output_dir == "experiments/test/results"
+    assert RunConfig(experiment_name="x", model_name="m", personas=[], task_sets=[], output_dir="/tmp/o").output_dir == "/tmp/o"
 
     sm = SourceStateMetrics(top1_answer="A", top1_prob=0.9, entropy=0.5)
     assert sm.confidence_proxy_bin is None
@@ -206,6 +209,8 @@ def test_experiment_configs_load():
             assert name not in all_named_configs, f"duplicate config name {name}"
             all_named_configs[name] = cfg_dict
             # Each named config must have a model
+            if "suite" in cfg_dict:  # a suite only lists other configs
+                continue
             assert "model_name" in cfg_dict, f"{name} missing model_name"
 
     assert "self_recognition_dev" in all_named_configs

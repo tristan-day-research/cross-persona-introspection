@@ -173,7 +173,7 @@ def main() -> None:
             L += reconstruct_tokens(rows, model, out / "reconstructed_tokens.csv")
         except Exception as e:
             L.append(f"- skipped: tokenizer `{model}` unavailable ({type(e).__name__}: {e})")
-    L += ["", "## Instrumental positive control", ""]
+    L += ["", "## Door-task positive control", ""]
     L += [f"- {k}: {v['sentence']}" for k, v in metrics.items() if k.endswith("instrumental_positive_control")]
     L += ["", "Full analysis: `report.md` in this directory."]
     (out / "REANALYSIS.md").write_text("\n".join(L) + "\n")

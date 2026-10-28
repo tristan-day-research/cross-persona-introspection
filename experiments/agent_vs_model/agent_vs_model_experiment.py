@@ -161,6 +161,29 @@ def generate_requests(backend, requests: dict[str, list], *, max_new_tokens: int
     return out
 
 
+_BACKEND_CACHE: dict = {}
+
+
+def load_backend(config: RunConfig):
+    """HFBackend for this config, reused across configs run in one process (a `suite:` config
+    runs several configs back to back; reloading a 32B model each time costs minutes). Holds one
+    model at a time: asking for a different model frees the previous one first."""
+    from core.backends.hf_backend import HFBackend
+    key = (config.model_name, config.model_dtype, config.adapter)
+    if key not in _BACKEND_CACHE:
+        if _BACKEND_CACHE:
+            import gc
+            import torch
+            _BACKEND_CACHE.clear()
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        logger.info(f"Loading model: {config.model_name}")
+        _BACKEND_CACHE[key] = HFBackend(config.model_name, torch_dtype=resolve_dtype(config.model_dtype),
+                                        adapter=config.adapter)
+    return _BACKEND_CACHE[key]
+
+
 def provenance_settings(config: RunConfig, backend, batch_size: int, code_location: str = "user") -> dict:
     import torch
     import transformers
@@ -316,11 +339,7 @@ class AgentVsModel(BaseExperiment):
                 logger.warning(f"dry run: tokenizer unavailable ({type(e).__name__}: {e}); "
                                f"token counts will be character-based estimates")
         else:
-            from core.backends.hf_backend import HFBackend
-            logger.info(f"Loading model: {self.config.model_name}")
-            self.backend = HFBackend(self.config.model_name,
-                                     torch_dtype=resolve_dtype(self.config.model_dtype),
-                                     adapter=self.config.adapter)
+            self.backend = load_backend(self.config)
             self.tokenizer = self.backend.tokenizer
 
         self.run_dir.mkdir(parents=True, exist_ok=True)

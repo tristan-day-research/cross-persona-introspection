@@ -499,3 +499,47 @@ validation passes in this layout.
 | `agent_vs_model_diag_instrumental_qwen32b_syscode` | crossed greedy check (optional; v2 validate supersedes it) | 32 requests |
 
 The capability follow-up is not defined for this layout.
+
+## Mechanistic follow-up, joint reply, replication (door code in the system prompt)
+
+Added after the `v2-probs-syscode` results were seen. Not pre-registered. Terminology from here
+on: the **door task** is the L/R/ASK question; **probe** means a linear probe on activations.
+
+**Question.** Under `doesnt_know` the Assistant says it does not know the code, yet its door-task
+choice follows the code's parity (Qwen2.5-32B, parity effect 0.54 vs 0.66 under `knows`). Is the
+code represented when it denies knowing, and does the self-report read it?
+
+1. **Linear probes** (`mech.py`, stage `probes`). Residual stream at 16 evenly spaced layers, at the
+   answer position of the self-report question (after `{"knows_code":`) and of the door task (after
+   `{"choice": "`), plus the code's last token. Logistic regression (standardized, C=0.1) for the
+   last digit's parity. Cross-validated by code pair (both codes of a pair in the same fold): within
+   each condition, and trained on `knows` then tested on held-out pairs of the other conditions.
+   Controls: shuffled labels; `code_absent` (no code in the prompt). 128 code pairs.
+2. **Patching** (stage `patching`). At the code's token positions, one layer at a time (and the
+   token embeddings), replace the residual stream with (a) the mean over 32 other codes (removes the
+   code's identity) or (b) the paired code's states (changes only the last digit). Measure the door
+   choice's parity effect (fraction surviving) and the change in self-report log-odds (true vs
+   false). The code precedes all condition text, so its states are the same in every prompt and one
+   set of donor states serves all. 12 code pairs; conditions `knows`, `doesnt_know`, `withholds`;
+   requests neutral and released.
+3. **Presence.** Self-report log-odds with the code present (`doesnt_know`) vs removed
+   (`code_absent`), same instruction.
+4. **Joint reply** (`joint_report.py`). One question asks both, self-report first:
+   `{"knows_code": …, "choice": …}`. Door choice read after the model's own self-report and after
+   `true` / `false` is written for it. 16 code pairs, all conditions × request types, both wordings.
+5. **Replication** of the door-task readout: fresh codes, 24 pairs; second wording
+   (`did_not_receive`); Llama-3.1-8B. Same validation gate as before.
+
+**Reading the patching results.** If removing the code's identity drives the door effect toward 0
+while the self-report log-odds don't move, the self-report is not using the code's value. Limits:
+mean-ablation keeps the fact that *a* code is present (that is item 3); patching at layer L leaves
+what later positions read at earlier layers (the embedding row removes everything); probes show
+decodability, not use.
+
+**Run** (model loads once per suite):
+
+    run-experiment agent_vs_model_suite_qwen32b
+    run-experiment agent_vs_model_suite_llama8b
+
+Outputs: replication and joint → `results/diagnostics/`; mechanistic → `results/mech/` (activations
+under `activations/`, skipped by pull-results).

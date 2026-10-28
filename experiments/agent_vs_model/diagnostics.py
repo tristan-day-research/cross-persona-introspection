@@ -266,11 +266,11 @@ class AgentVsModelDiagnostic(BaseExperiment):
             except Exception as e:
                 logger.warning(f"dry run: tokenizer unavailable ({e})")
         else:
-            from core.backends.hf_backend import HFBackend
-            self.backend = HFBackend(self.config.model_name, torch_dtype=resolve_dtype(self.config.model_dtype),
-                                     adapter=self.config.adapter)
+            from experiments.agent_vs_model.agent_vs_model_experiment import load_backend
+            self.backend = load_backend(self.config)
             tok = self.backend.tokenizer
         (self.run_dir / "families.json").write_text(json.dumps([asdict(f) for f in families], indent=2) + "\n")
+        rows = []
         with open(self.run_dir / "items.jsonl", "w") as f:
             for it in self.items:
                 d = asdict(it)
@@ -278,7 +278,10 @@ class AgentVsModelDiagnostic(BaseExperiment):
                     rendered, ids = chat_input_ids(tok, it.messages)
                     d["rendered_text"], d["prompt_tokens"] = rendered, len(ids)
                     d["decoded_input"] = tok.decode(ids, skip_special_tokens=False)
+                rows.append(d)
                 f.write(json.dumps(d) + "\n")
+        from experiments.agent_vs_model.previews import write_diag_preview
+        write_diag_preview(self.run_dir, rows, version=self.version)
 
     def run(self) -> None:
         if self.dry_run:
